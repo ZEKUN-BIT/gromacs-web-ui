@@ -1,0 +1,875 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="description" content="本地 GROMACS 分子动力学工作台：配置、提交、查看模拟任务" />
+    <link rel="icon" type="image/svg+xml" href="/static/gromacs-console.svg" />
+    <title>GROMACS 控制台</title>
+    <link rel="stylesheet" href="/static/styles.css?v=20261006-026" />
+    <link rel="stylesheet" href="/static/icons.css?v=20260908" />
+    <link rel="stylesheet" href="/static/desktop.css?v=20261006-026" media="(min-width: 1181px)" />
+  </head>
+  <body>
+    <div class="app-shell">
+      <aside class="rail" id="task-sidebar" aria-label="任务与运行环境">
+        <div class="brand">
+          <div class="mark" data-ui-icon="atom" aria-hidden="true"></div>
+          <div>
+            <h1>GROMACS 控制台</h1>
+            <p id="runtime-path">runtime</p>
+          </div>
+        </div>
+
+        <section class="status-strip" id="health-card">
+          <span class="dot muted"></span>
+          <div>
+            <strong>检测中…</strong>
+            <small>gmx --version</small>
+          </div>
+        </section>
+        <details class="environment-diagnostics">
+          <summary data-ui-icon="activity">运行环境诊断</summary>
+          <div id="environment-diagnostics"></div>
+        </details>
+
+        <details class="settings-panel">
+          <summary data-ui-icon="settings">运行设置</summary>
+          <label for="gmx-bin">gmx 路径</label>
+          <div class="inline-edit">
+            <input id="gmx-bin" name="gmx-bin" autocomplete="off" spellcheck="false" value="gmx" />
+            <button id="save-settings" class="icon-button icon-only" data-ui-icon="save" type="button" title="保存设置" aria-label="保存设置">保存</button>
+          </div>
+          <label for="max-parallel" title="同时运行的 GROMACS 任务数；每个任务还会用 ntomp 线程，建议 并发任务数 × ntomp ≤ CPU 核数">并发任务数 <small>max parallel</small></label>
+          <div class="inline-edit">
+            <input id="max-parallel" name="max-parallel" type="number" min="1" max="16" value="1" />
+          </div>
+        </details>
+
+        <details class="about-project">
+          <summary>关于项目</summary>
+        <section class="research-signature" aria-label="作者和用途声明">
+          <svg class="signature-molecule" viewBox="0 0 120 120" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="3">
+            <line x1="32" y1="82" x2="60" y2="56" />
+            <line x1="60" y1="56" x2="94" y2="72" />
+            <line x1="60" y1="56" x2="70" y2="22" />
+            <circle cx="32" cy="82" r="11" />
+            <circle cx="60" cy="56" r="14" />
+            <circle cx="94" cy="72" r="8" />
+            <circle cx="70" cy="22" r="6" />
+          </svg>
+          <div class="signature-main">
+            <span class="signature-mark" aria-hidden="true">YZ</span>
+            <div class="signature-id">
+              <span class="signature-kicker">Author</span>
+              <strong>yzk</strong>
+            </div>
+          </div>
+          <p class="signature-tag">
+            <svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M9.5 3h5" />
+              <path d="M10.5 3v5.8L5 17.5A2.4 2.4 0 0 0 7.2 21h9.6a2.4 2.4 0 0 0 2.2-3.5L13.5 8.8V3" />
+              <path d="M7.6 14h8.8" />
+            </svg>
+            © 2026 yzk · <a href="/static/licenses/project-MIT.txt" target="_blank" rel="noopener">MIT 开源许可</a>
+          </p>
+        </section>
+        </details>
+
+        <div class="rail-label">任务列表</div>
+        <div class="rail-search" data-ui-icon="search">
+          <input id="job-filter" class="job-filter" type="search" maxlength="256" placeholder="搜索全部任务…" autocomplete="off" spellcheck="false" aria-label="搜索全部历史任务" />
+        </div>
+        <nav class="jobs-list" id="jobs-list" aria-label="任务列表"></nav>
+        <div class="jobs-pager" aria-label="任务列表分页">
+          <button id="jobs-previous" class="tool-button" type="button" disabled>上一页</button>
+          <span id="jobs-page-status" role="status" aria-live="polite"></span>
+          <button id="jobs-next" class="tool-button" type="button" disabled>下一页</button>
+        </div>
+      </aside>
+
+      <main class="workspace">
+        <header class="workspace-bar">
+          <button id="toggle-sidebar" class="tool-button" type="button" aria-controls="task-sidebar" aria-expanded="false">任务列表</button>
+          <nav class="workspace-nav" aria-label="工作区">
+            <button type="button" data-workspace-view="compose" data-ui-icon="plus" aria-pressed="true">新建任务</button>
+            <button type="button" data-workspace-view="detail" data-ui-icon="layers" aria-pressed="false">任务详情</button>
+          </nav>
+        </header>
+        <section class="run-composer" id="compose-view">
+          <div class="section-head">
+            <div>
+              <h2>新建模拟任务</h2>
+              <div class="draft-bar">
+                <span id="draft-status" role="status"></span>
+                <button id="clear-draft" class="tool-button icon-only" data-ui-icon="trash" type="button" title="删除已保存草稿" aria-label="删除已保存草稿">删除已保存草稿</button>
+              </div>
+            </div>
+            <button id="submit-job" class="primary-action" data-ui-icon="play" type="button">
+              <span class="button-spinner" aria-hidden="true"></span>
+              <span class="button-label">启动模拟</span>
+            </button>
+          </div>
+
+          <form id="job-form" class="composer-grid" autocomplete="off">
+            <div class="form-column">
+              <label class="job-name-field" for="job-name" title="任务的显示名，会用于生成任务目录名；必填">
+                <span class="field-label">任务名 <span class="req-mark" aria-hidden="true">*</span></span>
+                <input id="job-name" name="name" required placeholder="例如 protein-md-run" spellcheck="false" />
+              </label>
+
+              <fieldset class="workflow-switch">
+                <legend>工作流</legend>
+                <label title="蛋白 + 水溶液全流程：pdb2gmx → 能量最小化 → NPT → 生产 NPT MD">
+                  <input type="radio" name="workflow" value="protein_md" checked />
+                  <span>蛋白 MD</span>
+                </label>
+                <label title="蛋白-配体复合物全流程，含配体参数化与轨迹后处理">
+                  <input type="radio" name="workflow" value="protein_ligand_md" />
+                  <span>复合物 MD</span>
+                </label>
+                <label title="仅能量最小化：上传结构、拓扑与 minim.mdp">
+                  <input type="radio" name="workflow" value="em_only" />
+                  <span>能量最小化</span>
+                </label>
+                <label title="直接运行已有的 .tpr 文件">
+                  <input type="radio" name="workflow" value="run_tpr" />
+                  <span>运行 TPR</span>
+                </label>
+                <label title="对轨迹计算 RMSD">
+                  <input type="radio" name="workflow" value="analysis_rmsd" />
+                  <span>RMSD 分析</span>
+                </label>
+                <label title="轨迹 PBC 居中、旋转平移拟合、导出第 0 帧">
+                  <input type="radio" name="workflow" value="postprocess" />
+                  <span>轨迹后处理</span>
+                </label>
+                <label title="能量 / RMSD / Rg / 氢键 / DSSP / PCA / SHAM 批量分析">
+                  <input type="radio" name="workflow" value="analysis_suite" />
+                  <span>分析套件</span>
+                </label>
+                <label title="自定义 gmx 子命令（限制在常用子命令范围内）">
+                  <input type="radio" name="workflow" value="custom" />
+                  <span>自定义</span>
+                </label>
+              </fieldset>
+
+              <div class="dropzone" id="dropzone">
+                <input id="files" name="files" type="file" multiple />
+                <span class="dropzone-icon" data-ui-icon="upload" aria-hidden="true"></span>
+                <strong>拖入文件，或点击选择</strong>
+                <span id="file-summary">可上传结构、拓扑、MDP 和轨迹文件</span>
+              </div>
+
+              <section class="workflow-guide" id="workflow-guide" aria-live="polite">
+                <div class="guide-overview">
+                  <div>
+                    <span class="guide-kicker">当前工作流</span>
+                    <strong id="guide-title">蛋白 MD</strong>
+                  </div>
+                  <div class="readiness-meter" aria-label="输入就绪度">
+                    <span id="guide-ready">输入 0/1</span>
+                    <div class="guide-bar" aria-hidden="true"><i id="guide-bar-fill"></i></div>
+                  </div>
+                </div>
+                <ol class="guide-steps" id="guide-steps"></ol>
+                <div class="guide-bottom">
+                  <p class="guide-hint" id="guide-hint">先把这个流程需要的文件补齐。</p>
+                  <div class="guide-requirements" id="guide-requirements"></div>
+                </div>
+              </section>
+
+              <details class="workflow-notes" aria-label="运行前检查">
+                <summary class="notes-head">
+                  <strong>运行前检查</strong>
+                  <span id="guide-note-title">随流程更新</span>
+                </summary>
+                <ul id="guide-notes"></ul>
+              </details>
+            </div>
+
+            <div class="parameter-column">
+              <div class="param-section system-section" data-section="base">
+                <fieldset class="base-group">
+                <legend data-ui-icon="atom">体系设置</legend>
+                <div class="dense-grid">
+                <label title="优先使用 GROMACS 2026.3 官方自带力场；项目 forcefields/ 仅用于额外安装的自定义力场">
+                  力场 <small id="force-field-source">GROMACS 官方自带</small>
+                  <input name="force_field" value="amber19sb" list="force-field-options" spellcheck="false" />
+                  <datalist id="force-field-options"></datalist>
+                </label>
+                <label title="pdb2gmx -water 使用的水模型；可选范围随力场联动">
+                  水模型 <small>water</small>
+                  <select name="water_model">
+                    <option value="opc">opc</option>
+                    <option value="opc3">opc3</option>
+                    <option value="tip3p">tip3p</option>
+                    <option value="spce">spce</option>
+                    <option value="tip4p">tip4p</option>
+                  </select>
+                </label>
+                <label title="solvate -cs 的溶剂盒子模板；auto 按水模型自动选择">
+                  溶剂模板 <small>solvent box</small>
+                  <select name="solvent_template">
+                    <option value="auto">auto</option>
+                    <option value="spc216.gro">spc216.gro</option>
+                    <option value="tip4p.gro">tip4p.gro</option>
+                  </select>
+                </label>
+                <label title="editconf -bt：盒子形状；dodecahedron 在同等距离下溶剂用量更少">
+                  盒子类型 <small>box type</small>
+                  <select name="box_type">
+                    <option value="dodecahedron">dodecahedron</option>
+                    <option value="cubic">cubic</option>
+                    <option value="triclinic">triclinic</option>
+                    <option value="octahedron">octahedron</option>
+                  </select>
+                </label>
+                <label title="editconf -d：溶质到盒壁的最小距离">
+                  盒子距离 nm <small>box distance</small>
+                  <input name="box_distance" type="number" step="0.1" min="0.1" value="1.0" />
+                </label>
+                <label title="genion -conc：目标盐浓度；留空则只中和电荷、不额外加盐">
+                  盐浓度 mol/L <small>ion conc.</small>
+                  <input name="ion_concentration" type="number" min="0" max="5" step="0.01" placeholder="留空仅中和；如 0.15" />
+                </label>
+                <label title="genion 的溶剂选择组：把其中的水分子替换为离子">
+                  溶剂组名 <small>solvent group</small>
+                  <input name="solvent_group" value="SOL" spellcheck="false" />
+                </label>
+                </div>
+                <div class="dense-grid execution-options">
+                <label class="check-row" title="pdb2gmx -ignh：忽略输入结构中的氢原子命名">
+                  <input name="ignh" type="checkbox" checked />
+                  <span>忽略氢原子名</span>
+                </label>
+                <label class="check-row" title="会移除结晶水、常见离子和蛋白流程中的全部 HETATM；可能丢失辅因子，确认后再启用">
+                  <input name="clean_pdb" type="checkbox" />
+                  <span>清理水/离子/HETATM（谨慎）</span>
+                </label>
+                </div>
+                </fieldset>
+              </div>
+
+              <div class="param-section mdp-section" data-section="mdp">
+                <div class="collapsible-head">
+                  <div>
+                    <div class="section-label" data-ui-icon="sliders">模拟协议</div>
+                    <small id="mdp-panel-state">使用原始模板</small>
+                  </div>
+                  <button id="mdp-panel-toggle" class="tool-button" data-ui-icon="settings" type="button" aria-expanded="false" aria-controls="mdp-panel-body">高级参数</button>
+                </div>
+                <div class="dense-grid execution-options protocol-options">
+                  <label class="check-row" title="默认不需要。仅在直接 NPT 出现异常盒子振荡、压力极端或结构仍不稳定时，临时加入位置限制 NVT 预平衡">
+                    <input name="pre_nvt" type="checkbox" />
+                    <span>先做 NVT（异常时补救）</span>
+                  </label>
+                  <label class="check-row" title="位置限制 NPT 后再进行一段无位置限制 NPT，通过质量门后才进入生产阶段">
+                    <input name="release_restraints" type="checkbox" checked />
+                    <span>解除限制后再平衡</span>
+                  </label>
+                </div>
+                  <div class="mdp-toolbar">
+                    <label class="check-row" title="只修改本次任务目录中的 MDP 副本，不修改 mdp/protein 或 mdp/complex 模板">
+                      <input name="mdp_override_enabled" type="checkbox" />
+                      <span>自定义协议参数</span>
+                    </label>
+                  </div>
+                  <div class="dense-grid">
+                    <label title="mdp dt：积分步长；h-bonds 约束常用 0.002">
+                      时间步 ps <small>dt</small>
+                      <input name="mdp_dt_ps" type="number" step="0.001" min="0.0001" placeholder="0.002" />
+                    </label>
+                    <label title="按 dt 换算 nvt.mdp 的 nsteps">
+                      NVT 时长 ns <small>nvt nsteps</small>
+                      <input name="mdp_nvt_ns" type="number" step="0.01" min="0" placeholder="0.1" />
+                    </label>
+                    <label title="按 dt 换算 npt.mdp 的 nsteps；默认同时用于位置限制和解除限制后的两个 NPT 阶段">
+                      每段 NPT 时长 ns <small>npt nsteps</small>
+                      <input name="mdp_npt_ns" type="number" step="0.01" min="0" placeholder="0.1" />
+                    </label>
+                    <label title="按 dt 换算 md.mdp 的 nsteps">
+                      生产时长 ns <small>md nsteps</small>
+                      <input name="mdp_md_ns" type="number" step="1" min="0" placeholder="100" />
+                    </label>
+                    <label title="ref_t / gen_temp：温控目标温度与初速生成温度">
+                      温度 K <small>ref_t / gen_temp</small>
+                      <input name="mdp_temperature_k" type="number" step="1" min="1" placeholder="300" />
+                    </label>
+                    <label title="ref_p：压控目标压强">
+                      压强 bar <small>ref_p</small>
+                      <input name="mdp_pressure_bar" type="number" step="0.1" min="0" placeholder="1.0" />
+                    </label>
+                  </div>
+                  <div id="protocol-summary" class="protocol-summary" aria-live="polite"></div>
+                <div id="mdp-panel-body" class="collapsible-body" hidden>
+                  <div class="dense-grid">
+                    <label class="span-2" title="tc-grps：两个温控组，空格分隔">
+                      温控组 <small>tc-grps</small>
+                      <input name="mdp_tc_grps" placeholder="Protein Water_and_Ions 或 Protein_Lig Water_and_Ions" spellcheck="false" />
+                    </label>
+                    <label title="tau_t：温控耦合时间常数">
+                      温控时间 ps <small>tau_t</small>
+                      <input name="mdp_tau_t_ps" type="number" step="0.1" min="0" placeholder="0.1" />
+                    </label>
+                    <label title="grompp 的 define 宏：-DPOSRES 启用位置限制">
+                      平衡限制宏 <small>define</small>
+                      <select name="mdp_define_equil">
+                        <option value="">保持模板</option>
+                        <option value="-DPOSRES">-DPOSRES</option>
+                        <option value="-DPOSRES -DPOSRES_LIG">-DPOSRES -DPOSRES_LIG</option>
+                        <option value="__none__">移除 define</option>
+                      </select>
+                    </label>
+                    <label title="nvt.mdp 的 gen_vel：是否生成初始速度">
+                      NVT 速度生成 <small>gen_vel</small>
+                      <select name="mdp_gen_vel">
+                        <option value="">保持模板</option>
+                        <option value="yes">yes</option>
+                        <option value="no">no</option>
+                      </select>
+                    </label>
+                    <label title="pcoupl：平衡阶段的压控算法">
+                      压控方式 <small>pcoupl</small>
+                      <select name="mdp_pcoupl">
+                        <option value="">保持模板</option>
+                        <option value="no">no</option>
+                        <option value="Berendsen">Berendsen</option>
+                        <option value="C-rescale">C-rescale</option>
+                        <option value="Parrinello-Rahman">Parrinello-Rahman</option>
+                      </select>
+                    </label>
+                    <label title="constraints：键长约束类型；all-bonds 可配合更大步长">
+                      约束 <small>constraints</small>
+                      <select name="mdp_constraints">
+                        <option value="">保持模板</option>
+                        <option value="h-bonds">h-bonds</option>
+                        <option value="all-bonds">all-bonds</option>
+                        <option value="none">none</option>
+                      </select>
+                    </label>
+                    <label title="rcoulomb：库仑相互作用截断半径">
+                      rcoulomb nm <small>cutoff</small>
+                      <input name="mdp_rcoulomb" type="number" step="0.1" min="0.1" placeholder="1.0" />
+                    </label>
+                    <label title="rvdw：范德华相互作用截断半径">
+                      rvdw nm <small>cutoff</small>
+                      <input name="mdp_rvdw" type="number" step="0.1" min="0.1" placeholder="1.0" />
+                    </label>
+                    <label title="按 dt 换算 nstenergy / nstlog / nstxout-compressed">
+                      输出间隔 ps <small>nstenergy/log/xtc</small>
+                      <input name="mdp_output_interval_ps" type="number" step="1" min="0.001" placeholder="10" />
+                    </label>
+                  </div>
+                </div>
+              </div>
+
+              <div class="param-section execution-section" data-section="base">
+                <fieldset class="base-group">
+                  <legend data-ui-icon="file">输出与执行</legend>
+                  <div class="dense-grid">
+                    <label title="mdrun -deffnm：生产 MD 输出文件的统一前缀">
+                      输出前缀 <small>deffnm</small>
+                      <input name="production_deffnm" value="md_0_100" spellcheck="false" />
+                    </label>
+                    <label title="独立生产轨迹数量；每个副本从同一平衡结构重新生成独立速度。建议至少 3 个">
+                      独立副本 <small>replicas</small>
+                      <input name="replicas" type="number" min="1" max="16" value="3" />
+                    </label>
+                    <label title="仅供 Dry run 排查；真实模拟必须为 0，避免掩盖拓扑或参数错误">
+                      警告容忍 <small>maxwarn</small>
+                      <input name="maxwarn" type="number" min="0" max="10" value="0" />
+                    </label>
+                  </div>
+                  <div class="dense-grid execution-options">
+                    <label class="check-row" title="mdrun -v：在日志中输出详细运行信息">
+                      <input name="verbose" type="checkbox" checked />
+                      <span>mdrun 详细输出</span>
+                    </label>
+                    <label class="check-row" title="只生成并检查命令链，不真正执行">
+                      <input name="dry_run" type="checkbox" />
+                      <span>试运行 Dry run</span>
+                    </label>
+                  </div>
+                </fieldset>
+                <fieldset class="base-group">
+                  <legend data-ui-icon="cpu">计算资源</legend>
+                  <div class="dense-grid">
+                    <label title="mdrun -ntmpi：MPI 进程数；线程并行构建下保持 1">
+                      MPI 进程 <small>ntmpi</small>
+                      <input name="ntmpi" type="number" min="1" value="1" />
+                    </label>
+                    <label title="mdrun -ntomp：每个 MPI 进程的 OpenMP 线程数">
+                      每进程线程 <small>ntomp</small>
+                      <input name="ntomp" type="number" min="1" value="4" />
+                    </label>
+                    <label title="mdrun -pin：把计算线程固定到 CPU 核心；单个专用任务通常选 on">
+                      CPU 绑定 <small>pin</small>
+                      <select name="pin">
+                        <option value="auto">auto</option>
+                        <option value="on">on</option>
+                        <option value="off">off</option>
+                      </select>
+                    </label>
+                  </div>
+                  <div class="dense-grid execution-options">
+                    <label class="check-row" title="mdrun -nb gpu：把非键相互作用计算卸载到 GPU">
+                      <input name="gpu" type="checkbox" />
+                      <span>GPU 非键计算</span>
+                    </label>
+                  </div>
+                  <div id="resource-advice" class="resource-advice" data-state="neutral" aria-live="polite">
+                    <span>正在检测本机算力…</span>
+                    <button id="apply-hardware-recommendation" class="tool-button" type="button">应用推荐</button>
+                  </div>
+                </fieldset>
+              </div>
+
+              <div class="param-section" data-section="ligand">
+                <div class="section-heading">
+                  <div class="section-label">蛋白-配体体系</div>
+                  <p>每个配体一行，分别配置来源、质子化/电荷、拓扑和位置限制。多个配体会自动合并坐标文件、把各配体 itp 的 [ atomtypes ] 去重合并进 topol.top，并生成独立的 index 组与 POSRES 宏。</p>
+                </div>
+                <div class="dense-grid">
+                  <label title="复合物流程的蛋白结构文件（pdb/gro）">
+                    蛋白文件 <small>protein</small>
+                    <input name="protein_file" placeholder="ak.pdb" spellcheck="false" />
+                  </label>
+                  <label class="check-row" title="上传复合物 PDB 时自动拆出蛋白和 HETATM 配体">
+                    <input name="auto_split_complex_pdb" type="checkbox" checked />
+                    <span>自动拆分复合物 PDB</span>
+                  </label>
+                  <label title="index 中蛋白组的编号">
+                    蛋白组号 <small>protein group</small>
+                    <input name="protein_group" value="1" spellcheck="false" />
+                  </label>
+                  <label title="index 中 Protein_Lig 复合物组的编号">
+                    复合物组号 <small>Protein_Lig</small>
+                    <input name="protein_lig_group" value="20" spellcheck="false" />
+                  </label>
+                  <label title="index 中 Water_and_Ions 组的编号">
+                    水离子组号 <small>Water_Ions</small>
+                    <input name="water_ions_group" value="21" spellcheck="false" />
+                  </label>
+                  <label title="genrestr -fc：位置限制力常数（kJ/mol/nm²）">
+                    限制力常数 <small>restraint fc</small>
+                    <input name="posres_fc_x" value="1000" spellcheck="false" />
+                  </label>
+                  <label class="check-row" title="MD 完成后自动执行轨迹后处理">
+                    <input name="run_postprocess_after_md" type="checkbox" checked />
+                    <span>MD 后自动后处理</span>
+                  </label>
+                </div>
+                <div class="dense-grid acpype-shared-grid">
+                  <label class="check-row" title="将配体转为 SDF，并按目标 pH 推断质子化和显式氢；对复合物 PDB 自动拆出的配体建议开启，但必须检查生成结构">
+                    <input name="use_obabel" type="checkbox" checked />
+                    <span>Open Babel 化学结构准备</span>
+                  </label>
+                  <label title="acpype 原子类型方案；gaff2 为推荐">
+                    原子类型 <small>atom type</small>
+                    <select name="atom_type">
+                      <option value="gaff2">gaff2</option>
+                      <option value="gaff">gaff</option>
+                    </select>
+                  </label>
+                  <label title="antechamber 电荷方法：bcc 常用；user 沿用输入文件电荷">
+                    电荷方法 <small>charge method</small>
+                    <select name="charge_method">
+                      <option value="bcc">bcc</option>
+                      <option value="gas">gas</option>
+                      <option value="user">user</option>
+                    </select>
+                  </label>
+                </div>
+                <div id="ligand-list" class="ligand-list"></div>
+                <div class="ligand-toolbar">
+                  <button id="detect-ligands" class="tool-button" type="button" title="读取复合物 PDB 里的 HETATM 残基名，并为每个残基建立配体行">从复合物 PDB 识别配体</button>
+                  <button id="add-ligand" class="tool-button" type="button" title="再添加一个配体">＋ 添加配体</button>
+                </div>
+                <label class="wide-field" title="逐行发送给 make_ndx 的命令，用于重建分组">
+                  自定义 index 脚本 <small>index script</small>
+                  <textarea name="index_script" rows="4" spellcheck="false" placeholder="1 | 13&#10;name 20 Protein_Lig&#10;! 20&#10;name 21 Water_and_Ions&#10;q"></textarea>
+                </label>
+              </div>
+
+              <div class="param-section" data-section="post">
+                <div class="section-heading">
+                  <div class="section-label">轨迹输入与处理</div>
+                  <p>这里处理周期性边界、居中和拟合，不会重新运行分子动力学积分。多聚体（如二聚体）请用 cluster 模式把整条复合物放进同一周期镜像。</p>
+                </div>
+                <div class="dense-grid">
+                  <label title="trjconv -s：运行输入文件">
+                    TPR 文件 <small>tpr</small>
+                    <input name="tpr_file" placeholder="md_0_100.tpr" spellcheck="false" />
+                  </label>
+                  <label title="trjconv -f：轨迹文件">
+                    轨迹文件 <small>trajectory</small>
+                    <input name="trajectory_file" placeholder="md_0_100.xtc" spellcheck="false" />
+                  </label>
+                  <label title="trjconv -n：索引文件">
+                    index 文件 <small>index</small>
+                    <input name="index_file" placeholder="index.ndx" spellcheck="false" />
+                  </label>
+                  <label title="trjconv -center 的居中参考组">
+                    居中组 <small>center group</small>
+                    <input name="center_group" value="Protein" spellcheck="false" />
+                  </label>
+                  <label title="trjconv 的输出组">
+                    输出组 <small>output group</small>
+                    <input name="output_group" value="System" spellcheck="false" />
+                  </label>
+                  <label title="trjconv -pbc：周期边界处理方式；cluster 会把选中组整体聚拢到同一镜像，适合二聚体/多聚体">
+                    PBC 模式 <small>pbc mode</small>
+                    <select name="pbc_mode">
+                      <option value="cluster" selected>cluster（多聚体推荐）</option>
+                      <option value="mol">mol（整分子）</option>
+                      <option value="whole">whole（修复断键）</option>
+                      <option value="nojump">nojump（去跳变）</option>
+                    </select>
+                  </label>
+                  <label title="trjconv -fit 的拟合参考组">
+                    拟合组 <small>fit group</small>
+                    <input name="fit_group" value="Backbone" spellcheck="false" />
+                  </label>
+                  <label title="PBC 居中后的轨迹文件名">
+                    居中输出名 <small>center output</small>
+                    <input name="center_output" value="md_0_100_center.xtc" spellcheck="false" />
+                  </label>
+                  <label title="旋转平移拟合后的轨迹文件名">
+                    拟合输出名 <small>fit output</small>
+                    <input name="fit_output" value="md_0_100_fit.xtc" spellcheck="false" />
+                  </label>
+                  <label title="轨迹第 0 帧结构输出文件名">
+                    首帧输出名 <small>first frame</small>
+                    <input name="start_pdb" value="start.pdb" spellcheck="false" />
+                  </label>
+                  <label class="check-row" title="trjconv -center -pbc（模式见上）；cluster 用于二聚体/多聚体">
+                    <input name="do_center" type="checkbox" checked />
+                    <span>PBC 居中</span>
+                  </label>
+                  <label class="check-row" title="trjconv -fit rot+trans">
+                    <input name="do_fit" type="checkbox" checked />
+                    <span>旋转平移拟合</span>
+                  </label>
+                  <label class="check-row" title="导出轨迹第 0 帧为 PDB">
+                    <input name="do_dump" type="checkbox" checked />
+                    <span>导出第 0 帧</span>
+                  </label>
+                  <label class="check-row" title="默认在拟合和首帧导出成功后删除体积较大的居中中间轨迹">
+                    <input name="keep_centered_trajectory" type="checkbox" />
+                    <span>保留居中中间轨迹</span>
+                  </label>
+                  <label class="check-row" title="拟合轨迹与原始轨迹同帧数、体积相近（可达 10 GB 级）；默认在后处理完成后删除，需要用于可视化时勾选保留">
+                    <input name="keep_fitted_trajectory" type="checkbox" />
+                    <span>保留拟合轨迹</span>
+                  </label>
+                </div>
+              </div>
+
+              <div class="param-section" data-section="analysis">
+                <div class="section-heading">
+                  <div class="section-label">分析项目</div>
+                  <p>轨迹会先修复周期边界并居中；RMSD 和 PCA 在计算时拟合旋转与平移，氢键使用未旋转轨迹。处理后生成 XVG，默认清理中间轨迹。</p>
+                </div>
+                <div class="dense-grid">
+                  <label title="energy -f：能量文件">
+                    EDR 文件 <small>edr</small>
+                    <input name="edr_file" value="md_0_100.edr" spellcheck="false" />
+                  </label>
+                  <label title="energy 提取的能量项，如 Potential">
+                    能量项 <small>energy term</small>
+                    <input name="energy_terms" value="Potential" spellcheck="false" />
+                  </label>
+                  <label title="rms 的拟合与计算组">
+                    RMSD 组 <small>rmsd group</small>
+                    <input name="rmsd_group" value="Backbone" spellcheck="false" />
+                  </label>
+                  <label title="gyrate 的计算组">
+                    Rg 选择 <small>rg selection</small>
+                    <input name="rg_selection" value="Protein" spellcheck="false" />
+                  </label>
+                  <label title="hbond：主链氢键分析的第一选择组">
+                    氢键主链 <small>hbond main</small>
+                    <input name="hbond_main_a" value="MainChain+H" spellcheck="false" />
+                  </label>
+                  <label title="hbond：侧链氢键分析的选择组">
+                    氢键侧链 <small>hbond side</small>
+                    <input name="hbond_side_a" value="SideChain" spellcheck="false" />
+                  </label>
+                  <label title="hbond：蛋白-水氢键分析的第二选择组">
+                    氢键水 <small>hbond water</small>
+                    <input name="hbond_pw_b" value="Water" spellcheck="false" />
+                  </label>
+                  <label title="covar / anaeig 使用的原子组">
+                    PCA 组 <small>pca group</small>
+                    <input name="pca_group" value="C-alpha" spellcheck="false" />
+                  </label>
+                  <label class="check-row" title="gmx energy：从 edr 提取能量项">
+                    <input name="do_energy" type="checkbox" checked />
+                    <span>能量 energy</span>
+                  </label>
+                  <label class="check-row" title="gmx rms：计算 RMSD 时间序列">
+                    <input name="do_rmsd" type="checkbox" checked />
+                    <span>RMSD</span>
+                  </label>
+                  <label class="check-row" title="回转半径">
+                    <input name="do_rg" type="checkbox" checked />
+                    <span>回转半径 Rg</span>
+                  </label>
+                  <label class="check-row" title="gmx hbond：统计氢键数量">
+                    <input name="do_hbond" type="checkbox" checked />
+                    <span>氢键 H-bond</span>
+                  </label>
+                  <label class="check-row" title="二级结构分析（需 mkdssp）">
+                    <input name="do_dssp" type="checkbox" />
+                    <span>DSSP</span>
+                  </label>
+                  <label class="check-row" title="主成分分析">
+                    <input name="do_pca" type="checkbox" />
+                    <span>PCA</span>
+                  </label>
+                  <label class="check-row" title="自由能形貌图">
+                    <input name="do_sham" type="checkbox" />
+                    <span>SHAM</span>
+                  </label>
+                </div>
+              </div>
+
+              <div class="param-section interaction-section" data-section="interaction">
+                <div class="section-label">交互输入</div>
+                <p class="section-help">仅在命令需要选择 GROMACS index 组时覆盖 stdin。留空将使用预览中的默认选择。</p>
+                <div class="interaction-toolbar">
+                  <label class="check-row" title="按命令预览中的步骤标题覆盖 stdin；未填写的步骤继续使用自动默认值">
+                    <input id="custom-stdin" name="custom_stdin" type="checkbox" />
+                    <span>自定义交互 stdin</span>
+                  </label>
+                  <button id="fill-stdin-overrides" class="tool-button" type="button">从预览生成模板</button>
+                </div>
+                <label class="wide-field">
+                  stdin 覆盖 <small>用 [步骤标题] 分块；每行会依次发送给 gmx</small>
+                  <textarea id="stdin-overrides" name="stdin_overrides" rows="7" spellcheck="false" placeholder="[Create ligand heavy-atom index]&#10;0 &amp; ! a H*&#10;q&#10;&#10;[Center trajectory]&#10;Protein_Lig&#10;System"></textarea>
+                </label>
+              </div>
+
+              <label class="custom-command" data-section="custom" for="custom-command" title="每行一条 gmx 子命令，仅允许常用子命令范围">
+                自定义命令 <small>custom command</small>
+                <textarea id="custom-command" name="custom_command" rows="3" spellcheck="false" placeholder="gmx energy -f md.edr -o potential.xvg"></textarea>
+              </label>
+            </div>
+          </form>
+            <details class="command-panel">
+              <summary>命令预览</summary>
+              <div class="panel-head">
+                <h3>命令预览</h3>
+                <span id="preview-count" class="count-pill">0 步</span>
+              </div>
+              <div id="mdp-preview" class="mdp-preview" hidden></div>
+              <ol id="command-preview" class="command-preview"></ol>
+            </details>
+        </section>
+
+        <section class="monitor-grid" id="detail-view" hidden>
+          <div class="detail-header">
+            <h2 id="active-job-title" class="detail-title">未选择任务</h2>
+            <div class="detail-analysis-actions">
+              <button id="analyze-job" class="tool-button" data-ui-icon="chart" type="button" hidden>继续分析</button>
+              <button id="analysis-source-job" class="tool-button" type="button" hidden></button>
+            </div>
+          </div>
+          <nav class="detail-tabs" aria-label="任务详情视图">
+            <button type="button" data-detail-tab="overview" data-ui-icon="activity" aria-pressed="true">运行概览</button>
+            <button type="button" data-detail-tab="quality" data-ui-icon="shield" aria-pressed="false">质量检查</button>
+            <button type="button" data-detail-tab="plots" data-ui-icon="chart" aria-pressed="false">分析图谱</button>
+            <button type="button" data-detail-tab="research" data-ui-icon="microscope" aria-pressed="false">研究分析</button>
+            <button type="button" data-detail-tab="files" data-ui-icon="folder" aria-pressed="false">输出文件</button>
+          </nav>
+          <p id="skipped-steps-notice" class="job-alert" hidden></p>
+          <section id="research-panel" data-detail-panel="research" hidden>
+            <div class="panel-head"><h3>研究分析</h3><button id="create-research" data-ui-icon="plus" type="button" class="tool-button">创建研究分析</button></div>
+            <nav class="research-tabs" aria-label="研究问题">
+              <button type="button" data-research-tab="conformation" aria-pressed="true">构象变化</button>
+              <button type="button" data-research-tab="binding" aria-pressed="false">配体结合</button>
+              <button type="button" data-research-tab="comparison" aria-pressed="false">突变体比较</button>
+            </nav>
+            <p id="research-state" role="status"></p>
+            <div id="research-results"></div>
+            <section id="research-comparison" hidden>
+              <form id="research-compare-form">
+                <div class="analysis-input-grid">
+                  <label>参考组<select id="research-reference" multiple size="4" required aria-label="参考组任务"></select></label>
+                  <label>对照组<select id="research-other" multiple size="4" required aria-label="对照组任务"></select></label>
+                </div>
+                <button type="submit" class="tool-button">比较研究结果</button>
+              </form>
+              <p id="research-compare-error" class="job-alert" role="status" hidden></p>
+              <div id="research-compare-results"></div>
+            </section>
+          </section>
+          <section class="quality-panel" data-detail-panel="quality" hidden>
+            <div class="panel-head"><h3>质量检查与采样报告</h3></div>
+            <div id="quality-reports"></div>
+          </section>
+            <div class="panel plots-panel" data-detail-panel="plots" hidden>
+              <div class="panel-head">
+                <div>
+                  <h3>分析图谱</h3>
+                  <p>从任务产生的 XVG 数据绘制；每张图可下载原始数据</p>
+                </div>
+                <div class="panel-tools">
+                  <a id="download-plots" class="tool-button" href="#" hidden>下载全部 XVG</a>
+                  <span id="plot-count" class="count-pill">0 张</span>
+                </div>
+              </div>
+              <form id="plot-controls" class="plot-controls">
+                <label>指标<select id="plot-metric"><option value="">全部指标</option></select></label>
+                <label>副本<select id="plot-replica"><option value="">全部副本</option></select></label>
+                <fieldset class="plot-mode"><legend>显示方式</legend>
+                  <label><input type="radio" name="plot-mode" value="separate" checked /><span>分开</span></label>
+                  <label><input type="radio" name="plot-mode" value="overlay" /><span>叠加</span></label>
+                </fieldset>
+                <label>开始 ns<input id="plot-begin" type="number" min="0" step="any" placeholder="全部" /></label>
+                <label>结束 ns<input id="plot-end" type="number" min="0" step="any" placeholder="全部" /></label>
+                <button type="submit" class="tool-button">应用区间</button>
+                <button type="reset" class="tool-button">重置筛选</button>
+              </form>
+              <p id="plot-filter-error" class="job-alert" role="status" hidden></p>
+              <p id="plot-window-notice" class="plot-window-notice" hidden>当前仅显示所选时间区间，RMSF 等非时间轴图不参与区间筛选。</p>
+              <div id="analysis-plots" class="analysis-plots">
+                <div class="plot-empty">完成模拟或分析后，曲线会显示在这里。</div>
+              </div>
+            </div>
+
+            <div class="panel files-panel" data-detail-panel="files" hidden>
+              <div class="panel-head">
+                <h3>输出文件</h3>
+                <div class="panel-tools file-tools">
+                  <input id="file-filter" class="file-filter" type="search" placeholder="过滤文件名…" autocomplete="off" spellcheck="false" aria-label="过滤输出文件" />
+                  <span id="file-count" class="count-pill">0 个</span>
+                </div>
+              </div>
+              <div id="output-files" class="output-files"></div>
+            </div>
+
+          <div class="panel job-panel" data-detail-panel="overview">
+            <div class="panel-head">
+              <div class="overview-heading">
+                <h3>运行概览</h3>
+                <strong id="job-status" class="job-status-label" data-state="idle">空闲</strong>
+              </div>
+              <div class="panel-tools">
+                <details class="job-more-actions">
+                  <summary>更多操作</summary>
+                  <div class="job-more-actions-body">
+                <button id="copy-job-directory" class="tool-button" data-ui-icon="folder" type="button" title="复制当前任务结果目录">复制目录</button>
+                <button id="clone-job" class="tool-button" data-ui-icon="copy" type="button" title="复制输入和参数并创建新任务">复制任务</button>
+                <button id="benchmark-job" class="tool-button" type="button" title="复制当前 TPR，短跑多个线程组合并比较 ns/day">性能基准</button>
+                <select id="compare-job-select" class="compact-select" aria-label="选择参数比较任务"></select>
+                <button id="compare-job" class="tool-button" type="button">比较参数</button>
+                <button id="copy-log" class="tool-button" type="button" title="复制当前日志">复制日志</button>
+                <button id="log-bottom" class="tool-button" type="button" title="滚动到日志末尾">回到底部</button>
+                  </div>
+                </details>
+                <button id="adopt-job" class="tool-button" type="button" hidden>重新接管后台任务</button>
+                <button id="resume-job" class="tool-button" type="button" title="从检查点继续并完成后续步骤" hidden>检查点续跑</button>
+                <button id="retry-job" class="tool-button" data-ui-icon="retry" type="button" hidden>重试失败步骤</button>
+                <button id="skip-job" class="tool-button" type="button" hidden>跳过可选步骤</button>
+                <button id="cancel-job" class="danger-action" data-ui-icon="stop" type="button" disabled>取消任务</button>
+              </div>
+            </div>
+            <div id="job-error" class="job-alert" role="status" hidden></div>
+            <div class="metrics-row">
+              <div><span>当前步骤</span><strong id="job-step">-</strong></div>
+              <div><span>进度</span><strong id="job-percent">0%</strong></div>
+              <div><span>模拟速度</span><strong id="job-performance">-</strong></div>
+              <div><span>预计剩余</span><strong id="job-eta">-</strong></div>
+            </div>
+            <div class="progress" id="job-progress" title="步骤进度">
+              <div class="progress-fill" id="progress-fill"></div>
+            </div>
+            <div class="metrics-secondary">
+              <div><span>步骤耗时</span><strong id="job-duration">-</strong></div>
+              <div><span>峰值内存</span><strong id="job-peak-memory">-</strong></div>
+              <div><span>退出码</span><strong id="job-exit">-</strong></div>
+            </div>
+            <div class="job-directory-path"><span>结果目录</span><code id="job-directory">-</code></div>
+            <div class="log-notice" id="log-notice" hidden></div>
+            <div class="terminal-chrome">
+              <span class="chrome-dots" aria-hidden="true"><i></i><i></i><i></i></span>
+              <span class="terminal-title" id="terminal-title">run.log</span>
+            </div>
+            <pre id="job-log" class="terminal"></pre>
+          </div>
+
+        </section>
+      </main>
+    </div>
+
+    <dialog id="existing-analysis-dialog" class="existing-analysis-dialog" aria-labelledby="existing-analysis-title">
+      <form id="existing-analysis-form">
+        <h3 id="existing-analysis-title">继续分析</h3>
+        <p id="existing-analysis-source" class="analysis-source-name"></p>
+        <fieldset id="existing-analysis-fields">
+          <label>分析任务名称<input name="name" maxlength="160" required /></label>
+          <div class="analysis-input-grid">
+            <label>轨迹 XTC / TRR<select name="trajectory_file" required></select></label>
+            <label>拓扑 TPR<select name="tpr_file" required></select></label>
+            <label>索引 NDX<select name="index_file"></select></label>
+            <label>能量 EDR<select name="edr_file"></select></label>
+            <label>开始时间 ns<input name="begin_ns" type="number" value="0" min="0" step="any" required /></label>
+            <label>结束时间 ns<input name="end_ns" type="number" min="0" step="any" placeholder="轨迹末尾" /></label>
+          </div>
+          <p id="existing-analysis-size" class="analysis-storage"></p>
+          <fieldset class="analysis-metrics"><legend>分析指标</legend>
+            <label><input type="checkbox" name="do_rmsd" checked />RMSD</label>
+            <label><input type="checkbox" name="do_rg" checked />回转半径 Rg</label>
+            <label><input type="checkbox" name="do_energy" />能量</label>
+            <label><input type="checkbox" name="do_hbond" />氢键</label>
+            <label><input type="checkbox" name="do_dssp" />二级结构 DSSP</label>
+            <label><input type="checkbox" name="do_pca" />主成分 PCA</label>
+          </fieldset>
+          <label class="analysis-dry-run"><input type="checkbox" name="do_research" />研究分析：构象、残基波动与配体接触</label>
+          <div id="research-settings" class="analysis-input-grid" hidden>
+            <label>配体索引组<select name="research_ligand_group"><option value="">仅分析蛋白</option></select></label>
+            <label>每 N 帧取一帧<input name="research_stride" type="number" value="10" min="1" max="10000" required /></label>
+            <label>重原子接触阈值 nm<input name="contact_cutoff_nm" type="number" value="0.45" min="0.2" max="1" step="0.01" required /></label>
+          </div>
+          <details class="analysis-selections">
+            <summary>原子组与能量项</summary>
+            <div class="analysis-input-grid">
+              <label>PBC 聚集组<input name="center_group" value="Protein" required maxlength="256" /></label>
+              <label>RMSD 拟合组<input name="fit_group" value="Backbone" required maxlength="256" /></label>
+              <label>RMSD 测量组<input name="rmsd_group" value="Backbone" required maxlength="256" /></label>
+              <label>Rg 选择<input name="rg_selection" value="Protein" required maxlength="256" /></label>
+              <label>能量项<input name="energy_terms" value="Potential" required maxlength="256" /></label>
+            </div>
+          </details>
+          <label class="analysis-dry-run"><input name="dry_run" type="checkbox" />仅生成命令（Dry run）</label>
+        </fieldset>
+        <p id="existing-analysis-error" class="job-alert" role="alert" hidden></p>
+        <p id="existing-analysis-status" role="status" hidden></p>
+        <div class="dialog-actions">
+          <button id="existing-analysis-cancel" class="tool-button" type="button">取消</button>
+          <button id="existing-analysis-submit" class="primary-action compact" type="submit">创建分析任务</button>
+        </div>
+      </form>
+    </dialog>
+    <div id="toast" class="toast" role="status" aria-live="polite"></div>
+    <dialog id="submit-warning" class="confirm-modal" aria-labelledby="submit-warning-title" aria-describedby="submit-warning-subtitle" hidden>
+      <div class="run-dialog">
+        <div class="dialog-head">
+          <span id="submit-warning-mark" class="dialog-mark">!</span>
+          <div>
+            <strong id="submit-warning-title">提交前确认</strong>
+            <small id="submit-warning-subtitle">文件处理记录会写入日志和报告</small>
+          </div>
+        </div>
+        <ul id="submit-warning-list"></ul>
+        <div class="dialog-actions">
+          <button id="submit-warning-cancel" class="tool-button" type="button">返回修改</button>
+          <button id="submit-warning-confirm" class="primary-action compact" type="button">确认提交</button>
+        </div>
+      </div>
+    </dialog>
+    <script src="/static/js/main.js?v=20261006-026" type="module"></script>
+  </body>
+</html>

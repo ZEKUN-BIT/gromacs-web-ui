@@ -1,0 +1,27 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: python -m pip install -e ".[dev]"
+      - run: ruff check app tests
+      - run: ruff format --check app tests
+      - run: pytest --cov=app --cov-report=term
+      - name: Install browser test tools
+        run: |
+          python -m pip install playwright==1.62.0
+          python -m playwright install --with-deps chromium
+      - name: Check history navigation and confirmation dialogs in Chromium
+        run: |
+          node scripts/check_frontend_state.mjs
+          python scripts/check_frontend_browser.py

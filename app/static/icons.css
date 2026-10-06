@@ -1,0 +1,51 @@
+/* Lucide 0.468.0, ISC license in icons/lucide/LICENSE. */
+[data-ui-icon]::before {
+  content: "";
+  display: inline-block;
+  width: 16px;
+  height: 16px;
+  flex: none;
+  margin-right: 8px;
+  vertical-align: -3px;
+  background: currentColor;
+  mask: var(--ui-icon) center / contain no-repeat;
+}
+[data-ui-icon="atom"] { --ui-icon: url('/static/icons/lucide/atom.svg'); }
+[data-ui-icon="plus"] { --ui-icon: url('/static/icons/lucide/plus.svg'); }
+[data-ui-icon="activity"] { --ui-icon: url('/static/icons/lucide/activity.svg'); }
+[data-ui-icon="chart"] { --ui-icon: url('/static/icons/lucide/chart-no-axes-combined.svg'); }
+[data-ui-icon="shield"] { --ui-icon: url('/static/icons/lucide/shield-check.svg'); }
+[data-ui-icon="folder"] { --ui-icon: url('/static/icons/lucide/folder-open.svg'); }
+[data-ui-icon="microscope"] { --ui-icon: url('/static/icons/lucide/microscope.svg'); }
+[data-ui-icon="settings"] { --ui-icon: url('/static/icons/lucide/settings-2.svg'); }
+[data-ui-icon="cpu"] { --ui-icon: url('/static/icons/lucide/cpu.svg'); }
+[data-ui-icon="upload"] { --ui-icon: url('/static/icons/lucide/upload.svg'); }
+[data-ui-icon="file"] { --ui-icon: url('/static/icons/lucide/file-code-2.svg'); }
+[data-ui-icon="play"] { --ui-icon: url('/static/icons/lucide/play.svg'); }
+[data-ui-icon="save"] { --ui-icon: url('/static/icons/lucide/save.svg'); }
+[data-ui-icon="trash"] { --ui-icon: url('/static/icons/lucide/trash-2.svg'); }
+[data-ui-icon="copy"] { --ui-icon: url('/static/icons/lucide/copy.svg'); }
+[data-ui-icon="retry"] { --ui-icon: url('/static/icons/lucide/rotate-ccw.svg'); }
+[data-ui-icon="stop"] { --ui-icon: url('/static/icons/lucide/square.svg'); }
+[data-ui-icon="network"] { --ui-icon: url('/static/icons/lucide/network.svg'); }
+[data-ui-icon="flask"] { --ui-icon: url('/static/icons/lucide/flask-conical.svg'); }
+[data-ui-icon="search"] { --ui-icon: url('/static/icons/lucide/search.svg'); }
+[data-ui-icon="chevron"] { --ui-icon: url('/static/icons/lucide/chevron-down.svg'); }
+[data-ui-icon="open"] { --ui-icon: url('/static/icons/lucide/external-link.svg'); }
+[data-ui-icon="close"] { --ui-icon: url('/static/icons/lucide/x.svg'); }
+[data-ui-icon="layers"] { --ui-icon: url('/static/icons/lucide/layers.svg'); }
+[data-ui-icon="terminal"] { --ui-icon: url('/static/icons/lucide/terminal.svg'); }
+[data-ui-icon="sliders"] { --ui-icon: url('/static/icons/lucide/sliders-horizontal.svg'); }
+[data-ui-icon="clock"] { --ui-icon: url('/static/icons/lucide/clock-3.svg'); }
+[data-ui-icon="gauge"] { --ui-icon: url('/static/icons/lucide/gauge.svg'); }
+.icon-only[data-ui-icon] {
+  display: inline-grid;
+  place-items: center;
+  width: 34px;
+  min-width: 34px;
+  height: 34px;
+  padding: 0;
+  font-size: 0;
+}
+.icon-only[data-ui-icon]::before { margin: 0; }
+.primary-action[data-busy="true"][data-ui-icon]::before { display: none; }

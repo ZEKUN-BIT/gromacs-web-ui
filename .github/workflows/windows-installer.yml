@@ -1,0 +1,75 @@
+name: Windows installer
+
+on:
+  workflow_dispatch:
+  push:
+    tags: ['v*']
+  pull_request:
+    paths:
+      - 'packaging/windows/**'
+      - 'tests/test_windows*.py'
+      - 'tests/windows_setup.Tests.ps1'
+      - 'tests/windows_console.Tests.ps1'
+      - 'tests/windows_host.Tests.ps1'
+      - '.github/workflows/windows-installer.yml'
+
+jobs:
+  linux-checks:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install test dependencies
+        run: python -m pip install -e '.[test]'
+      - name: Check Linux scripts and installer behavior
+        run: |
+          bash -n packaging/windows/*.sh
+          python -m pytest tests/test_windows*.py -q
+  package:
+    needs: linux-checks
+    runs-on: windows-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Check PowerShell syntax
+        shell: powershell
+        run: |
+          $tokens = $null
+          $errors = $null
+          Get-ChildItem packaging/windows/*.ps1 | ForEach-Object {
+            [System.Management.Automation.Language.Parser]::ParseFile($_.FullName, [ref]$tokens, [ref]$errors) | Out-Null
+            if ($errors.Count) { $errors | Format-List; exit 1 }
+          }
+      - name: Test real WSL CLI and mocked provisioning without changing the runner
+        shell: powershell
+        run: |
+          ./tests/windows_setup.Tests.ps1 -RequireWindowsWsl
+          ./tests/windows_console.Tests.ps1
+          ./tests/windows_host.Tests.ps1
+      - name: Test PowerShell 7 launcher and provisioning compatibility
+        shell: pwsh
+        run: |
+          ./tests/windows_setup.Tests.ps1 -RequireWindowsWsl
+          ./tests/windows_console.Tests.ps1
+          ./tests/windows_host.Tests.ps1
+      - name: Install NSIS compiler
+        run: choco install nsis --yes --no-progress
+      - name: Build setup.exe and portable archive
+        shell: powershell
+        run: python packaging/windows/build.py --makensis "${env:ProgramFiles(x86)}\NSIS\makensis.exe"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: GromacsConsole-windows-x64
+          path: |
+            dist/*-setup.exe
+            dist/*-windows-x64.zip
+            dist/*.sha256
+          if-no-files-found: error

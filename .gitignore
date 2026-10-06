@@ -1,0 +1,47 @@
+.env
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+runtime/
+settings.json
+*.egg-info/
+dist/
+
+# Simulation inputs, outputs, and GROMACS backup files.
+*.gro
+*.pdb
+*.tpr
+*.cpt
+*.xtc
+*.trr
+*.edr
+*.xvg
+*.ndx
+*.log
+/posre*.itp
+\#*#
+mdout.mdp
+
+# Generated figures; source interface assets are kept.
+*.png
+*.jpg
+*.jpeg
+*.tif
+*.tiff
+*.pdf
+*.svg
+!/app/static/**/*.svg
+!/app/static/**/*.png
+
+# Local design context, task-specific scripts, and historical verification reports.
+.impeccable/
+/scripts/export_recent_*.py
+/scripts/recompute_recent_rmsd.py
+/scripts/*aki_a1f1*.py
+/docs/*OPTIMIZATION*.md
+/docs/windows-*-python-audit.json
+/docs/windows-*-release-verification.json

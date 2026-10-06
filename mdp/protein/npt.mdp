@@ -1,0 +1,48 @@
+title                   = AMBER19SB protein NPT equilibration
+define                  = -DPOSRES  ; position restrain the protein
+; Run parameters
+integrator              = md        ; leap-frog integrator
+nsteps                  = 250000    ; 2 * 250000 = 500 ps
+dt                      = 0.002     ; 2 fs
+; Output control
+nstxout                 = 0
+nstvout                 = 0
+nstfout                 = 0
+nstenergy               = 500       ; save energies every 1.0 ps
+nstlog                  = 500       ; update log file every 1.0 ps
+nstxout-compressed      = 2500      ; save coordinates every 5 ps
+; Bond parameters
+continuation            = no        ; default path starts directly after minimization
+constraint_algorithm    = lincs     ; holonomic constraints 
+constraints             = h-bonds   ; bonds involving H are constrained
+lincs_iter              = 1         ; accuracy of LINCS
+lincs_order             = 4         ; also related to accuracy
+; Nonbonded settings 
+cutoff-scheme           = Verlet    ; Buffered neighbor searching
+nstlist                 = 20
+; vdW
+rvdw                    = 1.0
+DispCorr                = EnerPres
+; Electrostatics
+rcoulomb                = 1.0
+coulombtype             = PME       ; Particle Mesh Ewald for long-range electrostatics
+pme_order               = 4         ; cubic interpolation
+fourierspacing          = 0.16      ; grid spacing for FFT
+; Temperature coupling is on
+tcoupl                  = V-rescale ; stochastic Bussi thermostat
+tc-grps                 = Protein Non-Protein
+tau_t                   = 1.0 1.0
+ref_t                   = 300 300
+; Pressure coupling is on
+pcoupl                  = C-rescale 
+pcoupltype              = isotropic             ; uniform scaling of box vectors
+tau_p                   = 5.0                   ; time constant, in ps
+ref_p                   = 1.0                   ; reference pressure, in bar
+compressibility         = 4.5e-5                ; isothermal compressibility of water, bar^-1
+refcoord_scaling        = com
+; Periodic boundary conditions
+pbc                     = xyz       ; 3-D PBC
+; Velocity generation
+gen_vel                 = yes       ; generate velocities for direct EM -> NPT
+gen_temp                = 300
+gen_seed                = -1

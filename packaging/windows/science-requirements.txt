@@ -1,0 +1,28 @@
+# Linux x86_64 / Python 3.12; wheels include lightweight AmberTools and Open Babel.
+acpype==2026.9.4 \
+    --hash=sha256:591412cf53f49cf682426daec622d61d6f032ddda75c52793ff76abd5dec2559
+
+openbabel-wheel==3.1.1.23 \
+    --hash=sha256:7fa4edf22b616e6c71065bdb01f028ec6fb4821b7f788cef97edc33a916203cf \
+    --hash=sha256:39340af4da11cafabb95542fd110e7ff120e3af085e4e48aa2b8e69cc49b807b
+
+rich==15.0.0 \
+    --hash=sha256:33bd4ef74232fb73fe9279a257718407f169c09b78a87ad3d296f548e27de0bb
+
+typer==0.27.2 \
+    --hash=sha256:b3a5fc4342d5fc8fda8fc3010b1cf117e9249aab7fae800c2eff62fd3842d97d
+
+annotated-doc==0.0.5 \
+    --hash=sha256:117bac03a25ede5df5440e855b32d556049ca169ead221505badf432fed4b101
+
+markdown-it-py==4.2.0 \
+    --hash=sha256:9f7ebbcd14fe59494226453aed97c1070d83f8d24b6fc3a3bcf9a38092641c4a
+
+mdurl==0.1.2 \
+    --hash=sha256:84008a41e51615a49fc9966191ff91509e3c40b939176e643fd50a5c2196b8f8
+
+pygments==2.21.0 \
+    --hash=sha256:2363c69b61c4a97c838da3b130dcd6468f4848992b21a82f2a63ec34377137d9
+
+shellingham==1.5.4 \
+    --hash=sha256:7ecfff8f2fd72616f7481040475a65b2bf8af90a56c89140852d1120324e8686

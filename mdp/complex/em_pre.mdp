@@ -1,0 +1,14 @@
+; Pre-equilibration EM - gentler, more steps with smaller step
+integrator  = steep
+emtol       = 500.0
+emstep      = 0.005
+nsteps      = 100000
+
+; Output
+nstlist         = 10
+cutoff-scheme   = Verlet
+coulombtype     = PME
+rcoulomb        = 1.0
+rvdw            = 1.0
+pbc             = xyz
+define = -DFLEXIBLE

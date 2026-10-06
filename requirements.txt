@@ -1,0 +1,8 @@
+fastapi==0.141.1
+matplotlib==3.10.8
+numpy>=2.0,<3
+MDAnalysis==2.10.0
+biopython==1.87
+uvicorn[standard]==0.30.3
+python-multipart==0.0.31
+typing-extensions==4.16.0
