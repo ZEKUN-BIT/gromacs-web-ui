@@ -39,13 +39,20 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-      - name: Install verified WSL CLI without a distribution
+      - name: Download and verify WSL CLI
         shell: powershell
+        timeout-minutes: 5
         run: |
           $installer = Join-Path $env:RUNNER_TEMP 'wsl.3.0.1.0.x64.msi'
-          Invoke-WebRequest -UseBasicParsing -Uri 'https://github.com/microsoft/WSL/releases/download/3.0.1/wsl.3.0.1.0.x64.msi' -OutFile $installer
+          curl.exe --fail --location --silent --show-error --retry 2 --connect-timeout 15 --max-time 180 --output $installer 'https://github.com/microsoft/WSL/releases/download/3.0.1/wsl.3.0.1.0.x64.msi'
+          if ($LASTEXITCODE -ne 0) { throw "WSL CLI download failed: $LASTEXITCODE" }
           $expected = '28b1a0d013640a2ac95898ea705fa186e5b4ff767a1c1b49257161bc106599c6'
           if ((Get-FileHash $installer -Algorithm SHA256).Hash.ToLowerInvariant() -ne $expected) { throw 'WSL installer SHA-256 mismatch.' }
+      - name: Install verified WSL CLI without a distribution
+        shell: powershell
+        timeout-minutes: 5
+        run: |
+          $installer = Join-Path $env:RUNNER_TEMP 'wsl.3.0.1.0.x64.msi'
           $process = Start-Process msiexec.exe -ArgumentList "/i `"$installer`" /quiet /norestart" -Wait -PassThru
           if ($process.ExitCode -notin @(0, 3010)) { throw "WSL CLI installation failed: $($process.ExitCode)" }
           Remove-Item $installer
