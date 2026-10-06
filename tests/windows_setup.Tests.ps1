@@ -76,7 +76,8 @@ try {
             # Real wsl.exe must parse --help on Windows, even with no distro installed.
             # Do not enable features, install, start, convert or unregister a distro.
             $help = Invoke-WslCommand @('--help')
-            Assert-True ($help.ExitCode -eq 0) "real Windows WSL help succeeds (exit $($help.ExitCode)): $($help.Lines -join ' ')"
+            # WSL can return -1 after successfully printing usage information.
+            Assert-True ($help.ExitCode -in @(0, -1)) "real Windows WSL help succeeds (exit $($help.ExitCode)): $($help.Lines -join ' ')"
             Assert-True (($help.Lines -join "`n") -match '--distribution' -and ($help.Lines -join "`n") -match '--exec') 'real WSL recognizes a host-side option'
             Write-Host 'Real Windows wsl.exe read-only CLI test passed.'
         } elseif ($RequireWindowsWsl) { throw 'Required Windows wsl.exe is missing.' }
