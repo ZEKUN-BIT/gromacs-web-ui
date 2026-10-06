@@ -2,6 +2,7 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from app.gromacs import (
     Step,
@@ -292,11 +293,20 @@ class MolecularDynamicsWorkflowTests(unittest.TestCase):
         self.assertEqual(_solvent_template({"water_model": "tip3p"}), "spc216.gro")
 
     def test_installed_amber19sb_opc_uses_numeric_menu_selection(self) -> None:
-        gmx = "/home/zek/.local/opt/gromacs-2026.3/bin/gmx"
-        self.assertEqual(installed_water_model_selection(gmx, "amber19sb", "opc"), "1")
-        params = {"workflow": "protein_md", "structure_file": "protein.pdb", "water_model": "opc", "gmx_bin": gmx}
-        topology = next(step for step in build_steps(params, ["protein.pdb"]) if step.title == "Build topology")
-        self.assertEqual(topology.stdin_text, "1\n")
+        with tempfile.TemporaryDirectory() as folder:
+            prefix = Path(folder)
+            gmx = prefix / "bin" / "gmx"
+            gmx.parent.mkdir()
+            gmx.touch()
+            top = prefix / "share" / "gromacs" / "top"
+            force_field = top / "amber19sb.ff"
+            force_field.mkdir(parents=True)
+            (force_field / "watermodels.dat").write_text("opc OPC 4-site water model\nopc3 OPC3 3-site water model\n")
+            with patch.dict("os.environ", {"GMXLIB": str(top)}):
+                self.assertEqual(installed_water_model_selection(str(gmx), "amber19sb", "opc"), "1")
+                params = {"workflow": "protein_md", "structure_file": "protein.pdb", "water_model": "opc", "gmx_bin": str(gmx)}
+                topology = next(step for step in build_steps(params, ["protein.pdb"]) if step.title == "Build topology")
+                self.assertEqual(topology.stdin_text, "1\n")
 
     def test_scientific_frontend_values_are_validated_server_side(self) -> None:
         base = {"workflow": "protein_ligand_md", "protein_file": "complex.pdb", "ligand_charge_confirmed": True}

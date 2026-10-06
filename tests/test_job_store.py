@@ -187,7 +187,7 @@ class JobStoreTests(unittest.TestCase):
             self.assertEqual(statuses, {"completed"})
 
     def test_claim_next_keeps_gpu_jobs_exclusive_but_can_skip_to_cpu_work(self) -> None:
-        with tempfile.TemporaryDirectory() as folder:
+        with tempfile.TemporaryDirectory() as folder, patch("app.job_store.os.cpu_count", return_value=16):
             store = JobStore(Path(folder), max_parallel=2)
             gpu_step = Step("gpu", ["gmx", "mdrun", "-deffnm", "md", "-nb", "gpu"])
             first = store.create("gpu-1", {"workflow": "run_tpr", "gpu": True, "ntmpi": 1, "ntomp": 8}, [], [gpu_step])
