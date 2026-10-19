@@ -7,8 +7,10 @@ import gzip
 import hashlib
 import io
 import json
+import lzma
 import re
 import shutil
+import struct
 import subprocess
 import tarfile
 import tomllib
@@ -72,6 +74,71 @@ DISTRIBUTION_FILES = (
     "README.md",
     "release.json",
 )
+NSIS_SIGNATURE = b"\xef\xbe\xad\xdeNullsoftInst"
+MAX_INSTALLER_BYTES = 64 * 1024**2
+
+
+def _nsis_archive(data: bytes, *, flags: int, max_decoded: int) -> tuple[bytes, bytes]:
+    """Read this project's solid LZMA NSIS header and data, without extracting files."""
+    start = data.find(NSIS_SIGNATURE) - 4
+    if start < 0 or start + 28 > len(data):
+        raise ValueError("NSIS archive header is missing")
+    actual_flags, _, _, _, _, header_size, archive_size = struct.unpack_from("<7I", data, start)
+    if actual_flags != flags or not 0 < header_size <= 1024**2:
+        raise ValueError("Unexpected NSIS archive flags or header size")
+    if archive_size < 37 or start + archive_size > len(data):
+        raise ValueError("Invalid NSIS archive size")
+    # The archive ends with a four-byte CRC. Solid LZMA starts with five properties bytes.
+    compressed = data[start + 28 : start + archive_size - 4]
+    properties = compressed[0]
+    dictionary = int.from_bytes(compressed[1:5], "little")
+    if properties >= 9 * 5 * 5 or not 4096 <= dictionary <= 64 * 1024**2:
+        raise ValueError("Unsupported NSIS LZMA properties")
+    remainder, lc = divmod(properties, 9)
+    pb, lp = divmod(remainder, 5)
+    try:
+        decoder = lzma.LZMADecompressor(
+            format=lzma.FORMAT_RAW,
+            filters=[{"id": lzma.FILTER_LZMA1, "dict_size": dictionary, "lc": lc, "lp": lp, "pb": pb}],
+        )
+        decoded = decoder.decompress(compressed[5:], max_length=max_decoded + 1)
+    except lzma.LZMAError as exc:
+        raise ValueError("Invalid NSIS solid LZMA stream") from exc
+    if len(decoded) > max_decoded:
+        raise ValueError("NSIS decompressed data exceeds the verification limit")
+    if not decoder.eof or decoder.unused_data or len(decoded) < 4 + header_size:
+        raise ValueError("Incomplete NSIS solid LZMA stream")
+    if struct.unpack_from("<I", decoded)[0] != header_size:
+        raise ValueError("NSIS decoded header size does not match")
+    return decoded[4 : 4 + header_size], decoded[4 + header_size :]
+
+
+def verify_installer_text(installer: Path) -> None:
+    """Verify every custom Chinese LangString in the compiled install/uninstall headers."""
+    # This intentionally supports only our unsigned, solid LZMA Unicode NSIS build.
+    with installer.open("rb") as stream:
+        data = stream.read(MAX_INSTALLER_BYTES + 1)
+    if len(data) > MAX_INSTALLER_BYTES:
+        raise ValueError("Installer exceeds the verification size limit")
+    install_header, payload = _nsis_archive(data, flags=0, max_decoded=32 * 1024**2)
+    uninstall_header, _ = _nsis_archive(payload, flags=1, max_decoded=2 * 1024**2)
+    strings = re.findall(
+        r'^LangString\s+(\w+)\s+\$\{LANG_SIMPCHINESE\}\s+"(.*)"$',
+        (ASSETS / "installer.nsi").read_text(encoding="utf-8"),
+        re.MULTILINE,
+    )
+    if not strings:
+        raise ValueError("Installer source has no custom Chinese LangStrings")
+    missing = []
+    for name, literal in strings:
+        literal = literal.replace(r"$\r", "\r").replace(r"$\n", "\n")
+        if "$" in literal:
+            raise ValueError(f"Unsupported NSIS escape in Chinese LangString: {name}")
+        header = uninstall_header if name == "KeepEnvironment" else install_header
+        if literal.encode("utf-16-le") + b"\0\0" not in header:
+            missing.append(name)
+    if missing:
+        raise ValueError("Compiled Chinese installer text is missing or corrupted: " + ", ".join(missing))
 
 
 def source_files(root: Path) -> list[Path]:
@@ -175,17 +242,21 @@ def build(output: Path, compiler: str | None = None) -> list[Path]:
     artifacts = [portable]
     if compiler:
         installer = (output / f"GromacsConsole-{version}-windows-x64-setup.exe").resolve()
-        define_prefix = "/D" if Path(compiler).suffix.lower() == ".exe" else "-D"
+        option_prefix = "/" if Path(compiler).suffix.lower() == ".exe" else "-"
         subprocess.run(
             [
                 compiler,
-                f"{define_prefix}PAYLOAD_DIR={staging.resolve()}",
-                f"{define_prefix}OUTPUT_FILE={installer}",
-                f"{define_prefix}APP_VERSION={version}",
+                # Unicode True controls output; source decoding still needs an explicit charset on Windows.
+                f"{option_prefix}INPUTCHARSET",
+                "UTF8",
+                f"{option_prefix}DPAYLOAD_DIR={staging.resolve()}",
+                f"{option_prefix}DOUTPUT_FILE={installer}",
+                f"{option_prefix}DAPP_VERSION={version}",
                 str(ASSETS / "installer.nsi"),
             ],
             check=True,
         )
+        verify_installer_text(installer)
         artifacts.append(installer)
     for artifact in artifacts:
         checksum = hashlib.sha256(artifact.read_bytes()).hexdigest()
@@ -197,6 +268,12 @@ def build(output: Path, compiler: str | None = None) -> list[Path]:
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output", type=Path, default=ROOT / "dist")
-    parser.add_argument("--makensis", help="Optional NSIS compiler; produces a real setup.exe")
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument("--makensis", help="Optional NSIS compiler; produces a real setup.exe")
+    mode.add_argument("--verify-installer", type=Path, help="Check compiled Chinese text without running the installer")
     options = parser.parse_args()
-    build(options.output.resolve(), options.makensis)
+    if options.verify_installer:
+        verify_installer_text(options.verify_installer)
+        print(f"Verified installer and uninstaller Chinese text: {options.verify_installer}")
+    else:
+        build(options.output.resolve(), options.makensis)

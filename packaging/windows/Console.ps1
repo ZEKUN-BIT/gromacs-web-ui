@@ -47,22 +47,59 @@ python3 "$payload/desktop_service.py" stop --app-root '/home/gromacs-console/.lo
     Invoke-LinuxScript $Distro 'gromacs-console' ($guard.Replace('__PAYLOAD_B64__', $EncodedPath)) -TimeoutSeconds 120
 }
 
-function Wait-LocalService([string]$Url, [int]$TimeoutSeconds = 60) {
+function Wait-LocalService([string]$Url, [string]$InstanceId, [string]$Version, [string]$InstallationSha256, [int]$TimeoutSeconds = 60) {
     $uri = [Uri]$Url
     if ($uri.Scheme -ne 'http' -or -not $uri.IsLoopback) { throw 'The service readiness URL must use local loopback HTTP.' }
+    if (-not $InstanceId -or -not $Version) { throw 'The Linux service did not report its running instance and application version. Run Configure / Update after existing jobs finish.' }
+    $identityUri = [Uri]($Url.TrimEnd('/') + '/api/version')
+    $mismatch = "The Windows address $Url is responding with a different or older application; expected GROMACS Console $Version. Check for another local service or WSL distribution using this port. The browser was not opened."
     $timer = [Diagnostics.Stopwatch]::StartNew()
     while ($timer.Elapsed.TotalSeconds -lt $TimeoutSeconds) {
-        $request = [Net.HttpWebRequest]::Create($uri)
+        $request = [Net.HttpWebRequest]::Create($identityUri)
         $request.Proxy = $null
         $request.AllowAutoRedirect = $false
         $request.KeepAlive = $false
         $request.Timeout = [Math]::Max(1, [Math]::Min(2000, [int](($TimeoutSeconds - $timer.Elapsed.TotalSeconds) * 1000)))
-        $request.ReadWriteTimeout = $request.Timeout
+        $request.ReadWriteTimeout = [Math]::Min(1000, $request.Timeout)
         $response = $null
         try {
             $response = $request.GetResponse()
-            if ([int]$response.StatusCode -eq 200) { return $true }
-        } catch [Net.WebException] { if ($_.Exception.Response) { $_.Exception.Response.Close() } }
+            if ([int]$response.StatusCode -eq 200) {
+                if ($response.ContentLength -gt 16384) { throw "Version response exceeds 16 KiB. $mismatch" }
+                $stream = $response.GetResponseStream()
+                try {
+                    # Read at most one byte past the limit, including responses
+                    # without Content-Length. Use APIs available in PowerShell 5.
+                    $buffer = New-Object byte[] 16385
+                    $length = 0
+                    while ($length -lt $buffer.Length) {
+                        if ($timer.Elapsed.TotalSeconds -ge $TimeoutSeconds) { return $false }
+                        $count = $stream.Read($buffer, $length, $buffer.Length - $length)
+                        if ($timer.Elapsed.TotalSeconds -ge $TimeoutSeconds) { return $false }
+                        if ($count -eq 0) { break }
+                        $length += $count
+                    }
+                    if ($length -gt 16384) { throw "Version response exceeds 16 KiB. $mismatch" }
+                    $json = [Text.Encoding]::UTF8.GetString($buffer, 0, $length)
+                    if (-not $json.TrimStart().StartsWith('{')) { throw "Invalid version response structure. $mismatch" }
+                    try { $identity = ConvertFrom-Json -InputObject $json }
+                    catch { throw "Invalid JSON in version response. $mismatch" }
+                } finally { $stream.Dispose() }
+                if ($identity -isnot [pscustomobject] -or $identity.instance_id -isnot [string] -or
+                    $identity.version -isnot [string] -or $identity.installation_sha256 -isnot [string]) {
+                    throw "Invalid version response structure. $mismatch"
+                }
+                if ($identity.instance_id -ceq $InstanceId -and $identity.version -ceq $Version -and
+                    $identity.installation_sha256 -ceq $InstallationSha256) { return $true }
+                throw $mismatch
+            }
+        } catch [Net.WebException] {
+            if ($_.Exception.Response) {
+                $status = [int]$_.Exception.Response.StatusCode
+                $_.Exception.Response.Close()
+                if ($status -eq 404) { throw $mismatch }
+            }
+        }
         finally { if ($response) { $response.Close() }; $request.Abort() }
         $remaining = [int](($TimeoutSeconds - $timer.Elapsed.TotalSeconds) * 1000)
         if ($remaining -gt 0) { Start-Sleep -Milliseconds ([Math]::Min(250, $remaining)) }
@@ -186,8 +223,9 @@ try {
             $wanted = Get-Content -Raw (Join-Path $PSScriptRoot 'release.json') | ConvertFrom-Json
             if ($snapshot.PendingUpdate -or $current.installation_sha256 -ne $wanted.installation_sha256) { Install-Environment }
             $service = Invoke-Service 'start'
-            $ready = Wait-LocalService $service.url
+            $ready = Wait-LocalService $service.url -InstanceId $service.instance_id -Version $service.version -InstallationSha256 $service.installation_sha256
             if (-not $ready) { throw "Service is not reachable at $($service.url). Check $LinuxRoot/service.log in WSL." }
+            Write-Host ("GROMACS Console {0} is running at {1}." -f $service.version, $service.url)
             Start-Process $service.url
             Write-Host 'The browser is open. Simulations keep running when the browser or this window is closed.'
             Write-Host 'Use the Stop Service shortcut after all jobs finish.'

@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "gromacs-web-ui"
-version = "0.2.7"
+version = "0.2.8"
 description = "Local Web UI and worker for GROMACS workflows"
 readme = "README.md"
 license = {file = "LICENSE"}

@@ -12,6 +12,7 @@ on:
       - 'tests/windows_console.Tests.ps1'
       - 'tests/windows_host.Tests.ps1'
       - 'tests/windows_signing.Tests.ps1'
+      - 'tests/windows_installer.Tests.ps1'
       - 'docs/QUICKSTART.md'
       - 'docs/RELEASE-CHECKLIST.md'
       - 'app/static/examples/**'
@@ -111,6 +112,13 @@ jobs:
       - name: Build setup.exe and portable archive
         shell: powershell
         run: python packaging/windows/build.py --makensis "${env:ProgramFiles(x86)}\NSIS\makensis.exe"
+      - name: Verify the actual Simplified Chinese installer welcome page
+        shell: powershell
+        timeout-minutes: 2
+        run: |
+          $installers = @(Get-ChildItem -File dist/*-setup.exe)
+          if ($installers.Count -ne 1) { throw "Expected exactly one freshly built installer." }
+          ./tests/windows_installer.Tests.ps1 -Installer $installers[0].FullName -RequireWindows -ReportFile dist/windows-installer-ui.json
       - name: Sign installer when a publisher certificate is configured
         shell: powershell
         env:
@@ -128,6 +136,7 @@ jobs:
             dist/*-windows-x64.zip
             dist/*.sha256
             dist/windows-signing.json
+            dist/windows-installer-ui.json
           if-no-files-found: error
 
   draft-release:
@@ -170,4 +179,4 @@ jobs:
           else
             gh release create "$RELEASE_TAG" --draft --verify-tag --title "GROMACS Console $RELEASE_TAG" --notes-file dist/release-notes.md
           fi
-          gh release upload "$RELEASE_TAG" dist/*-setup.exe dist/*-windows-x64.zip dist/*.sha256 dist/windows-signing.json --clobber
+          gh release upload "$RELEASE_TAG" dist/*-setup.exe dist/*-windows-x64.zip dist/*.sha256 dist/windows-signing.json dist/windows-installer-ui.json --clobber

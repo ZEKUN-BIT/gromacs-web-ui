@@ -47,7 +47,7 @@ try {
     $serverScript = Join-Path $testDirectory 'local-http.ps1'
     $readyPath = Join-Path $testDirectory 'local-http.ready'
     Set-Content -Encoding ASCII $serverScript @'
-param([string]$Ready)
+param([string]$Ready, [string]$Mode = 'current')
 $listener = New-Object Net.Sockets.TcpListener([Net.IPAddress]::Loopback, 0)
 $listener.Start()
 try {
@@ -58,9 +58,34 @@ try {
     try {
         $stream = $client.GetStream()
         $buffer = New-Object byte[] 4096
-        [void]$stream.Read($buffer, 0, $buffer.Length)
-        $bytes = [Text.Encoding]::ASCII.GetBytes("HTTP/1.1 200 OK`r`nContent-Length: 2`r`nConnection: close`r`n`r`nOK")
-        $stream.Write($bytes, 0, $bytes.Length)
+        $count = $stream.Read($buffer, 0, $buffer.Length)
+        if (-not [Text.Encoding]::ASCII.GetString($buffer, 0, $count).StartsWith('GET /api/version ')) { throw 'Launcher must verify the version endpoint.' }
+        $body = '{"version":"test-version","instance_id":"test-instance","installation_sha256":"test-installation"}'
+        if ($Mode -eq 'wrong-instance') { $body = $body.Replace('test-instance', 'another-instance') }
+        if ($Mode -eq 'wrong-version') { $body = $body.Replace('test-version', 'older-version') }
+        if ($Mode -eq 'wrong-installation') { $body = $body.Replace('test-installation', 'older-installation') }
+        if ($Mode -eq 'old-html') { $body = '<html>old application</html>' }
+        if ($Mode -eq 'invalid-json') { $body = '{"version":' }
+        if ($Mode -eq 'array-root') { $body = '[' + $body + ']' }
+        if ($Mode -eq 'wrong-field-type') { $body = $body.Replace('"test-instance"', '["test-instance"]') }
+        if ($Mode -eq 'missing-field') { $body = '{"version":"test-version","instance_id":"test-instance"}' }
+        if ($Mode -eq 'maximum-size') { $body += ' ' * (16384 - $body.Length) }
+        if ($Mode -in @('oversized', 'oversized-no-length')) { $body += ' ' * 16385 }
+        $status = if ($Mode -eq 'missing-endpoint') { '404 Not Found' } else { '200 OK' }
+        $lengthHeader = if ($Mode -eq 'oversized-no-length') { '' } else { "Content-Length: $($body.Length)`r`n" }
+        if ($Mode -eq 'slow-body') {
+            $headers = [Text.Encoding]::ASCII.GetBytes("HTTP/1.1 $status`r`n${lengthHeader}Connection: close`r`n`r`n")
+            $stream.Write($headers, 0, $headers.Length)
+            $bytes = [Text.Encoding]::ASCII.GetBytes($body)
+            for ($offset = 0; $offset -lt $bytes.Length; $offset += 15) {
+                Start-Sleep -Milliseconds 250
+                try { $stream.Write($bytes, $offset, [Math]::Min(15, $bytes.Length - $offset)); $stream.Flush() }
+                catch { break } # The client closes its response when the deadline expires.
+            }
+        } else {
+            $bytes = [Text.Encoding]::ASCII.GetBytes("HTTP/1.1 $status`r`n${lengthHeader}Connection: close`r`n`r`n$body")
+            $stream.Write($bytes, 0, $bytes.Length)
+        }
     } finally { $client.Dispose() }
 } finally { $listener.Stop() }
 '@
@@ -75,15 +100,44 @@ try {
     try {
         [Net.WebRequest]::DefaultWebProxy = New-Object Net.WebProxy('http://127.0.0.1:1', $false)
         $url = 'http://127.0.0.1:' + (Get-Content -Raw $readyPath)
-        Assert-True (Wait-LocalService $url -TimeoutSeconds 3) 'loopback readiness bypasses a configured broken proxy'
+        Assert-True (Wait-LocalService $url -InstanceId 'test-instance' -Version 'test-version' -InstallationSha256 'test-installation' -TimeoutSeconds 3) 'loopback instance verification bypasses a configured broken proxy'
     } finally { [Net.WebRequest]::DefaultWebProxy = $oldProxy }
     Assert-True ($server.WaitForExit(5000) -and $server.ExitCode -eq 0) 'local HTTP child exits cleanly'
     $timer = [Diagnostics.Stopwatch]::StartNew()
-    Assert-True (-not (Wait-LocalService $url -TimeoutSeconds 1)) 'closed local port remains unready'
+    Assert-True (-not (Wait-LocalService $url -InstanceId 'test-instance' -Version 'test-version' -InstallationSha256 'test-installation' -TimeoutSeconds 1)) 'closed local port remains unready'
     Assert-True ($timer.Elapsed.TotalSeconds -lt 2.5) 'HTTP polling obeys one total deadline rather than per-attempt timeout sum'
     $message = ''
     try { Wait-LocalService 'https://example.com/' | Out-Null } catch { $message = $_.Exception.Message }
     Assert-True ($message -match 'loopback HTTP') 'readiness only probes the local HTTP service'
+    foreach ($mode in @('wrong-instance', 'wrong-version', 'wrong-installation', 'old-html', 'missing-endpoint',
+        'invalid-json', 'array-root', 'wrong-field-type', 'missing-field', 'maximum-size', 'oversized', 'oversized-no-length', 'slow-body')) {
+        Remove-Item $readyPath
+        $server = Start-TestChild $serverScript @('-Ready', $readyPath, '-Mode', $mode)
+        $children += $server
+        $deadline = (Get-Date).AddSeconds(10)
+        while (-not (Test-Path $readyPath)) {
+            Assert-True (-not $server.HasExited -and (Get-Date) -lt $deadline) 'mismatched local test server starts'
+            Start-Sleep -Milliseconds 20
+        }
+        $url = 'http://127.0.0.1:' + (Get-Content -Raw $readyPath)
+        $message = ''
+        $accepted = $false
+        $timeout = if ($mode -eq 'slow-body') { 1 } else { 3 }
+        $probeTimer = [Diagnostics.Stopwatch]::StartNew()
+        try { $accepted = Wait-LocalService $url -InstanceId 'test-instance' -Version 'test-version' -InstallationSha256 'test-installation' -TimeoutSeconds $timeout }
+        catch { $message = $_.Exception.Message }
+        if ($mode -eq 'maximum-size') { Assert-True $accepted 'a valid identity exactly at 16 KiB remains readable' }
+        elseif ($mode -eq 'slow-body') {
+            Assert-True (-not $accepted -and $probeTimer.Elapsed.TotalSeconds -lt 1.6) 'trickled identity bytes cannot extend the one-second total deadline'
+        }
+        else {
+            Assert-True (-not $accepted -and $message -match 'different or older application' -and $message -match 'browser was not opened') "reject $mode instead of treating HTTP 200 as the updated service"
+            if ($mode -like 'oversized*') { Assert-True ($message -match 'exceeds 16 KiB') 'oversized replies explain the response limit' }
+            if ($mode -eq 'invalid-json') { Assert-True ($message -match 'Invalid JSON') 'malformed replies explain the JSON failure' }
+            if ($mode -in @('array-root', 'wrong-field-type', 'missing-field')) { Assert-True ($message -match 'Invalid version response structure') 'invalid identities explain the structure failure' }
+        }
+        Assert-True ($server.WaitForExit(5000) -and $server.ExitCode -eq 0) 'mismatched HTTP child exits cleanly'
+    }
 
     $worker = Join-Path $testDirectory 'holder.ps1'
     $workerBody = @'
@@ -248,14 +302,23 @@ exit 0
     $snapshot = [pscustomobject]@{ PendingUpdate = $true; InstalledRelease = [pscustomobject]@{ installation_sha256 = 'same' } }
     $script:pendingRepairs = 0
     function Install-Environment { $script:pendingRepairs++ }
-    function Invoke-Service([string]$Command) { return [pscustomobject]@{ url = 'http://127.0.0.1:8000' } }
-    function Wait-LocalService([string]$Url) { return $true }
-    function Start-Process([string]$FilePath) { }
+    function Invoke-Service([string]$Command) { return [pscustomobject]@{ url = 'http://127.0.0.1:8000'; instance_id = 'test-instance'; version = 'test-version'; installation_sha256 = 'test-installation' } }
+    function Wait-LocalService([string]$Url, [string]$InstanceId, [string]$Version, [string]$InstallationSha256) {
+        Assert-True ($InstanceId -eq 'test-instance' -and $Version -eq 'test-version' -and $InstallationSha256 -eq 'test-installation') 'Start verifies the exact running service returned by Linux'
+        return $true
+    }
+    $script:browserOpens = 0
+    function Start-Process([string]$FilePath) { $script:browserOpens++ }
     . (Join-Path $fixture 'start-switch.ps1')
     Assert-True ($script:pendingRepairs -eq 1) 'ordinary Start recovers an interrupted transaction even when the installed release already matches'
     $snapshot.PendingUpdate = $false
     . (Join-Path $fixture 'start-switch.ps1')
     Assert-True ($script:pendingRepairs -eq 1) 'ordinary matching healthy Start skips installation'
+    Assert-True ($script:browserOpens -eq 2) 'verified instances open the browser'
+    function Wait-LocalService { throw 'Different or older application at Windows localhost.' }
+    $message = ''
+    try { . (Join-Path $fixture 'start-switch.ps1') } catch { $message = $_.Exception.Message }
+    Assert-True ($message -match 'Different or older application' -and $script:browserOpens -eq 2) 'Start never opens a mismatched local service'
     Write-Host 'Windows install coordinator regression tests passed.'
 } finally {
     foreach ($child in $children) {

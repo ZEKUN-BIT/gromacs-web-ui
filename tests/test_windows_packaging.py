@@ -3,10 +3,13 @@ from __future__ import annotations
 import importlib.util
 import io
 import json
+import lzma
 import os
+import re
 import shutil
 import socket
 import sqlite3
+import struct
 import subprocess
 import sys
 import tarfile
@@ -31,6 +34,147 @@ def load_module(name: str, filename: str):
 
 builder = load_module("windows_builder", "build.py")
 service = load_module("windows_service", "desktop_service.py")
+CHINESE_LANGSTRINGS = ("WelcomeTitle", "WelcomeText", "FinishTitle", "FinishText", "RunText", "KeepEnvironment")
+
+
+def nsis_archive(header: bytes, payload: bytes = b"", *, flags: int = 0) -> bytes:
+    """Small solid LZMA fixture using the NSIS archive wire format."""
+    compressed = b"\x5d\x00\x00\x01\x00" + lzma.compress(
+        struct.pack("<I", len(header)) + header + payload,
+        format=lzma.FORMAT_RAW,
+        filters=[{"id": lzma.FILTER_LZMA1, "dict_size": 65536, "lc": 3, "lp": 0, "pb": 2}],
+    )
+    return (
+        struct.pack("<I", flags)
+        + b"\xef\xbe\xad\xdeNullsoftInst"
+        + struct.pack("<II", len(header), 32 + len(compressed))
+        + compressed
+        + b"\0" * 4
+    )
+
+
+def installer_fixture(*, corrupt: str | None = None) -> bytes:
+    source = (builder.ASSETS / "installer.nsi").read_text(encoding="utf-8")
+    strings = re.findall(r'^LangString (\w+) \$\{LANG_SIMPCHINESE\} "(.*)"$', source, re.MULTILINE)
+    assert tuple(name for name, _ in strings) == CHINESE_LANGSTRINGS
+    install, uninstall = bytearray(), bytearray()
+    for name, literal in strings:
+        text = literal.replace(r"$\r", "\r").replace(r"$\n", "\n")
+        if name == corrupt:
+            text = text.encode("utf-8").decode("cp1252", errors="replace")
+        target = uninstall if name == "KeepEnvironment" else install
+        target.extend(text.encode("utf-16-le") + b"\0\0")
+    return b"MZ" + nsis_archive(bytes(install), nsis_archive(bytes(uninstall), flags=1))
+
+
+def test_compiled_installer_checks_install_and_uninstall_chinese_text(tmp_path):
+    installer = tmp_path / "setup.exe"
+    installer.write_bytes(installer_fixture())
+    builder.verify_installer_text(installer)
+
+
+@pytest.mark.parametrize("name", CHINESE_LANGSTRINGS)
+def test_compiled_installer_rejects_each_corrupted_chinese_string(tmp_path, name):
+    installer = tmp_path / "setup.exe"
+    installer.write_bytes(installer_fixture(corrupt=name))
+    with pytest.raises(ValueError, match=name):
+        builder.verify_installer_text(installer)
+
+
+@pytest.mark.parametrize("compiler, prefix", [("makensis", "-"), ("makensis.exe", "/")])
+def test_build_explicitly_decodes_nsis_source_as_utf8_and_checks_result(tmp_path, monkeypatch, compiler, prefix):
+    calls = []
+
+    def compile_installer(command, *, check):
+        assert check
+        calls.append(command)
+        output = next(value.split("=", 1)[1] for value in command if value.startswith(prefix + "DOUTPUT_FILE="))
+        Path(output).write_bytes(installer_fixture())
+
+    monkeypatch.setattr(builder.subprocess, "run", compile_installer)
+    artifacts = builder.build(tmp_path, compiler)
+    assert calls[0][:3] == [compiler, prefix + "INPUTCHARSET", "UTF8"]
+    assert Path(calls[0][-1]).is_absolute()
+    assert artifacts[-1].suffix == ".exe"
+    assert artifacts[-1].with_suffix(".exe.sha256").is_file()
+
+
+def test_build_rejects_corrupted_compiler_output_before_checksums(tmp_path, monkeypatch):
+    def compile_installer(command, *, check):
+        output = next(value.split("=", 1)[1] for value in command if value.startswith("/DOUTPUT_FILE="))
+        Path(output).write_bytes(installer_fixture(corrupt="KeepEnvironment"))
+
+    monkeypatch.setattr(builder.subprocess, "run", compile_installer)
+    with pytest.raises(ValueError, match="KeepEnvironment"):
+        builder.build(tmp_path, "makensis.exe")
+    assert not list(tmp_path.glob("*.sha256"))
+
+
+def test_installer_verification_limits_input_size(tmp_path, monkeypatch):
+    monkeypatch.setattr(builder, "MAX_INSTALLER_BYTES", 64)
+    installer = tmp_path / "setup.exe"
+    installer.write_bytes(b"x" * 65)
+    with pytest.raises(ValueError, match="size limit"):
+        builder.verify_installer_text(installer)
+
+
+def test_installer_verification_limits_decompressed_size():
+    archive = nsis_archive(b"header", b"x" * 10000)
+    with pytest.raises(ValueError, match="decompressed data exceeds"):
+        builder._nsis_archive(archive, flags=0, max_decoded=100)
+
+
+@pytest.mark.parametrize("damage", ["signature", "length", "dictionary", "truncated_stream", "flags", "header_size"])
+def test_installer_verification_rejects_invalid_archive(damage):
+    archive = bytearray(nsis_archive(b"header"))
+    if damage == "signature":
+        archive[4] = 0
+    elif damage == "length":
+        struct.pack_into("<I", archive, 24, len(archive) + 1)
+    elif damage == "dictionary":
+        struct.pack_into("<I", archive, 29, 2**31)
+    elif damage == "truncated_stream":
+        del archive[-8:-4]
+        struct.pack_into("<I", archive, 24, len(archive))
+    elif damage == "flags":
+        struct.pack_into("<I", archive, 0, 1)
+    elif damage == "header_size":
+        struct.pack_into("<I", archive, 20, 3)
+    with pytest.raises(ValueError, match="NSIS"):
+        builder._nsis_archive(bytes(archive), flags=0, max_decoded=1024)
+
+
+@pytest.mark.skipif(shutil.which("makensis") is None, reason="Real NSIS compiler is not installed")
+@pytest.mark.parametrize(
+    "charset",
+    [
+        "UTF8",
+        pytest.param("CP1252", marks=pytest.mark.skipif(sys.platform != "win32", reason="Linux iconv rejects undefined CP1252 bytes")),
+    ],
+)
+def test_real_nsis_compiled_chinese_text(tmp_path, charset):
+    builder.build(tmp_path)
+    installer = tmp_path / "compiled.exe"
+    compiler = shutil.which("makensis")
+    prefix = "/" if Path(compiler).suffix.lower() == ".exe" else "-"
+    subprocess.run(
+        [
+            compiler,
+            prefix + "INPUTCHARSET",
+            charset,
+            prefix + f"DPAYLOAD_DIR={tmp_path / 'windows-payload'}",
+            prefix + f"DOUTPUT_FILE={installer}",
+            prefix + "DAPP_VERSION=0.0.0",
+            str(builder.ASSETS / "installer.nsi"),
+        ],
+        check=True,
+        capture_output=True,
+    )
+    if charset == "UTF8":
+        builder.verify_installer_text(installer)
+    else:
+        with pytest.raises(ValueError, match="WelcomeTitle.*WelcomeText.*FinishText.*RunText.*KeepEnvironment"):
+            builder.verify_installer_text(installer)
 
 
 def test_windows_entrypoints_share_the_power_shell_host_selector():

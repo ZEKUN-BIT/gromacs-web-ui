@@ -4,12 +4,12 @@
 
 ## 给普通用户
 
-1. 运行 `GromacsConsole-0.2.7-windows-x64-setup.exe`，按向导安装。
+1. 运行 `GromacsConsole-0.2.8-windows-x64-setup.exe`，按向导安装。
 2. 双击桌面的 **GROMACS Console**。启动器首先检查发行版的 WSL1/2 类型、Ubuntu 版本与 CPU 架构。已有 x64 Ubuntu 24.04 WSL2 时，显示复用提示并跳过 WSL 和 Ubuntu 镜像下载；缺少兼容环境时才下载、校验官方 Ubuntu 镜像并直接导入 WSL2。需要重启时，重启后再次双击。
 3. 首次运行自动安装 Python 依赖、Open Babel、ACPYPE、配体参数化所需的 AmberTools 和 DSSP，并检测 GPU。兼容 NVIDIA GPU 使用预编译 CUDA 版 GROMACS 2026.3；其他机器复用或下载同版本预编译 CPU 版，无需源码编译。窗口实时显示系统依赖、计算环境、科学工具和程序更新四个阶段；期间不要关闭窗口。以后日常启动不重复安装。
 4. 页面打开后即可使用。关闭网页和启动窗口不会停止正在进行的模拟。完成或取消所有任务后，通过开始菜单的 **Stop Service** 停止后台服务。
 
-也可以解压 `GromacsConsole-0.2.7-windows-x64.zip` 到固定目录，双击 `Start.cmd`。不要只拿出其中一个脚本运行。安装包与 ZIP 使用相同的安装逻辑。
+也可以解压 `GromacsConsole-0.2.8-windows-x64.zip` 到固定目录，双击 `Start.cmd`。不要只拿出其中一个脚本运行。安装包与 ZIP 使用相同的安装逻辑。
 
 桌面、开始菜单与 `Start.cmd` 共用 PowerShell 入口：优先使用电脑上已经安装的 **x64 PowerShell 7**，找不到时使用 Windows 自带的 **Windows PowerShell 5.1**。WSL 基础组件的管理员权限步骤也使用同一选择规则。安装器不下载或捆绑 PowerShell，不要求用户先安装 PowerShell 7；诊断日志记录实际使用的版本与位数。
 
@@ -76,7 +76,9 @@
 
 ## 更新与卸载
 
-将 0.2.7 安装器安装到原 Windows 目录（或把新版 ZIP 全部文件覆盖到原目录），再运行 **Configure or Update**。启动器复用已经登记的兼容 WSL2 Ubuntu；匹配且验证通过的 GROMACS/GPU 运行库跳过下载，设置和模拟结果保留。日常启动也会比较应用内容校验值并自动更新。
+将 0.2.8 安装器安装到原 Windows 目录（或把新版 ZIP 全部文件覆盖到原目录），再运行 **Configure or Update**。启动器复用已经登记的兼容 WSL2 Ubuntu；匹配且验证通过的 GROMACS/GPU 运行库跳过下载，设置和模拟结果保留。日常启动也会比较应用内容校验值并自动更新。
+
+0.2.8 修复了 0.2.7 安装向导中文乱码，并在打开浏览器前核对实际运行的版本与实例。更新完成后，从 **GROMACS Console** 快捷方式启动，窗口应显示 `GROMACS Console 0.2.8`。如果提示 Windows 地址对应旧应用或其他服务，请在计算任务结束后关闭占用该地址的服务，再重新启动；不要通过删除 WSL 环境解决。
 
 更新、停止与移除均先检查活动任务：准备中、排队、运行中，以及中断后等待执行、续跑、接管或取消的任务都会阻止操作。即使任务已标记失败、取消或完成，只要登记的任务进程仍存活，也会继续保护计算环境。检查兼容旧版单进程记录与并行进程列表，核对 PID、启动时钟、进程组、命令指纹和任务工作目录，只识别本应用目录内身份匹配的进程。请先在页面完成或取消任务，并等待进程实际停止。
 
@@ -120,7 +122,7 @@ WSL 程序版本与 Linux 发行版版本不同：WSL2 已安装，并不代表�
 
 如果新版仍失败，请根据原始 WSL 错误文字与退出码诊断。升级安装器不会删除已有 Ubuntu 或结果；不要使用 `wsl --unregister` 排错。
 
-若 0.1.2 出现 `/bin/bash: --install: command not found`、退出码 `127`，这是启动器给 WSL 选项添加引号导致的参数解析错误，也会让已有环境的检测失败。0.1.3 让普通选项直接传递，仅对含空格等内容的参数进行转义，并在日志中记录实际执行路径与参数。将当前 0.2.7 安装器安装到原目录（例如 `E:\GromacsConsole`），或将新版 ZIP 的全部文件覆盖到原目录，再启动即可；无需因此重启或重装 WSL。已有发行版、设置与模拟结果保留。
+若 0.1.2 出现 `/bin/bash: --install: command not found`、退出码 `127`，这是启动器给 WSL 选项添加引号导致的参数解析错误，也会让已有环境的检测失败。0.1.3 让普通选项直接传递，仅对含空格等内容的参数进行转义，并在日志中记录实际执行路径与参数。将当前 0.2.8 安装器安装到原目录（例如 `E:\GromacsConsole`），或将新版 ZIP 的全部文件覆盖到原目录，再启动即可；无需因此重启或重装 WSL。已有发行版、设置与模拟结果保留。
 
 0.1.4 改用原始 UTF-8/LF 字节向 Bash 传入安装脚本，避免 Windows PowerShell 管道附加 CRLF 被解析为额外的 Linux 命令。Linux 安装阶段的 stdout、stderr 和退出码现在也写入同一诊断日志，失败提示会标明发行版和执行用户。旧版本仅记录 `WSL operation failed (127)` 时，不能从日志确定具体缺失的命令。已有成功导入的 Ubuntu 24.04 会在重试时复用，无需再次下载或删除它。
 
@@ -132,7 +134,7 @@ WSL 程序版本与 Linux 发行版版本不同：WSL2 已安装，并不代表�
 
 若科学工具验证报 `sqm: error while loading shared libraries: liblapack.so.3`，是 0.2.2 及更早版本漏列 AmberTools 系统运行库导致的。0.2.3 自动检查并补装 LAPACK、BLAS 和 GNU Fortran 运行库，并在配体转换前检查 SQM 的实际启动状态，失败时保留原始库名和修复提示。对固定 ACPYPE wheel 的全部 53 个 ELF 已检查依赖；SQM 的同一个乙醇计算在隔离 Ubuntu 24.04 库中先复现缺库错误，再补库运行成功。开发主机已有这些库的验证不能替代该检查。
 
-安装当前 0.2.7 到原目录，再运行 **Configure or Update** 即可；已验证的相同 GPU 运行库会复用。也可先在 Windows PowerShell 手动补库，再用原快捷方式重新配置：
+安装当前 0.2.8 到原目录，再运行 **Configure or Update** 即可；已验证的相同 GPU 运行库会复用。也可先在 Windows PowerShell 手动补库，再用原快捷方式重新配置：
 
 ```powershell
 wsl -d GromacsConsole-Ubuntu-24.04 -u root --exec apt-get update

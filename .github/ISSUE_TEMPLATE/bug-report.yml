@@ -11,7 +11,7 @@ body:
     id: version
     attributes:
       label: 软件版本与安装来源
-      placeholder: 例如 0.2.7 / GitHub Release；源码运行请填写提交号
+      placeholder: 例如 0.2.8 / GitHub Release；源码运行请填写提交号
     validations:
       required: true
   - type: textarea

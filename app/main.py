@@ -79,7 +79,14 @@ WEB_PROCESS_LOCK = None
 MAX_FILE_LIST_ITEMS = 1000
 SSE_LOG_CHUNK_BYTES = 64 * 1024
 
-app = FastAPI(title="GROMACS Web UI", version="0.2.7")
+app = FastAPI(title="GROMACS Web UI", version="0.2.8")
+# Capture the running process identity once; files may be replaced by an update.
+# These public identifiers distinguish desktop instances, not authentication.
+RUNTIME_IDENTITY = {
+    "version": app.version,
+    "instance_id": os.environ.get("GROMACS_CONSOLE_INSTANCE_ID", ""),
+    "installation_sha256": os.environ.get("GROMACS_CONSOLE_INSTALLATION_SHA256", ""),
+}
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["http://127.0.0.1:8000", "http://localhost:8000"],
@@ -240,6 +247,11 @@ def health() -> dict:
         "local_force_fields": discover_local_force_fields(BASE_DIR),
         "worker": worker_status(),
     }
+
+
+@app.get("/api/version")
+def runtime_version() -> dict:
+    return dict(RUNTIME_IDENTITY)
 
 
 @app.get("/api/settings")

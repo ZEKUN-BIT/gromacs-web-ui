@@ -19,7 +19,9 @@ import sys
 import time
 import urllib.error
 import urllib.request
+import uuid
 from pathlib import Path
+from urllib.parse import urlsplit
 
 LOG_LIMIT = 10 * 1024**2
 
@@ -198,7 +200,7 @@ def stop(root: Path, state: dict) -> None:
     (root / "service.json").unlink(missing_ok=True)
 
 
-def service_environment(root: Path, port: int) -> dict[str, str]:
+def service_environment(root: Path, port: int, *, instance_id: str = "", installation_sha256: str = "") -> dict[str, str]:
     env = {
         **os.environ,
         "PYTHONPATH": str(root),
@@ -207,6 +209,8 @@ def service_environment(root: Path, port: int) -> dict[str, str]:
         "WEB_CONCURRENCY": "1",
         "HOST": "127.0.0.1",
         "PORT": str(port),
+        "GROMACS_CONSOLE_INSTANCE_ID": instance_id,
+        "GROMACS_CONSOLE_INSTALLATION_SHA256": installation_sha256,
     }
     # Both Web diagnostics and worker subprocesses must find the same tools.
     paths = [root / ".venv" / "bin", root / "tools" / "bin", root / "gromacs" / "bin", Path("/usr/lib/wsl/lib")]
@@ -218,10 +222,63 @@ def service_environment(root: Path, port: int) -> dict[str, str]:
     return env
 
 
+def installed_release(root: Path) -> dict:
+    path = root / "installed-release.json"
+    release = json.loads(path.read_text(encoding="utf-8")) if path.is_file() else {}
+    return {name: str(release.get(name) or "") for name in ("version", "installation_sha256")}
+
+
+class NoRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None
+
+
+def verify_service(url: str, instance_id: str, release: dict, *, deadline: float | None = None) -> dict:
+    parsed = urlsplit(url)
+    if parsed.scheme != "http" or parsed.hostname != "127.0.0.1" or not parsed.port or parsed.path:
+        raise ValueError("The managed service URL must use local loopback HTTP.")
+    deadline = time.monotonic() + 1 if deadline is None else deadline
+    remaining = deadline - time.monotonic()
+    if remaining <= 0:
+        raise TimeoutError("Service identity verification timed out.")
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), NoRedirect())
+    with opener.open(url + "/api/version", timeout=min(1, remaining)) as response:
+        body = bytearray()
+        # read1 performs at most one underlying read, so a response that keeps
+        # trickling bytes cannot extend the absolute deadline indefinitely.
+        while len(body) <= 16384:
+            if time.monotonic() >= deadline:
+                raise TimeoutError("Service identity verification timed out.")
+            chunk = response.read1(min(4096, 16385 - len(body)))
+            if time.monotonic() >= deadline:
+                raise TimeoutError("Service identity verification timed out.")
+            if not chunk:
+                break
+            body.extend(chunk)
+        if len(body) > 16384:
+            raise ValueError("Service identity response exceeds 16 KiB.")
+        identity = json.loads(body)
+    if (
+        not isinstance(identity, dict)
+        or not instance_id
+        or identity.get("instance_id") != instance_id
+        or identity.get("installation_sha256") != release["installation_sha256"]
+        or (release["version"] and identity.get("version") != release["version"])
+    ):
+        raise ValueError("The HTTP service does not match this installation's running instance and release.")
+    return {"url": url, **{name: identity[name] for name in ("version", "instance_id", "installation_sha256")}}
+
+
 def start(root: Path, state: dict) -> dict:
+    release = installed_release(root)
     processes = state.get("processes", [])
     if len(processes) == 2 and all(matches(record) for record in processes):
-        return {"url": state["url"]}
+        try:
+            return verify_service(state["url"], state.get("instance_id", ""), release)
+        except (OSError, ValueError, KeyError, urllib.error.URLError):
+            # Files can be newer than an already running interpreter. Restart
+            # only through stop(), which protects queued and live simulations.
+            pass
     if any(matches(record) for record in processes):
         stop(root, state)
     # Ensure another run.sh instance cannot be mistaken for this managed service.
@@ -235,7 +292,8 @@ def start(root: Path, state: dict) -> dict:
                     raise RuntimeError("An unmanaged service is already running. Stop it first.") from exc
     port = free_port()
     python = str(root / ".venv" / "bin" / "python")
-    env = service_environment(root, port)
+    instance_id = uuid.uuid4().hex
+    env = service_environment(root, port, instance_id=instance_id, installation_sha256=release["installation_sha256"])
     # Also migrate a large log written by an older launcher before first startup.
     log_path = root / "service.log"
     if log_path.exists() and log_path.stat().st_size > LOG_LIMIT:
@@ -257,24 +315,22 @@ def start(root: Path, state: dict) -> dict:
                 records.append(record)
         url = f"http://127.0.0.1:{port}"
         # Do not report success until this Web process and worker are alive and HTTP is ready.
-        opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
         deadline = time.monotonic() + 60
         while time.monotonic() < deadline:
             if any(child.poll() is not None for child in children):
                 raise RuntimeError(f"Service exited during startup. Check {log_path}.")
             try:
-                with opener.open(url, timeout=1) as response:
-                    if response.status == 200:
-                        break
-            except (OSError, urllib.error.URLError):
-                time.sleep(0.2)
+                identity = verify_service(url, instance_id, release, deadline=deadline)
+                break
+            except (OSError, ValueError, KeyError, urllib.error.URLError):
+                time.sleep(min(0.2, max(0, deadline - time.monotonic())))
         else:
             raise RuntimeError(f"Service startup timed out. Check {log_path}.")
-        new_state = {"url": url, "processes": records}
+        new_state = {**identity, "processes": records}
         temporary = root / "service.json.tmp"
         temporary.write_text(json.dumps(new_state))
         temporary.replace(root / "service.json")
-        return {"url": url}
+        return identity
     except BaseException:
         for record in records:
             terminate(record)
