@@ -83,7 +83,9 @@ jobs:
           $expectedHash = 'DB9A1038BBC0E53FEF24F423FD609979BD578E942F1BE1198DB186D1C42652A3'
           for ($attempt = 1; $attempt -le 3; $attempt++) {
             try {
-              Invoke-WebRequest -Uri $url -OutFile $installer -UseBasicParsing -TimeoutSec 90
+              # SourceForge sends an HTML download page to the PowerShell user agent.
+              curl.exe --fail --location --proto '=https' --proto-redir '=https' --user-agent 'curl/8.14.1' --connect-timeout 20 --max-time 90 --output $installer $url
+              if ($LASTEXITCODE -ne 0) { throw "NSIS download failed: curl exit $LASTEXITCODE" }
               break
             } catch {
               if ($attempt -eq 3) { throw }
@@ -92,8 +94,9 @@ jobs:
             }
           }
           try {
-            if ((Get-FileHash -LiteralPath $installer -Algorithm SHA256).Hash -ne $expectedHash) {
-              throw 'NSIS compiler installer checksum mismatch.'
+            $actualHash = (Get-FileHash -LiteralPath $installer -Algorithm SHA256).Hash
+            if ($actualHash -ne $expectedHash) {
+              throw "NSIS compiler installer checksum mismatch: $actualHash ($((Get-Item -LiteralPath $installer).Length) bytes)."
             }
             $setup = Start-Process -FilePath $installer -ArgumentList '/S' -Wait -PassThru
             if ($setup.ExitCode -ne 0) { throw "NSIS installation failed: $($setup.ExitCode)" }
