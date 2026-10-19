@@ -77,12 +77,33 @@ jobs:
         timeout-minutes: 10
         run: |
           $compiler = Join-Path ${env:ProgramFiles(x86)} 'NSIS\makensis.exe'
+          $installer = Join-Path $env:RUNNER_TEMP 'nsis-3.13-setup.exe'
+          $url = 'https://downloads.sourceforge.net/project/nsis/NSIS%203/3.13/nsis-3.13-setup.exe'
+          # Hash verified against microsoft/winget-pkgs at ca8886c3aef0edcbb4f29552f23a4a5b9599305f.
+          $expectedHash = 'DB9A1038BBC0E53FEF24F423FD609979BD578E942F1BE1198DB186D1C42652A3'
           for ($attempt = 1; $attempt -le 3; $attempt++) {
-            choco install nsis --yes --no-progress
-            if ($LASTEXITCODE -eq 0 -and (Test-Path -LiteralPath $compiler)) { break }
-            if ($attempt -eq 3) { throw "NSIS installation failed after three attempts." }
-            Write-Warning "NSIS download failed; retrying attempt $($attempt + 1) of 3."
-            Start-Sleep -Seconds (10 * $attempt)
+            try {
+              Invoke-WebRequest -Uri $url -OutFile $installer -UseBasicParsing -TimeoutSec 90
+              break
+            } catch {
+              if ($attempt -eq 3) { throw }
+              Write-Warning "NSIS download failed; retrying attempt $($attempt + 1) of 3."
+              Start-Sleep -Seconds (5 * $attempt)
+            }
+          }
+          try {
+            if ((Get-FileHash -LiteralPath $installer -Algorithm SHA256).Hash -ne $expectedHash) {
+              throw 'NSIS compiler installer checksum mismatch.'
+            }
+            $setup = Start-Process -FilePath $installer -ArgumentList '/S' -Wait -PassThru
+            if ($setup.ExitCode -ne 0) { throw "NSIS installation failed: $($setup.ExitCode)" }
+            if (-not (Test-Path -LiteralPath $compiler)) { throw 'NSIS compiler was not installed.' }
+            $compilerVersion = & $compiler -VERSION
+            if ($LASTEXITCODE -ne 0 -or $compilerVersion.Trim() -ne 'v3.13') {
+              throw "Unexpected NSIS compiler version: $compilerVersion"
+            }
+          } finally {
+            Remove-Item -LiteralPath $installer -Force -ErrorAction SilentlyContinue
           }
       - name: Build setup.exe and portable archive
         shell: powershell
