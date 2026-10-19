@@ -73,7 +73,17 @@ jobs:
           ./tests/windows_host.Tests.ps1
           ./tests/windows_signing.Tests.ps1
       - name: Install NSIS compiler
-        run: choco install nsis --yes --no-progress
+        shell: powershell
+        timeout-minutes: 10
+        run: |
+          $compiler = Join-Path ${env:ProgramFiles(x86)} 'NSIS\makensis.exe'
+          for ($attempt = 1; $attempt -le 3; $attempt++) {
+            choco install nsis --yes --no-progress
+            if ($LASTEXITCODE -eq 0 -and (Test-Path -LiteralPath $compiler)) { break }
+            if ($attempt -eq 3) { throw "NSIS installation failed after three attempts." }
+            Write-Warning "NSIS download failed; retrying attempt $($attempt + 1) of 3."
+            Start-Sleep -Seconds (10 * $attempt)
+          }
       - name: Build setup.exe and portable archive
         shell: powershell
         run: python packaging/windows/build.py --makensis "${env:ProgramFiles(x86)}\NSIS\makensis.exe"
