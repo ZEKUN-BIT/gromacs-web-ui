@@ -119,6 +119,13 @@ jobs:
           $installers = @(Get-ChildItem -File dist/*-setup.exe)
           if ($installers.Count -ne 1) { throw "Expected exactly one freshly built installer." }
           ./tests/windows_installer.Tests.ps1 -Installer $installers[0].FullName -RequireWindows -ReportFile dist/windows-installer-ui.json
+      - name: Preserve installer UI diagnostics on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-installer-ui-failure
+          path: dist/windows-installer-ui.json
+          if-no-files-found: ignore
       - name: Sign installer when a publisher certificate is configured
         shell: powershell
         env:

@@ -20,24 +20,48 @@ if (-not ('GromacsInstallerSmoke' -as [type])) {
     Add-Type -TypeDefinition @'
 using System;
 using System.Collections.Generic;
+using System.ComponentModel;
+using System.Diagnostics;
 using System.Runtime.InteropServices;
 using System.Text;
+using System.Threading;
 
 public static class GromacsInstallerSmoke {
     public const string Welcome = "\u6b22\u8fce\u5b89\u88c5";
     public const string Workspace = "\u672c\u5730\u5206\u5b50\u52a8\u529b\u5b66\u5de5\u4f5c\u53f0";
     public const string Simplified = "\u7b80\u4f53";
+    private static Stopwatch elapsed;
+    private static int budgetMilliseconds;
     private delegate bool Enumerate(IntPtr window, IntPtr unused);
     [DllImport("user32.dll")] private static extern bool EnumWindows(Enumerate callback, IntPtr unused);
     [DllImport("user32.dll")] private static extern bool EnumChildWindows(IntPtr parent, Enumerate callback, IntPtr unused);
     [DllImport("user32.dll")] private static extern uint GetWindowThreadProcessId(IntPtr window, out uint process);
     [DllImport("user32.dll")] private static extern bool IsWindowVisible(IntPtr window);
+    [DllImport("user32.dll")] private static extern IntPtr GetAncestor(IntPtr window, uint flags);
     [DllImport("user32.dll", CharSet = CharSet.Unicode, ExactSpelling = true)] private static extern int GetClassNameW(IntPtr window, StringBuilder text, int count);
     [DllImport("user32.dll", EntryPoint = "SendMessageTimeoutW", CharSet = CharSet.Unicode, ExactSpelling = true, SetLastError = true)]
     private static extern IntPtr SendText(IntPtr window, uint message, UIntPtr wparam, StringBuilder text, uint flags, uint timeout, out UIntPtr result);
-    [DllImport("user32.dll", EntryPoint = "SendMessageTimeoutW", SetLastError = true)]
+    [DllImport("user32.dll", EntryPoint = "SendMessageTimeoutW", ExactSpelling = true, SetLastError = true)]
     private static extern IntPtr SendNumber(IntPtr window, uint message, UIntPtr wparam, IntPtr lparam, uint flags, uint timeout, out UIntPtr result);
-    [DllImport("user32.dll", SetLastError = true)] private static extern bool PostMessageW(IntPtr window, uint message, UIntPtr wparam, IntPtr lparam);
+    [DllImport("user32.dll", ExactSpelling = true, SetLastError = true)] private static extern bool PostMessageW(IntPtr window, uint message, UIntPtr wparam, IntPtr lparam);
+    [DllImport("kernel32.dll", ExactSpelling = true, SetLastError = true)] private static extern void SetLastError(uint error);
+
+    public static void BeginWait(int seconds) {
+        budgetMilliseconds = checked(seconds * 1000);
+        elapsed = Stopwatch.StartNew();
+    }
+    public static bool HasTime { get { return elapsed != null && elapsed.ElapsedMilliseconds < budgetMilliseconds; } }
+    private static uint ReadTimeout() {
+        long remaining = elapsed == null ? 0 : budgetMilliseconds - elapsed.ElapsedMilliseconds;
+        if (remaining <= 0) throw new TimeoutException("Installer UI deadline expired.");
+        return (uint)Math.Min(2000L, remaining);
+    }
+    private static Exception MessageFailure(string operation, IntPtr window, int process, uint message, uint argument, uint timeout, int error) {
+        string reason = error == 0 ? "No Win32 error was reported; this does not establish a timeout." : new Win32Exception(error).Message;
+        return new InvalidOperationException(String.Format(
+            "{0} failed: HWND=0x{1:X}, PID={2}, message=0x{3:X4}, argument={4}, timeoutMs={5}, Win32Error={6}. {7}",
+            operation, window.ToInt64(), process, message, argument, timeout, error, reason));
+    }
 
     private static bool Owned(IntPtr window, int process) {
         uint actual; GetWindowThreadProcessId(window, out actual);
@@ -66,19 +90,48 @@ public static class GromacsInstallerSmoke {
         var buffer = new StringBuilder(8192); UIntPtr result;
         // WM_GETTEXT uses capacity; CB_GETLBTEXT uses a previously bounded index.
         uint argument = message == 0x000D ? (uint)buffer.Capacity : (uint)index;
-        if (SendText(window, message, new UIntPtr(argument), buffer, 0x0002, 250, out result) == IntPtr.Zero)
-            throw new InvalidOperationException("Timed out reading installer controls.");
+        uint timeout = ReadTimeout();
+        SetLastError(0);
+        if (SendText(window, message, new UIntPtr(argument), buffer, 0x0002, timeout, out result) == IntPtr.Zero) {
+            int error = Marshal.GetLastWin32Error();
+            throw MessageFailure("SendMessageTimeoutW/text", window, process, message, argument, timeout, error);
+        }
         return buffer.ToString();
     }
     public static long Number(IntPtr window, int process, uint message, int argument) {
         RequireOwned(window, process); UIntPtr result;
-        if (SendNumber(window, message, new UIntPtr((uint)argument), IntPtr.Zero, 0x0002, 250, out result) == IntPtr.Zero)
-            throw new InvalidOperationException("Timed out communicating with installer controls.");
+        uint timeout = ReadTimeout();
+        SetLastError(0);
+        if (SendNumber(window, message, new UIntPtr((uint)argument), IntPtr.Zero, 0x0002, timeout, out result) == IntPtr.Zero) {
+            int error = Marshal.GetLastWin32Error();
+            throw MessageFailure("SendMessageTimeoutW/number", window, process, message, (uint)argument, timeout, error);
+        }
         return unchecked((long)result.ToUInt64());
     }
-    public static void Close(IntPtr window, int process) {
+    private static void Post(IntPtr window, int process, uint message, uint argument) {
         RequireOwned(window, process);
-        PostMessageW(window, 0x0010, UIntPtr.Zero, IntPtr.Zero); // WM_CLOSE only.
+        SetLastError(0);
+        if (!PostMessageW(window, message, new UIntPtr(argument), IntPtr.Zero)) {
+            int error = Marshal.GetLastWin32Error();
+            throw MessageFailure("PostMessageW", window, process, message, argument, 0, error);
+        }
+    }
+    public static void SelectLanguage(IntPtr dialog, IntPtr combo, int process, int index) {
+        RequireOwned(dialog, process);
+        RequireOwned(combo, process);
+        if (index < 0 || Class(combo, process) != "ComboBox" || GetAncestor(combo, 2) != dialog)
+            throw new InvalidOperationException("Refusing to accept a window that is not the identified language dialog.");
+        // Mutations may repaint controls or destroy the dialog. Queue them so
+        // they run on its UI thread without a synchronous cross-process wait.
+        Post(combo, process, 0x014E, (uint)index); // CB_SETCURSEL
+        while (Number(combo, process, 0x0147, 0) != index) { // CB_GETCURSEL
+            Thread.Sleep((int)Math.Min(50U, ReadTimeout()));
+        }
+        // IDOK is limited to this verified language dialog; never Next/Install.
+        Post(dialog, process, 0x0111, 1); // WM_COMMAND / IDOK
+    }
+    public static void Close(IntPtr window, int process) {
+        Post(window, process, 0x0010, 0); // WM_CLOSE only.
     }
 }
 '@
@@ -95,10 +148,10 @@ try {
     Copy-Item -LiteralPath $source -Destination $copy
     $process = Start-Process -FilePath $copy -WorkingDirectory $work -PassThru
     $launchedId = $process.Id
-    $deadline = [DateTime]::UtcNow.AddSeconds($TimeoutSeconds)
+    [GromacsInstallerSmoke]::BeginWait($TimeoutSeconds)
     $selected = $false
     $welcomeWindow = [IntPtr]::Zero
-    while ([DateTime]::UtcNow -lt $deadline) {
+    while ([GromacsInstallerSmoke]::HasTime) {
         $process.Refresh()
         if ($process.HasExited) { throw "Installer exited before the welcome page (exit $($process.ExitCode))." }
         $texts = @()
@@ -114,10 +167,7 @@ try {
                         if ($length -lt 0 -or $length -ge 8192) { throw 'Invalid language label length.' }
                         $label = [GromacsInstallerSmoke]::Text($control, $launchedId, 0x0148, $index) # CB_GETLBTEXT
                         if ($label.Contains([GromacsInstallerSmoke]::Simplified) -or $label -match '(?i)Simplified') {
-                            [void][GromacsInstallerSmoke]::Number($control, $launchedId, 0x014E, $index) # CB_SETCURSEL
-                            # IDOK is sent only to the language dialog, which was
-                            # identified by its language combo. Never Next/Install.
-                            [void][GromacsInstallerSmoke]::Number($window, $launchedId, 0x0111, 1) # WM_COMMAND / IDOK
+                            [GromacsInstallerSmoke]::SelectLanguage($window, $control, $launchedId, $index)
                             $report.language = $label
                             $selected = $true
                             break
