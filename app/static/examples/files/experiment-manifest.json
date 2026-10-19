@@ -1,0 +1,139 @@
+{
+  "schema_version": 1,
+  "generated_at": "2026-10-19T08:12:16.475027+00:00",
+  "job": {
+    "id": "argon-tutorial",
+    "name": "首次使用 · 1 ps 氩体系示例",
+    "workflow": "tutorial"
+  },
+  "gromacs": {
+    "available": true,
+    "version": "2025.4"
+  },
+  "parameters": {
+    "workflow": "tutorial",
+    "ntmpi": 1,
+    "ntomp": 1,
+    "gpu": false,
+    "duration_ps": 1,
+    "seed": 20261019
+  },
+  "commands": [
+    {
+      "title": "Prepare tutorial TPR",
+      "args": [
+        "gmx",
+        "grompp",
+        "-f",
+        "example.mdp",
+        "-c",
+        "initial.gro",
+        "-p",
+        "example.top",
+        "-o",
+        "example.tpr"
+      ],
+      "outputs": [
+        "example.tpr"
+      ],
+      "stdin": false,
+      "stdin_text": "",
+      "kind": "command",
+      "operation": null,
+      "data": {},
+      "parallel_group": ""
+    },
+    {
+      "title": "Run 1 ps argon tutorial",
+      "args": [
+        "gmx",
+        "mdrun",
+        "-s",
+        "example.tpr",
+        "-deffnm",
+        "example",
+        "-ntmpi",
+        "1",
+        "-ntomp",
+        "1",
+        "-nb",
+        "cpu",
+        "-pin",
+        "off"
+      ],
+      "outputs": [
+        "example.gro",
+        "example.edr",
+        "example.xtc",
+        "example.log"
+      ],
+      "stdin": false,
+      "stdin_text": "",
+      "kind": "command",
+      "operation": null,
+      "data": {},
+      "parallel_group": ""
+    },
+    {
+      "title": "Read tutorial energy",
+      "args": [
+        "gmx",
+        "energy",
+        "-f",
+        "example.edr",
+        "-o",
+        "example-energy.xvg"
+      ],
+      "outputs": [
+        "example-energy.xvg"
+      ],
+      "stdin": true,
+      "stdin_text": "Temperature\nPotential\n0\n",
+      "kind": "command",
+      "operation": null,
+      "data": {},
+      "parallel_group": ""
+    },
+    {
+      "title": "Check tutorial log",
+      "args": [
+        "internal",
+        "validate_stage_log",
+        "--stage=tutorial",
+        "--log_file=example.log",
+        "--output_report=quality-tutorial.txt"
+      ],
+      "outputs": [
+        "quality-tutorial.txt"
+      ],
+      "stdin": false,
+      "stdin_text": "",
+      "kind": "internal",
+      "operation": "validate_stage_log",
+      "data": {
+        "stage": "tutorial",
+        "log_file": "example.log",
+        "output_report": "quality-tutorial.txt"
+      },
+      "parallel_group": ""
+    }
+  ],
+  "input_files": [
+    {
+      "path": "example.mdp",
+      "size": 377,
+      "sha256": "518762db5d3c9dfd87cfe95036aa73bfc97114744b360342f17f7c39ffcc45d3"
+    },
+    {
+      "path": "example.top",
+      "size": 180,
+      "sha256": "71458155b68ffb11ca4292c1200cb714d8a8c24976a3043d8c469e20c090c1e5"
+    },
+    {
+      "path": "initial.gro",
+      "size": 2936,
+      "sha256": "b291a48f18e4868aad103ac0347df1410464d1b9105f1260ad9bc3a7f558ab24"
+    }
+  ],
+  "scope": "真实 GROMACS 单线程 CPU 执行；仅验证教学示例运行与输出，不构成蛋白体系或采样充分性验证。"
+}

@@ -21,7 +21,7 @@ def populate(path: Path, version: str) -> None:
     path.mkdir(parents=True, exist_ok=True)
     for name in updater.ITEMS:
         item = path / name
-        if name in {"app", "mdp", "scripts"}:
+        if name in {"app", "mdp", "scripts", "docs"}:
             item.mkdir()
             (item / "sample").write_text(version)
         else:
@@ -159,6 +159,29 @@ def test_committed_recovery_keeps_new_application(installation):
     updater.recover(root)
     assert_version(root, "old")  # Recovery must not replace committed files from staging.
     assert not stage.exists()
+
+
+@pytest.mark.parametrize("fail", [False, True])
+def test_upgrade_adds_help_to_older_installation_and_rolls_it_back(installation, monkeypatch, fail):
+    root, stage = installation
+    shutil.rmtree(root / "docs")
+    original = Path.replace
+
+    def inject(path, target):
+        if fail and path == stage / "run.sh":
+            raise OSError("upgrade failed after help promotion")
+        return original(path, target)
+
+    monkeypatch.setattr(Path, "replace", inject)
+    if fail:
+        with pytest.raises(OSError, match="upgrade failed"):
+            updater.promote(root, stage)
+        assert not (root / "docs").exists()
+        assert (root / "app/sample").read_text() == "old"
+    else:
+        updater.promote(root, stage)
+        assert (root / "docs/sample").read_text() == "new"
+    assert (root / "runtime/keep").read_text() == "retain"
 
 
 def test_disk_preflight_uses_branch_budget_and_reports_linux_location(installation, tmp_path, monkeypatch):

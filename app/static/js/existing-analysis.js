@@ -1,5 +1,5 @@
-import { api, state, toast } from "./core.js?v=20261006-026";
-import { refreshJobs, selectJob } from "./jobs.js?v=20261006-026";
+import { api, state, toast } from "./core.js?v=58a36b0fc94d0be8";
+import { refreshJobs, selectJob } from "./jobs.js?v=58a36b0fc94d0be8";
 
 export function bindExistingAnalysis() {
   const dialog = document.querySelector("#existing-analysis-dialog");

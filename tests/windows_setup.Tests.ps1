@@ -140,11 +140,20 @@ try {
     # Native stdin must contain only the script, without PowerShell's added CRLF/BOM.
     $inputScript = "# $unicodeText`r`nprintf 'prepared'`r`n"
     $readStdin = '$buffer = New-Object IO.MemoryStream; [Console]::OpenStandardInput().CopyTo($buffer); [Console]::WriteLine([Convert]::ToBase64String($buffer.ToArray()))'
-    $result = Invoke-WslCommand @('-NoProfile', '-Command', $readStdin) -InputText $inputScript
     $expectedBytes = [Text.Encoding]::UTF8.GetBytes($inputScript.Replace("`r`n", "`n"))
-    Assert-True ($result.ExitCode -eq 0 -and $result.Lines[0] -ceq [Convert]::ToBase64String($expectedBytes)) 'send exact UTF-8/LF stdin bytes and EOF'
-    $result = Invoke-WslCommand @('-NoProfile', '-Command', $readStdin) -InputText ''
-    Assert-True ($result.ExitCode -eq 0 -and $result.Lines.Count -eq 0) 'close even empty redirected stdin'
+    $originalInputEncoding = [Console]::InputEncoding
+    try {
+        # Framework Process.Start auto-flushes a StreamWriter using this console
+        # encoding, which used to prepend a BOM before our raw script bytes.
+        foreach ($encoding in @((New-Object Text.UTF8Encoding($true)), (New-Object Text.UTF8Encoding($false)))) {
+            [Console]::InputEncoding = $encoding
+            $result = Invoke-WslCommand @('-NoProfile', '-Command', $readStdin) -InputText $inputScript
+            Assert-True ($result.ExitCode -eq 0 -and $result.Lines[0] -ceq [Convert]::ToBase64String($expectedBytes)) "send exact UTF-8/LF stdin bytes and EOF (exit $($result.ExitCode), received $($result.Lines -join ' '))"
+            Assert-True ([Console]::InputEncoding.CodePage -eq $encoding.CodePage) 'restore caller console encoding after native input preparation'
+            $result = Invoke-WslCommand @('-NoProfile', '-Command', $readStdin) -InputText ''
+            Assert-True ($result.ExitCode -eq 0 -and $result.Lines.Count -eq 0) 'close even empty redirected stdin without adding an encoding preamble'
+        }
+    } finally { [Console]::InputEncoding = $originalInputEncoding }
 
     # Observe real child output while the child is still alive, including one
     # UTF-8 stdout and one Windows UTF-16 stderr stream. The child creates its

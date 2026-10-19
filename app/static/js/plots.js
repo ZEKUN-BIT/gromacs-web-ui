@@ -1,11 +1,12 @@
 // 图谱绘制模块：canvas 折线图与渲染。
 
-import { els, state, escapeHtml, updateText } from "./core.js?v=20261006-026";
+import { els, state, escapeHtml, updateText } from "./core.js?v=58a36b0fc94d0be8";
 
 export const PLOT_COLORS = ["#087f8c", "#e07a1f", "#7259b5", "#2f855a", "#d14d72", "#3578c4", "#b18b16", "#9b4dca"];
 let plotObserver = null;
 let plotResizeObserver = null;
 let displayedPlots = [];
+let skippedPlotFiles = [];
 
 function redrawVisiblePlots() {
   els.analysisPlots?.querySelectorAll("canvas").forEach((canvas) => {
@@ -19,11 +20,13 @@ window.matchMedia("(prefers-color-scheme: dark)").addEventListener("change", red
 
 export function resetPlotFilters() {
   state.plotFilters = { metric: "", replica: "", begin: "", end: "", mode: "separate" };
+  skippedPlotFiles = [];
   els.plotControls?.reset();
   if (els.plotFilterError) els.plotFilterError.hidden = true;
 }
 
 export function updatePlotOptions(payload) {
+  skippedPlotFiles = payload.skipped_files || [];
   els.plotMetric.innerHTML = '<option value="">全部指标</option>' + (payload.metrics || []).map((metric) =>
     `<option value="${escapeHtml(metric)}">${escapeHtml(metric)}</option>`).join("");
   els.plotReplica.innerHTML = '<option value="">全部副本</option>' + (payload.replicas || []).map((replica) =>
@@ -210,20 +213,24 @@ function plotAnnotation(plot) {
 }
 
 export function renderPlots(jobId, plots, truncated = false, total = null) {
-  const signature = `${jobId}:${JSON.stringify(state.plotFilters)}:${truncated}:${total}:${plots.map((plot) => `${plot.path}:${plot.title}:${plot.sample_count}:${plot.last}:${plot.mean}`).join(",")}`;
+  const signature = `${jobId}:${JSON.stringify(state.plotFilters)}:${truncated}:${total}:${JSON.stringify(skippedPlotFiles)}:${plots.map((plot) => `${plot.path}:${plot.title}:${plot.sample_count}:${plot.last}:${plot.mean}:${JSON.stringify(plot.points)}`).join(",")}`;
   if (signature === state.plotsSignature) return;
   state.plotsSignature = signature;
   if (state.plotFilters.mode === "overlay") plots = overlayReplicas(plots);
   displayedPlots = plots;
   plotResizeObserver?.disconnect();
+  plotObserver?.disconnect();
   const totalShown = `${plots.length} 张${truncated ? "（部分省略）" : ""}`;
   updateText(els.plotCount, totalShown);
   if (els.downloadPlots) {
     els.downloadPlots.hidden = !plots.length;
     els.downloadPlots.href = plots.length ? `/api/jobs/${encodeURIComponent(jobId)}/plots/download` : "#";
   }
+  const skippedNotice = skippedPlotFiles.length
+    ? `<details class="plot-truncation-notice"><summary>${skippedPlotFiles.length} 个文件未完整展示，查看原因</summary><ul>${skippedPlotFiles.map((file) => `<li><strong>${escapeHtml(file.path)}</strong>：${escapeHtml(file.reason)}</li>`).join("")}</ul></details>`
+    : truncated ? `<div class="plot-truncation-notice">已达到曲线展示数量上限。请选择具体指标或副本，或下载完整 XVG。</div>` : "";
   if (!plots.length) {
-    els.analysisPlots.innerHTML = `<div class="plot-empty"><strong>当前筛选范围内暂无曲线</strong><p>区间内需至少两个有效数据点。</p></div>`;
+    els.analysisPlots.innerHTML = skippedNotice + `<div class="plot-empty"><strong>当前筛选范围内暂无曲线</strong><p>区间内需至少两个有效数据点。</p></div>`;
     return;
   }
   const categoryMeta = {
@@ -233,16 +240,13 @@ export function renderPlots(jobId, plots, truncated = false, total = null) {
     quality: ["运行质控", "用于核对温度、压力、密度和能量是否符合预期。运行质控通过是分析结构结果的前提，但不等同于结构已经收敛。"],
   };
   const categories = ["structure", "interaction", "sampling", "quality"];
-  const truncationNotice = truncated
-    ? `<div class="plot-truncation-notice">部分文件超过读取限制或曲线数量上限。请选择具体指标或副本，或下载完整 XVG。</div>`
-    : "";
-  els.analysisPlots.innerHTML = truncationNotice + categories.map((category) => {
+  els.analysisPlots.innerHTML = skippedNotice + categories.map((category) => {
     const entries = plots.map((plot, index) => ({ plot, index })).filter(({ plot }) => (plot.category || "quality") === category);
     if (!entries.length) return "";
     const [title, description] = categoryMeta[category];
     return `<section class="plot-category"><header><h3>${title}</h3><p>${description}</p></header><div class="plot-category-grid">${entries.map(({ plot, index }) => `
     <article class="plot-card">
-      <div class="plot-card-head"><div><strong>${escapeHtml(plot.title)}${plot.traces ? " · 副本对比" : plot.replica != null ? ` · 副本 ${plot.replica}` : ""}</strong><small>${escapeHtml(plot.path)} · ${plot.sample_count} 个原始数据点</small></div></div>
+      <div class="plot-card-head"><div><strong>${escapeHtml(plot.title)}${plot.traces ? " · 副本对比" : plot.replica != null ? ` · 副本 ${plot.replica}` : ""}</strong><small>${escapeHtml(plot.path)} · ${plot.sample_count} 个原始数据点${plot.sampling === "minmax" ? " · 曲线按分桶极值缩减，统计使用全部原始数据" : ""}</small></div></div>
       <canvas data-plot-index="${index}" data-color-offset="${index % PLOT_COLORS.length}" role="img" aria-label="${escapeHtml(plot.title)} 数据曲线"></canvas>
       <output class="plot-readout"></output>
       <div class="plot-axis-labels"><span><b>X</b>${escapeHtml(plot.x_label || "X")}</span><span><b>Y</b>${escapeHtml(plot.y_label || "Value")}</span></div>
@@ -253,7 +257,6 @@ export function renderPlots(jobId, plots, truncated = false, total = null) {
       <aside class="plot-annotation"><strong>解读提示</strong><p>${escapeHtml(plotAnnotation(plot))}</p></aside>
     </article>`).join("")}</div></section>`;
   }).join("");
-  plotObserver?.disconnect();
   const canvases = els.analysisPlots.querySelectorAll("canvas");
   if ("ResizeObserver" in window) {
     plotResizeObserver = new ResizeObserver(redrawVisiblePlots);

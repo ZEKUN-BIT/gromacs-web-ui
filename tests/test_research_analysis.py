@@ -1,7 +1,9 @@
 import copy
+import csv
 import json
 import tempfile
 import unittest
+from contextlib import chdir
 from pathlib import Path
 from unittest.mock import patch
 
@@ -13,6 +15,7 @@ from pydantic import ValidationError
 import app.main as main
 from app.analysis.comparison import align_residues, compare_reports, load_research_report
 from app.analysis.research import analyze_universe, read_index_group, series_summary
+from app.analysis.research import main as research_main
 from app.existing_analysis import create_existing_analysis
 from app.job_store import JobStore
 from app.models import ExistingAnalysisRequest, ResearchComparisonRequest
@@ -88,6 +91,80 @@ class ResearchAnalysisTests(unittest.TestCase):
             research_ligand_group="Ligand",
             contact_cutoff_nm=0.2,
         )
+
+    def write_analysis_trajectory(self):
+        universe = molecular_fixture(leave=True)
+        for attribute, values in {
+            "altLocs": [""] * 9,
+            "segids": ["SYS"],
+            "occupancies": [1.0] * 9,
+            "tempfactors": [0.0] * 9,
+            "elements": ["C"] * 9,
+            "record_types": ["ATOM"] * 6 + ["HETATM"] * 3,
+            "formalcharges": [0] * 9,
+        }.items():
+            universe.add_TopologyAttr(attribute, values)
+        universe.trajectory[0]
+        universe.atoms.write(str(self.root / "analysis-reference.pdb"))
+        with mda.Writer(str(self.root / "analysis-whole.xtc"), n_atoms=len(universe.atoms)) as writer:
+            for _ in universe.trajectory:
+                writer.write(universe.atoms)
+
+    def test_main_writes_real_outputs_from_manifest_without_metadata(self):
+        self.write_analysis_trajectory()
+        manifest = {
+            "schema_version": 1,
+            "parameters": {**self.request.model_dump(), "ntomp": 1, "workflow": "analysis_suite"},
+            "job": {"id": "manifest-job", "name": "Manifest research", "workflow": "analysis_suite"},
+            "analysis_source": {"job_id": "source-job", "protocol": {"ref_t": "310"}},
+            "input_files": [{"path": "input.xtc", "size": 123, "sha256": "a" * 64}],
+        }
+        (self.root / "experiment-manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+        self.assertFalse((self.root / "metadata.json").exists())
+        with chdir(self.root):
+            research_main()
+        report = json.loads((self.root / "research-report.json").read_text(encoding="utf-8"))
+        self.assertEqual(report["job"], {"id": "manifest-job", "name": "Manifest research"})
+        self.assertEqual(report["source"], manifest["analysis_source"])
+        self.assertEqual(report["input_hashes"], manifest["input_files"])
+        self.assertEqual(report["frames"], 10)
+        self.assertEqual(len(report["residues"]), 6)
+        self.assertAlmostEqual(report["binding"]["contact_frame_fraction"], 0.5)
+        with (self.root / "research-residues.tsv").open(encoding="utf-8") as handle:
+            rows = list(csv.DictReader(handle, delimiter="\t"))
+        self.assertEqual(len(rows), 6)
+        self.assertEqual(rows[0]["resname"], "ALA")
+        data = [
+            line for line in (self.root / "research-timeseries.xvg").read_text(encoding="utf-8").splitlines() if not line.startswith("@")
+        ]
+        self.assertEqual(len(data), 10)
+        self.assertAlmostEqual(float(data[-1].split()[0]), 0.09)
+        self.assertFalse((self.root / "research-report.pending").exists())
+
+        # A stale legacy export must never override the prepared manifest.
+        (self.root / "metadata.json").write_text("invalid legacy JSON", encoding="utf-8")
+        with chdir(self.root):
+            research_main()
+        preferred = json.loads((self.root / "research-report.json").read_text(encoding="utf-8"))
+        self.assertEqual(preferred["job"], report["job"])
+
+    def test_main_still_supports_legacy_metadata_without_a_manifest(self):
+        self.write_analysis_trajectory()
+        legacy = {
+            "id": "legacy-job",
+            "name": "Legacy research",
+            "params": {**self.request.model_dump(), "ntomp": 1},
+            "analysis_source": {"job_id": "legacy-source"},
+            "input_hashes": [{"path": "input.xtc", "sha256": "b" * 64}],
+        }
+        (self.root / "metadata.json").write_text(json.dumps(legacy), encoding="utf-8")
+        with chdir(self.root):
+            research_main()
+        report = json.loads((self.root / "research-report.json").read_text(encoding="utf-8"))
+        self.assertEqual(report["job"]["id"], "legacy-job")
+        self.assertEqual(report["source"], legacy["analysis_source"])
+        self.assertEqual(report["input_hashes"], legacy["input_hashes"])
+        self.assertEqual(report["frames"], 10)
 
     def test_rigid_body_motion_is_removed_from_rmsf_and_ligand_rmsd(self):
         report = analyze_universe(molecular_fixture(rotate=True), self.request, self.index)

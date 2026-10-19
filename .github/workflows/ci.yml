@@ -3,25 +3,70 @@ name: CI
 on:
   push:
   pull_request:
+  workflow_dispatch:
+  schedule:
+    - cron: "23 18 * * 0"
 
 jobs:
   test:
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+      - run: python -m pip install -e ".[dev]"
+      - run: ruff check app tests
+      - run: ruff format --check app tests
+      - run: python scripts/sync_frontend_assets.py --check
+      - run: pytest -m "not gromacs_integration" --cov=app --cov-report=term
+      - name: Install browser test tools
+        if: matrix.python-version == '3.12'
+        run: |
+          python -m pip install playwright==1.62.0
+          python -m playwright install --with-deps chromium
+      - name: Check history navigation and confirmation dialogs in Chromium
+        if: matrix.python-version == '3.12'
+        run: |
+          node scripts/check_frontend_state.mjs
+          python scripts/check_frontend_browser.py
+          python scripts/check_storage_browser.py
+          python scripts/check_product_browser.py
+
+  gromacs-integration:
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      GROMACS_INTEGRATION: "1"
+      OMP_NUM_THREADS: "1"
+      OPENBLAS_NUM_THREADS: "1"
+      GMX_DISABLE_GPU_DETECTION: "1"
+      CUDA_VISIBLE_DEVICES: ""
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
           cache: pip
-      - run: python -m pip install -e ".[dev]"
-      - run: ruff check app tests
-      - run: ruff format --check app tests
-      - run: pytest --cov=app --cov-report=term
-      - name: Install browser test tools
+      - name: Install GROMACS and application test dependencies
         run: |
-          python -m pip install playwright==1.62.0
-          python -m playwright install --with-deps chromium
-      - name: Check history navigation and confirmation dialogs in Chromium
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends gromacs
+          python -m pip install -e ".[test]"
+      - name: Run a tiny simulation, checkpoint recovery and real trajectory analysis
         run: |
-          node scripts/check_frontend_state.mjs
-          python scripts/check_frontend_browser.py
+          gmx --version
+          pytest -m gromacs_integration -v --basetemp=runtime/gromacs-integration-ci
+      - name: Preserve GROMACS diagnostics on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: gromacs-integration-diagnostics
+          path: runtime/gromacs-integration-ci
+          retention-days: 3

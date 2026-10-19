@@ -1,5 +1,5 @@
-import { api, escapeHtml, state } from "./core.js?v=20261006-026";
-import { drawPlot, plotTheme } from "./plots.js?v=20261006-026";
+import { api, debounce, escapeHtml, state } from "./core.js?v=58a36b0fc94d0be8";
+import { drawPlot, plotTheme } from "./plots.js?v=58a36b0fc94d0be8";
 
 const labels = {
   ca_rmsd_nm: "C-alpha RMSD (nm)", ca_rg_nm: "C-alpha Rg (nm)",
@@ -150,25 +150,70 @@ export async function renderResearch(job) {
     loadedJob = job.id;
   }
   renderResult();
-  const [result, catalog] = await Promise.allSettled([api(`/api/jobs/${encodeURIComponent(job.id)}/research`), api("/api/research/jobs")]);
+  const [result] = await Promise.allSettled([api(`/api/jobs/${encodeURIComponent(job.id)}/research`)]);
   if (token !== generation || state.activeJobId !== job.id) return;
   if (result.status === "fulfilled") {
     report = result.value; document.querySelector("#research-state").textContent = "";
   } else document.querySelector("#research-state").textContent = result.reason.message;
-  if (catalog.status === "fulfilled") {
-    for (const id of ["research-reference", "research-other"]) {
-      const select = document.getElementById(id);
-      const selected = Array.from(select.selectedOptions, (option) => option.value);
-      select.replaceChildren();
-      catalog.value.jobs.forEach((item) => select.add(new Option(item.name, item.id, false,
-        selected.includes(item.id) || (!selected.length && id === "research-reference" && item.id === job.id))));
-    }
-    if (catalog.value.truncated) document.querySelector("#research-state").textContent += " 候选任务仅覆盖最近 200 个任务。";
-  }
+  await refreshResearchCatalog();
   renderResult();
 }
 
+let catalogOffset = 0, catalogSearch = "", catalogGeneration = 0;
+
+async function refreshResearchCatalog() {
+  const token = ++catalogGeneration;
+  const query = new URLSearchParams({ limit: "50", offset: String(catalogOffset), search: catalogSearch });
+  try {
+    const catalog = await api(`/api/research/jobs?${query}`);
+    if (token !== catalogGeneration) return;
+    for (const id of ["research-reference", "research-other"]) {
+      const select = document.getElementById(id);
+      const chosen = new Map(Array.from(select.selectedOptions, (option) => [option.value, option.textContent]));
+      if (!chosen.size && id === "research-reference" && report?.job?.id) chosen.set(report.job.id, report.job.name || report.job.id);
+      select.replaceChildren();
+      for (const [value, label] of chosen) select.add(new Option(label, value, false, true));
+      for (const item of catalog.jobs) if (!chosen.has(item.id)) select.add(new Option(item.name, item.id));
+    }
+    document.querySelector("#research-catalog-previous").disabled = catalogOffset === 0;
+    document.querySelector("#research-catalog-next").disabled = !catalog.has_more;
+    document.querySelector("#research-catalog-status").textContent =
+      `第 ${catalog.total ? Math.floor(catalogOffset / 50) + 1 : 0} 页 · ${catalog.total} 个报告 · 已选任务跨页保留`;
+  } catch (error) {
+    if (token === catalogGeneration) document.querySelector("#research-catalog-status").textContent = error.message;
+  }
+}
+
+function bindResearchCatalog() {
+  const form = document.querySelector("#research-compare-form");
+  const tools = document.createElement("div");
+  tools.className = "research-table-tools";
+  tools.innerHTML = '<label>搜索全部研究报告<input id="research-catalog-search" type="search" maxlength="256" placeholder="任务名或 ID" /></label>'
+    + '<div class="research-pager"><button id="research-catalog-previous" type="button" class="tool-button" disabled>上一页</button>'
+    + '<span id="research-catalog-status" role="status"></span><button id="research-catalog-next" type="button" class="tool-button" disabled>下一页</button></div>';
+  form.prepend(tools);
+  document.querySelector("#research-catalog-search").addEventListener("input", debounce((event) => {
+    catalogSearch = event.target.value.trim(); catalogOffset = 0; refreshResearchCatalog();
+  }, 250));
+  for (const [id, direction] of [["previous", -1], ["next", 1]]) {
+    document.querySelector(`#research-catalog-${id}`).addEventListener("click", () => {
+      catalogOffset = Math.max(0, catalogOffset + direction * 50); refreshResearchCatalog();
+    });
+  }
+}
+
 export function bindResearch() {
+  bindResearchCatalog();
+  document.addEventListener("storage-cleaned", (event) => {
+    const removed = new Set(event.detail.deleted_jobs);
+    for (const id of ["research-reference", "research-other"]) {
+      for (const option of Array.from(document.getElementById(id).options)) {
+        if (removed.has(option.value)) option.remove();
+      }
+    }
+    if (removed.has(report?.job?.id)) report = null;
+    refreshResearchCatalog();
+  });
   document.querySelectorAll("[data-research-tab]").forEach((button) => button.addEventListener("click", () => {
     mode = button.dataset.researchTab;
     document.querySelectorAll("[data-research-tab]").forEach((item) => item.setAttribute("aria-pressed", String(item === button)));

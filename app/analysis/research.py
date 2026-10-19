@@ -227,7 +227,18 @@ def analyze_universe(universe, request: ExistingAnalysisRequest, index_file: Pat
 
 def main() -> None:
     workdir = Path.cwd()
-    meta = json.loads((workdir / "metadata.json").read_text(encoding="utf-8"))
+    try:
+        manifest = json.loads(ensure_under_root(workdir / "experiment-manifest.json", workdir).read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        # Jobs created before manifests were introduced only have this export.
+        meta = json.loads(ensure_under_root(workdir / "metadata.json", workdir).read_text(encoding="utf-8"))
+    else:
+        meta = {
+            **manifest["job"],
+            "params": manifest["parameters"],
+            "analysis_source": manifest.get("analysis_source"),
+            "input_hashes": manifest.get("input_files", []),
+        }
     params = meta["params"]
     allowed = ExistingAnalysisRequest.model_fields
     request = ExistingAnalysisRequest.model_validate({key: value for key, value in params.items() if key in allowed})

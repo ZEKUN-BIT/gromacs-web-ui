@@ -1,0 +1,32 @@
+<!doctype html><html lang="zh-CN"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'self'; img-src 'self'; base-uri 'none'">
+<title>首次使用 · 1 ps 氩体系示例 · GROMACS 结果摘要</title><link rel="stylesheet" href="report.css">
+<body><small>GROMACS Console · 可离线查看 · 2026-10-19T08:12:17.053513+00:00</small><h1>首次使用 · 1 ps 氩体系示例</h1>
+<div class="notice"><ul><li>真实 GROMACS 单线程 CPU 执行；仅验证教学示例运行与输出，不构成蛋白体系或采样充分性验证。</li><li>任务完成表示程序执行结束，不代表所有质量检查通过或采样充分。</li><li>原始结构、轨迹、checkpoint 和运行日志未包含；请在输出文件中另行下载。</li><li>每个图包含 101 个能量采样点，时间跨度为 0–1 ps；这里不据此判断平衡或采样收敛。</li></ul></div><h2>实验记录</h2><dl><dt>任务 ID</dt><dd>argon-tutorial</dd><dt>工作流</dt><dd>tutorial</dd><dt>执行状态</dt><dd>completed</dd><dt>项目</dt><dd>教学示例</dd><dt>备注</dt><dd>用于练习提交、监控、查看图表和导出结果，不是蛋白体系的研究协议。</dd></dl><h2>质量检查</h2><ul><li><strong>quality-tutorial.txt</strong>：检查通过<p></p></li></ul>
+<h2>图表</h2><figure><img loading="lazy" src="files/example-energy.png" alt="example-energy.png"><figcaption>example-energy.png</figcaption></figure>
+<h2>协议参数</h2><pre>{
+  &quot;workflow&quot;: &quot;tutorial&quot;,
+  &quot;ntmpi&quot;: 1,
+  &quot;ntomp&quot;: 1,
+  &quot;gpu&quot;: false,
+  &quot;duration_ps&quot;: 1,
+  &quot;seed&quot;: 20261019
+}</pre>
+<h2>输入校验记录</h2><pre>[
+  {
+    &quot;path&quot;: &quot;example.mdp&quot;,
+    &quot;size&quot;: 377,
+    &quot;sha256&quot;: &quot;518762db5d3c9dfd87cfe95036aa73bfc97114744b360342f17f7c39ffcc45d3&quot;
+  },
+  {
+    &quot;path&quot;: &quot;example.top&quot;,
+    &quot;size&quot;: 180,
+    &quot;sha256&quot;: &quot;71458155b68ffb11ca4292c1200cb714d8a8c24976a3043d8c469e20c090c1e5&quot;
+  },
+  {
+    &quot;path&quot;: &quot;initial.gro&quot;,
+    &quot;size&quot;: 2936,
+    &quot;sha256&quot;: &quot;b291a48f18e4868aad103ac0347df1410464d1b9105f1260ad9bc3a7f558ab24&quot;
+  }
+]</pre>
+<h2>包含的文件</h2><table><tr><td><a href="files/example-energy.png">example-energy.png</a></td><td>75,546 B</td></tr><tr><td><a href="files/example-energy.xvg">example-energy.xvg</a></td><td>4,007 B</td></tr><tr><td><a href="files/example.mdp">example.mdp</a></td><td>377 B</td></tr><tr><td><a href="files/experiment-manifest.json">experiment-manifest.json</a></td><td>3,031 B</td></tr><tr><td><a href="files/quality-tutorial.txt">quality-tutorial.txt</a></td><td>43 B</td></tr></table><h2>未包含的候选文件</h2><ul><li>无</li></ul></body></html>

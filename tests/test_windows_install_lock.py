@@ -82,6 +82,7 @@ def installation(tmp_path):
         "app/test.py": b"# mock app\n",
         "mdp/test.mdp": b"; mock mdp\n",
         "scripts/test.py": b"# mock script\n",
+        "docs/QUICKSTART.md": b"# Getting started\n",
         "requirements.txt": b"# no dependencies\n",
         "run.sh": b"#!/bin/sh\nexit 0\n",
         "LICENSE": b"test license\n",

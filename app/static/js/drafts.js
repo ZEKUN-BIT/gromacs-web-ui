@@ -1,5 +1,5 @@
-import { els, state, FILE_FIELD_NAMES } from "./core.js?v=20261006-026";
-import { formObject, addLigandRow } from "./form.js?v=20261006-026";
+import { els, state, FILE_FIELD_NAMES } from "./core.js?v=58a36b0fc94d0be8";
+import { formObject, addLigandRow } from "./form.js?v=58a36b0fc94d0be8";
 
 const DRAFT_KEY = "gromacs.simulation-draft.v1";
 
@@ -12,6 +12,7 @@ export function restoreDraft() {
       if (!Object.hasOwn(params, field.name) || field.type === "file" || FILE_FIELD_NAMES.has(field.name)) return;
       if (field.type === "radio") field.checked = field.value === params[field.name];
       else if (field.type === "checkbox") field.checked = params[field.name] === true;
+      else if (field.name === "tags" && Array.isArray(params.tags)) field.value = params.tags.join(", ");
       else if (["string", "number"].includes(typeof params[field.name])) field.value = String(params[field.name]);
       if (["force_field", "ntmpi", "ntomp", "pin", "gpu"].includes(field.name)) field.dataset.userEdited = "true";
     });

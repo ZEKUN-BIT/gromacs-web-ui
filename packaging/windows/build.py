@@ -18,6 +18,16 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 ASSETS = Path(__file__).resolve().parent
 SOURCE_SUFFIXES = {".py", ".html", ".css", ".js", ".svg"}
+HELP_NAMES = (
+    "QUICKSTART",
+    "USAGE",
+    "WINDOWS",
+    "TRAJECTORY-ANALYSIS",
+    "RESEARCH-ANALYSIS",
+    "PLOTTING",
+    "RELEASE-CHECKLIST",
+)
+EXAMPLE_SUFFIXES = {".html", ".css", ".json", ".xvg", ".png", ".md", ".mdp", ".txt"}
 FONT_SOURCES = ("app/static/fonts/ibm-plex-sans-var-latin.woff2", "app/static/fonts/jetbrains-mono-var-latin.woff2")
 LEGAL_SOURCES = (
     "LICENSE",
@@ -71,7 +81,9 @@ def source_files(root: Path) -> list[Path]:
     ]
     files += [path for path in (root / "mdp").rglob("*.mdp") if path.name in MDP_NAMES]
     files += [root / name for name in (*FONT_SOURCES, *LEGAL_SOURCES) if (root / name).is_file()]
-    return sorted(files)
+    files += [root / "docs" / f"{name}.md" for name in HELP_NAMES if (root / "docs" / f"{name}.md").is_file()]
+    files += [path for path in (root / "app/static/examples").rglob("*") if path.is_file() and path.suffix in EXAMPLE_SUFFIXES]
+    return sorted(set(files))
 
 
 def write_payload(root: Path, target: Path) -> None:
@@ -101,7 +113,7 @@ def write_payload(root: Path, target: Path) -> None:
 
 
 def build(output: Path, compiler: str | None = None) -> list[Path]:
-    for name in (*FONT_SOURCES, *LEGAL_SOURCES):
+    for name in (*FONT_SOURCES, *LEGAL_SOURCES, *(f"docs/{name}.md" for name in HELP_NAMES), "app/static/examples/index.html"):
         if not (ROOT / name).is_file():
             raise ValueError(f"Required distribution asset or license is missing: {name}")
     version = tomllib.loads((ROOT / "pyproject.toml").read_text())["project"]["version"]

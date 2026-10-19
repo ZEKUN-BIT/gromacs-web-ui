@@ -74,11 +74,38 @@ def test_payload_omits_private_data_and_includes_runtime_plotting(tmp_path):
             "app/static/fonts/IBM-Plex-OFL.txt",
             "app/static/fonts/JetBrains-Mono-OFL.txt",
             "app/static/icons/lucide/LICENSE",
+            "docs/QUICKSTART.md",
+            "docs/RELEASE-CHECKLIST.md",
+            "docs/USAGE.md",
+            "app/static/examples/index.html",
+            "app/static/examples/summary.json",
         } <= names
         assert not any(name.split("/")[0] in {"runtime", ".venv", "tests", ".env", "settings.json"} for name in names)
         assert not any("__pycache__" in name or "mdout" in name or "aki" in name for name in names)
         assert all(item.isreg() and not item.name.startswith("/") and ".." not in Path(item.name).parts for item in archive)
     assert payload.stat().st_size < 1024**2
+
+
+def test_payload_limits_example_assets_and_help_to_public_allowlists(tmp_path):
+    for folder in ("app/static/examples/files", "docs", "scripts", "mdp"):
+        (tmp_path / folder).mkdir(parents=True)
+    for name in ("requirements.txt", "run.sh", "scripts/__init__.py", "scripts/md_plot.py"):
+        (tmp_path / name).write_text("")
+    for name in (
+        "docs/QUICKSTART.md",
+        "docs/private-notes.md",
+        "app/static/settings.json",
+        "app/static/examples/input.tpr",
+        "app/static/examples/files/energy.xvg",
+        "app/static/examples/files/energy.png",
+    ):
+        (tmp_path / name).write_text("example")
+    payload = tmp_path / "application.tar.gz"
+    builder.write_payload(tmp_path, payload)
+    with tarfile.open(payload) as archive:
+        names = set(archive.getnames())
+    assert {"docs/QUICKSTART.md", "app/static/examples/files/energy.xvg", "app/static/examples/files/energy.png"} <= names
+    assert not {"docs/private-notes.md", "app/static/settings.json", "app/static/examples/input.tpr"} & names
 
 
 def test_payload_is_reproducible(tmp_path):

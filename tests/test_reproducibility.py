@@ -1,3 +1,4 @@
+import hashlib
 import tempfile
 import unittest
 from pathlib import Path
@@ -10,6 +11,47 @@ from app.reproducibility import write_experiment_manifest
 
 
 class ReproducibilityTests(unittest.TestCase):
+    def test_manifest_temporary_upload_remains_an_unchanged_input(self) -> None:
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            filename = "experiment-manifest.json.tmp"
+            content = b"uploaded input with a formerly colliding temporary name"
+            (root / filename).write_bytes(content)
+            meta = {"workdir": str(root), "uploaded_files": [filename], "params": {"gmx_bin": "/bin/true"}}
+            with patch("app.reproducibility.gpu_information", return_value={}):
+                manifest = write_experiment_manifest(meta)
+            self.assertEqual((root / filename).read_bytes(), content)
+            self.assertEqual(
+                manifest["input_files"], [{"path": filename, "size": len(content), "sha256": hashlib.sha256(content).hexdigest()}]
+            )
+            self.assertTrue((root / "experiment-manifest.json").is_file())
+            self.assertEqual(list(root.glob(".experiment-manifest-*.tmp")), [])
+
+    def test_manifest_rejects_reserved_input_without_overwriting_it(self) -> None:
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            filename = "experiment-manifest.json"
+            original = b"uploaded input must not be replaced by generated output"
+            (root / filename).write_bytes(original)
+            meta = {"workdir": str(root), "uploaded_files": [filename]}
+            with self.assertRaisesRegex(ValueError, "reserved"):
+                write_experiment_manifest(meta)
+            self.assertEqual((root / filename).read_bytes(), original)
+            self.assertEqual(list(root.iterdir()), [root / filename])
+
+    def test_failed_atomic_manifest_replace_keeps_previous_manifest_and_removes_temporary_file(self) -> None:
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            target = root / "experiment-manifest.json"
+            target.write_bytes(b"previous manifest")
+            meta = {"workdir": str(root), "uploaded_files": [], "params": {"gmx_bin": "/bin/true"}}
+            with patch("app.reproducibility.gpu_information", return_value={}):
+                with patch.object(Path, "replace", side_effect=OSError("injected rename failure")):
+                    with self.assertRaisesRegex(OSError, "injected rename failure"):
+                        write_experiment_manifest(meta)
+            self.assertEqual(target.read_bytes(), b"previous manifest")
+            self.assertEqual(list(root.glob(".experiment-manifest-*.tmp")), [])
+
     def test_manifest_hashes_inputs_and_records_environment(self) -> None:
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder)

@@ -426,7 +426,13 @@ def test_cancellation_tracks_an_exec_of_our_owned_child_without_relaxing_identit
         with patch("app.execution.subprocess.Popen", remember):
             runner.start()
             wait_until(lambda: bool(store.get(job["id"]).get("process_pid")))
-            wait_until(lambda: children and process_identity(children[0].pid)["process_args"] == [sys.executable, "-c", replacement])
+            wait_until(
+                lambda: (
+                    children
+                    and (identity := process_identity(children[0].pid)) is not None
+                    and identity["process_args"] == [sys.executable, "-c", replacement]
+                )
+            )
             store.cancel(job["id"])
             runner.join(timeout=4)
         assert not runner.is_alive()

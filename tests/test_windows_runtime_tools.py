@@ -127,8 +127,26 @@ def test_environment_diagnostics_probe_ambertools_and_dssp(tmp_path):
         result = environment_diagnostics(tmp_path, {})
     assert ["antechamber", "-h"] in [call.args[0] for call in probe.call_args_list]
     assert ["mkdssp", "--version"] in [call.args[0] for call in probe.call_args_list]
+    assert ["gmx", "dssp", "-h"] in [call.args[0] for call in probe.call_args_list]
     assert result["ambertools"]["available"] is True
     assert result["dssp"]["available"] is True
+    assert result["gromacs_dssp"]["available"] is True
+
+
+def test_native_dssp_is_available_without_external_mkdssp(tmp_path):
+    def probe(command):
+        return {"available": command[0] != "mkdssp", "version": ""}
+
+    with (
+        patch("app.diagnostics.discover_local_force_fields", return_value=[]),
+        patch("app.diagnostics.installed_water_model_selection", return_value=None),
+        patch("app.diagnostics.host_information", return_value={"cpu_count": 8, "physical_core_count": 4}),
+        patch("app.diagnostics.gpu_information", return_value={"available": False, "devices": []}),
+        patch("app.diagnostics._probe", side_effect=probe),
+    ):
+        result = environment_diagnostics(tmp_path, {"gmx_bin": "/custom/gmx"})
+    assert result["gromacs_dssp"]["available"] is True
+    assert result["dssp"]["available"] is False
 
 
 @pytest.mark.parametrize(

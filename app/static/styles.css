@@ -3232,6 +3232,31 @@ summary { cursor: pointer; }
   .analysis-metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
 .plot-statistics > div { display: flex; flex-wrap: wrap; gap: 8px 16px; padding: 6px 0; font-size: 12px; }
+.storage-open { margin: 12px 0; width: 100%; }
+.storage-dialog { width: min(860px, calc(100vw - 32px)); max-height: 90vh; overflow-y: auto; border: 1px solid var(--line); border-radius: 8px; padding: 24px; background: var(--panel); color: var(--ink); }
+.storage-dialog::backdrop { background: rgb(15 23 42 / 45%); }
+.storage-heading, .storage-toolbar { display: flex; justify-content: space-between; align-items: center; gap: 12px; }
+.storage-heading h3 { margin: 0; }
+.storage-heading p, .storage-note, #storage-status { color: var(--muted); font-size: 12px; line-height: 1.65; }
+.storage-summary { display: grid; gap: 8px; padding: 16px 0; font-size: 13px; border-bottom: 1px solid var(--line); overflow-wrap: anywhere; }
+.storage-options { display: grid; gap: 12px; border: 0; padding: 16px 0 8px; margin: 0; font-size: 13px; }
+.storage-options legend { padding-top: 16px; font-weight: 700; }
+.storage-options label, .storage-job { display: flex; align-items: flex-start; gap: 10px; }
+.storage-options input, .storage-job input { width: 16px; height: 16px; min-height: 16px; padding: 0; flex: 0 0 16px; margin: 2px 0 0; accent-color: var(--green); }
+.storage-delete-option { color: var(--red, #b42318); }
+.storage-toolbar { flex-wrap: wrap; margin: 16px 0; }
+.storage-toolbar label { display: grid; gap: 6px; font-size: 12px; flex: 1 1 200px; }
+.storage-toolbar input { width: 100%; }
+.storage-jobs { max-height: 280px; overflow-y: auto; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); }
+.storage-job { padding: 12px 4px; border-bottom: 1px solid var(--line); cursor: pointer; }
+.storage-job-details { display: grid; gap: 5px; overflow-wrap: anywhere; min-width: 0; }
+.storage-job-details strong { font-size: 13px; }
+.storage-job-details small { color: var(--muted); font-size: 11px; }
+.storage-preview { margin-top: 16px; padding: 16px; border: 1px solid var(--line); font-size: 12px; line-height: 1.6; overflow-wrap: anywhere; }
+.storage-preview summary { cursor: pointer; }
+.storage-file-list { max-height: 220px; overflow-y: auto; padding-left: 18px; }
+.storage-dialog .dialog-actions { margin-top: 16px; flex-wrap: wrap; }
+@media (max-width: 600px) { .storage-dialog { padding: 16px; } .storage-heading { align-items: flex-start; } }
 .plot-statistics > div > span:first-child { min-width: 80px; }
 .plot-statistics a { color: var(--blue); }
 .plot-category > header { background: transparent; border: 0; padding: 8px 0; }

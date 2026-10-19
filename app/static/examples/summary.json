@@ -1,0 +1,79 @@
+{
+  "schema_version": 1,
+  "exported_at": "2026-10-19T08:12:17.053513+00:00",
+  "job": {
+    "id": "argon-tutorial",
+    "name": "首次使用 · 1 ps 氩体系示例",
+    "workflow": "tutorial",
+    "status": "completed",
+    "created_at": "2026-10-19T08:12:16.473469+00:00",
+    "project": "教学示例",
+    "tags": [],
+    "notes": "用于练习提交、监控、查看图表和导出结果，不是蛋白体系的研究协议。",
+    "cloned_from": null,
+    "analysis_source": null,
+    "dry_run": false,
+    "is_example": true
+  },
+  "parameters": {
+    "workflow": "tutorial",
+    "ntmpi": 1,
+    "ntomp": 1,
+    "gpu": false,
+    "duration_ps": 1,
+    "seed": 20261019
+  },
+  "input_hashes": [
+    {
+      "path": "example.mdp",
+      "size": 377,
+      "sha256": "518762db5d3c9dfd87cfe95036aa73bfc97114744b360342f17f7c39ffcc45d3"
+    },
+    {
+      "path": "example.top",
+      "size": 180,
+      "sha256": "71458155b68ffb11ca4292c1200cb714d8a8c24976a3043d8c469e20c090c1e5"
+    },
+    {
+      "path": "initial.gro",
+      "size": 2936,
+      "sha256": "b291a48f18e4868aad103ac0347df1410464d1b9105f1260ad9bc3a7f558ab24"
+    }
+  ],
+  "quality": [
+    {
+      "file": "quality-tutorial.txt",
+      "status": "检查通过",
+      "notes": []
+    }
+  ],
+  "limitations": [
+    "真实 GROMACS 单线程 CPU 执行；仅验证教学示例运行与输出，不构成蛋白体系或采样充分性验证。",
+    "任务完成表示程序执行结束，不代表所有质量检查通过或采样充分。",
+    "原始结构、轨迹、checkpoint 和运行日志未包含；请在输出文件中另行下载。",
+    "每个图包含 101 个能量采样点，时间跨度为 0–1 ps；这里不据此判断平衡或采样收敛。"
+  ],
+  "files": [
+    {
+      "path": "example-energy.png",
+      "size": 75546
+    },
+    {
+      "path": "example-energy.xvg",
+      "size": 4007
+    },
+    {
+      "path": "example.mdp",
+      "size": 377
+    },
+    {
+      "path": "experiment-manifest.json",
+      "size": 3031
+    },
+    {
+      "path": "quality-tutorial.txt",
+      "size": 43
+    }
+  ],
+  "skipped_files": []
+}

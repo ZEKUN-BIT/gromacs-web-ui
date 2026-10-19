@@ -1,0 +1,25 @@
+name: 功能与体验建议
+description: 描述你的研究流程和当前阻碍，帮助决定优先级。
+title: "[建议] "
+body:
+  - type: textarea
+    id: workflow
+    attributes:
+      label: 你要完成什么任务
+      description: 描述使用场景、频率、输入规模和当前做法；无需提供私有研究数据。
+    validations:
+      required: true
+  - type: textarea
+    id: problem
+    attributes:
+      label: 当前阻碍与影响
+      description: 哪一步耗时、容易出错或无法完成？大概影响多少时间或任务？
+    validations:
+      required: true
+  - type: textarea
+    id: outcome
+    attributes:
+      label: 期望的行为与验收方式
+      description: 用一次具体操作描述理想结果；如有替代方法也请说明。
+    validations:
+      required: true

@@ -21,6 +21,7 @@ export const WORKFLOW_LABELS = {
   analysis_suite: "分析套件",
   benchmark: "性能基准",
   custom: "自定义",
+  tutorial: "教学示例",
 };
 
 export const ACTIVE_STATES = new Set(["preparing", "queued", "running", "interrupted"]);
@@ -58,6 +59,8 @@ export const state = {
   plotsSignature: "",
   fileFilter: "",
   jobFilter: "",
+  jobProject: "",
+  productAvailable: false,
   jobsOffset: 0,
   jobsTotal: 0,
   jobsHasMore: false,
@@ -241,7 +244,9 @@ export async function api(path, options = {}) {
     const text = await response.text();
     try {
       const payload = JSON.parse(text);
-      detail = payload.detail || text || detail;
+      detail = payload.problem?.code && !["operation_failed", "invalid_request"].includes(payload.problem.code)
+        ? [payload.problem.message, payload.problem.recovery].filter(Boolean).join("；")
+        : payload.detail || text || detail;
     } catch {
       detail = text || detail;
     }

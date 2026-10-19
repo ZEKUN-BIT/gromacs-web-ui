@@ -7,19 +7,25 @@ import json
 import math
 import os
 import shutil
+import sqlite3
 import tempfile
 import zipfile
-from contextlib import asynccontextmanager
+from contextlib import ExitStack, asynccontextmanager
 from pathlib import Path
 from typing import Annotated
+from urllib.parse import urlsplit
 
 from fastapi import FastAPI, File, Form, HTTPException, Query, Request, UploadFile
+from fastapi.encoders import jsonable_encoder
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, PlainTextResponse, Response, StreamingResponse
+from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, ValidationError
+from starlette.concurrency import run_in_threadpool
 
 from .analysis.comparison import compare_research_jobs, load_research_report
+from .api_errors import error_advice
 from .diagnostics import environment_diagnostics, host_information
 from .existing_analysis import analysis_inputs, analysis_source, create_existing_analysis, source_file
 from .files import (
@@ -56,7 +62,10 @@ from .gromacs import (
     xvg_plots,
 )
 from .models import BenchmarkRequest, ExistingAnalysisRequest, ProtocolPreviewRequest, ResearchComparisonRequest, SimulationParams
+from .product_api import product_router
+from .progress import enrich_progress
 from .reproducibility import write_experiment_manifest
+from .storage import CleanupRequest, execute_cleanup, preview_cleanup, storage_overview
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 APP_DIR = BASE_DIR / "app"
@@ -70,7 +79,7 @@ WEB_PROCESS_LOCK = None
 MAX_FILE_LIST_ITEMS = 1000
 SSE_LOG_CHUNK_BYTES = 64 * 1024
 
-app = FastAPI(title="GROMACS Web UI", version="0.2.6")
+app = FastAPI(title="GROMACS Web UI", version="0.2.7")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["http://127.0.0.1:8000", "http://localhost:8000"],
@@ -114,9 +123,55 @@ async def app_lifespan(_app: FastAPI):
 app.router.lifespan_context = app_lifespan
 
 
+@app.exception_handler(HTTPException)
+async def explained_http_error(request: Request, exc: HTTPException):
+    if exc.status_code == 422 and isinstance(exc.detail, list):
+        return validation_error_response(exc.detail, headers=exc.headers)
+    advice = exc.detail if isinstance(exc.detail, dict) and "code" in exc.detail else error_advice(str(exc.detail))
+    return JSONResponse(
+        status_code=exc.status_code, content=jsonable_encoder({"detail": exc.detail, "problem": advice}), headers=exc.headers
+    )
+
+
+def validation_error_response(errors: list[dict], *, headers: dict | None = None) -> JSONResponse:
+    # Pydantic inputs/contexts can contain private data or non-finite numbers
+    # which JSONResponse cannot encode. Field location and reason are enough.
+    details = [{key: error[key] for key in ("type", "loc", "msg") if key in error} for error in errors]
+    return JSONResponse(
+        status_code=422,
+        content={"detail": details, "problem": {"code": "invalid_request", "message": "请检查标出的参数。"}},
+        headers=headers,
+    )
+
+
+@app.exception_handler(RequestValidationError)
+async def explained_validation_error(request: Request, exc: RequestValidationError):
+    return validation_error_response(exc.errors())
+
+
 @app.middleware("http")
 async def add_security_headers(request: Request, call_next):
-    response = await call_next(request)
+    response = None
+    if request.url.path.startswith("/api/") and request.method in {"POST", "PUT", "PATCH", "DELETE"}:
+        try:
+            require_storage_origin(request)
+        except HTTPException as exc:
+            response = await explained_http_error(request, exc)
+    limited = request.url.path == "/api/templates" or request.url.path.endswith("/organization")
+    if response is None and limited and request.method in {"POST", "PATCH"}:
+        body = bytearray()
+        async for chunk in request.stream():
+            body.extend(chunk)
+            if len(body) > 256 * 1024:
+                response = JSONResponse(
+                    status_code=413,
+                    content={"detail": {"code": "request_too_large", "message": "请求超过 256 KiB。"}},
+                )
+                break
+        if response is None:
+            request._body = bytes(body)
+    if response is None:
+        response = await call_next(request)
     response.headers["Content-Security-Policy"] = (
         "default-src 'self'; script-src 'self'; style-src 'self'; font-src 'self'; "
         "img-src 'self' data:; connect-src 'self'; object-src 'none'; base-uri 'self'; frame-ancestors 'none'"
@@ -209,6 +264,49 @@ def workflows() -> dict:
     return {"workflows": WORKFLOWS}
 
 
+@app.get("/api/storage")
+def get_storage() -> dict:
+    try:
+        return storage_overview(STORE)
+    except (OSError, ValueError) as exc:
+        raise HTTPException(status_code=409, detail="无法安全扫描运行目录，请检查目录与权限。") from exc
+
+
+@app.post("/api/storage/preview")
+def storage_preview(request: CleanupRequest, http_request: Request) -> dict:
+    require_storage_origin(http_request)
+    try:
+        return preview_cleanup(STORE, request)
+    except (OSError, RuntimeError, ValueError) as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@app.post("/api/storage/cleanup")
+def storage_cleanup(request: CleanupRequest, http_request: Request) -> dict:
+    require_storage_origin(http_request)
+    try:
+        result = execute_cleanup(STORE, request)
+    except (OSError, RuntimeError, ValueError) as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    for job_id in [*result["deleted_jobs"], *result["cleaned_jobs"]]:
+        FILE_LIST_CACHE.pop(job_id, None)
+    return result
+
+
+def require_storage_origin(request: Request) -> None:
+    origin = request.headers.get("origin")
+    if request.headers.get("sec-fetch-site") == "cross-site":
+        raise HTTPException(status_code=403, detail="此操作仅允许从本机控制台发起。")
+    if origin:
+        try:
+            parsed = urlsplit(origin)
+            hostname = parsed.hostname
+        except ValueError as exc:
+            raise HTTPException(status_code=403, detail="请求来源无效。") from exc
+        if hostname not in {"localhost", "127.0.0.1", "::1"} or origin.rstrip("/") != str(request.base_url).rstrip("/"):
+            raise HTTPException(status_code=403, detail="请求来源与本机控制台不一致。")
+
+
 @app.post("/api/preview")
 def preview(request: PreviewRequest) -> dict:
     settings = current_settings()
@@ -250,11 +348,12 @@ def list_jobs(
     limit: Annotated[int, Query(ge=1, le=200)] = 50,
     offset: Annotated[int, Query(ge=0)] = 0,
     search: Annotated[str, Query(max_length=256)] = "",
+    project: Annotated[str, Query(max_length=80)] = "",
 ) -> dict:
-    return _job_page(limit, offset, search)
+    return _job_page(limit, offset, search, project)
 
 
-def _job_page(limit: int, offset: int, search: str) -> dict:
+def _job_page(limit: int, offset: int, search: str, project: str = "") -> dict:
     search = search.strip()
     if search:
         labels = {
@@ -276,15 +375,18 @@ def _job_page(limit: int, offset: int, search: str) -> dict:
             "custom": "自定义",
         }
         aliases = tuple(key for key, label in labels.items() if search.casefold() in label.casefold())
-        page = STORE.list_page(limit=limit, offset=offset, search=search, search_aliases=aliases)
+        page = STORE.list_page(limit=limit, offset=offset, search=search, search_aliases=aliases, project=project)
         return {**page, "search": search}
-    return STORE.list_page(limit=limit, offset=offset)
+    return STORE.list_page(limit=limit, offset=offset, project=project)
 
 
 @app.get("/api/jobs/{job_id}")
 def get_job(job_id: str) -> dict:
     try:
-        return STORE.get(job_id)
+        detail = enrich_progress(STORE.get(job_id))
+        if detail.get("error"):
+            detail["failure_advice"] = error_advice(detail["error"])
+        return detail
     except FileNotFoundError:
         raise HTTPException(status_code=404, detail="Job not found")
 
@@ -299,6 +401,25 @@ async def create_job(
     except ValidationError as exc:
         raise HTTPException(status_code=422, detail=exc.errors())
 
+    name = request.name.strip() or "GROMACS run"
+    temp_root = RUNTIME_ROOT / "incoming"
+    temp_root.mkdir(parents=True, exist_ok=True)
+    temp_dir = Path(tempfile.mkdtemp(prefix=f"pending-{slugify(name)}-", dir=temp_root))
+    prepared_hashes: dict[str, dict] = {}
+    try:
+        uploaded_names, upload_name_map = await stage_uploads(files, temp_dir, hashes=prepared_hashes)
+        return await run_in_threadpool(_prepare_uploaded_job, request, temp_dir, uploaded_names, upload_name_map, prepared_hashes)
+    finally:
+        await run_in_threadpool(shutil.rmtree, temp_dir, True)
+
+
+def _prepare_uploaded_job(
+    request: SimulationParams,
+    temp_dir: Path,
+    uploaded_names: list[str],
+    upload_name_map: dict[str, str],
+    prepared_hashes: dict[str, dict],
+) -> dict:
     settings = current_settings()
     name = request.name.strip() or "GROMACS run"
     dry_run = request.dry_run
@@ -307,12 +428,7 @@ async def create_job(
     job_params["ntmpi"] = _positive_int(job_params.get("ntmpi"), settings.get("default_ntmpi", 1))
     job_params["ntomp"] = _positive_int(job_params.get("ntomp"), settings.get("default_ntomp", 4))
     maxwarn = int(job_params.get("maxwarn") or 0)
-    temp_root = RUNTIME_ROOT / "incoming"
-    temp_root.mkdir(parents=True, exist_ok=True)
-    temp_dir = Path(tempfile.mkdtemp(prefix=f"pending-{slugify(name)}-", dir=temp_root))
     try:
-        uploaded_names, upload_name_map = await stage_uploads(files, temp_dir)
-
         _rewrite_uploaded_file_references(job_params, upload_name_map)
         validate_uploaded_file_references(job_params, uploaded_names)
         preview_mdp_overrides(job_params)
@@ -341,56 +457,72 @@ async def create_job(
         raise
 
     meta = STORE.create(name=name, params=job_params, uploaded_files=uploaded_names, steps=steps)
-    if any(raw != safe for raw, safe in upload_name_map.items()):
-        STORE.update(meta["id"], upload_name_map=upload_name_map)
-    workdir = Path(meta["workdir"])
     try:
-        for filename in uploaded_names:
-            (temp_dir / filename).replace(workdir / filename)
-    except OSError as exc:
-        STORE.update(meta["id"], status="failed", error=f"Failed to stage uploaded files: {exc}")
-        raise HTTPException(status_code=500, detail="Failed to stage uploaded files.")
-    finally:
-        shutil.rmtree(temp_dir, ignore_errors=True)
-    try:
-        written_mdp_templates = write_missing_mdp_files(workdir, BASE_DIR, job_params.get("workflow"))
-    except (OSError, ValueError) as exc:
-        STORE.update(meta["id"], status="failed", error=f"Failed to prepare MDP templates: {exc}")
-        raise HTTPException(status_code=500, detail="Failed to prepare MDP templates.")
-    if written_mdp_templates:
-        STORE.update(meta["id"], mdp_templates=written_mdp_templates)
-        for template in written_mdp_templates:
-            STORE.append_log(meta["id"], f"[web] mdp template {template['name']} from {template['source']}\n")
-    try:
-        applied_mdp_overrides = apply_mdp_overrides(workdir, job_params)
-    except (OSError, ValueError) as exc:
-        STORE.update(meta["id"], status="failed", error=f"Failed to apply MDP overrides: {exc}")
-        raise HTTPException(status_code=400, detail=f"Failed to apply MDP overrides: {exc}")
-    if applied_mdp_overrides:
-        STORE.update(meta["id"], mdp_overrides=applied_mdp_overrides)
-        for item in applied_mdp_overrides:
-            STORE.append_log(meta["id"], f"[web] mdp override {item['file']} {item['key']} = {item['value']} ({item['label']})\n")
-    try:
-        copied_force_fields = copy_local_force_fields(
-            BASE_DIR,
-            workdir,
-            force_fields_used_by_steps(steps, job_params.get("force_field", "")),
-        )
-    except OSError as exc:
-        STORE.update(meta["id"], status="failed", error=f"Failed to copy local force field: {exc}")
-        raise HTTPException(status_code=500, detail=f"Failed to copy local force field: {exc}")
-    if copied_force_fields:
-        STORE.update(meta["id"], local_force_fields=copied_force_fields)
-        for force_field in copied_force_fields:
-            STORE.append_log(meta["id"], f"[web] local force field {force_field['directory']} {force_field['status']}\n")
-    STORE.start(meta["id"], steps, dry_run=dry_run)
-    prepared = STORE.get(meta["id"])
-    try:
-        manifest = write_experiment_manifest(prepared)
-        STORE.update(meta["id"], experiment_manifest="experiment-manifest.json", input_hashes=manifest["input_files"])
-    except OSError as exc:
-        STORE.append_log(meta["id"], f"[web] warning: failed to write experiment manifest: {exc}\n")
-    return STORE.get(meta["id"])
+        with STORE.job_files_lock(meta["id"]):
+            if STORE.get(meta["id"])["status"] != "preparing":
+                return STORE.get(meta["id"])
+            if any(raw != safe for raw, safe in upload_name_map.items()):
+                STORE.update(meta["id"], upload_name_map=upload_name_map)
+            workdir = Path(meta["workdir"])
+            try:
+                for filename in uploaded_names:
+                    (temp_dir / filename).replace(workdir / filename)
+            except OSError as exc:
+                STORE.update(meta["id"], status="failed", error=f"Failed to stage uploaded files: {exc}")
+                raise HTTPException(status_code=500, detail="Failed to stage uploaded files.")
+            finally:
+                shutil.rmtree(temp_dir, ignore_errors=True)
+            try:
+                written_mdp_templates = write_missing_mdp_files(workdir, BASE_DIR, job_params.get("workflow"))
+            except (OSError, ValueError) as exc:
+                STORE.update(meta["id"], status="failed", error=f"Failed to prepare MDP templates: {exc}")
+                raise HTTPException(status_code=500, detail="Failed to prepare MDP templates.")
+            if written_mdp_templates:
+                STORE.update(meta["id"], mdp_templates=written_mdp_templates)
+                for template in written_mdp_templates:
+                    STORE.append_log(meta["id"], f"[web] mdp template {template['name']} from {template['source']}\n")
+            try:
+                applied_mdp_overrides = apply_mdp_overrides(workdir, job_params)
+            except (OSError, ValueError) as exc:
+                STORE.update(meta["id"], status="failed", error=f"Failed to apply MDP overrides: {exc}")
+                raise HTTPException(status_code=400, detail=f"Failed to apply MDP overrides: {exc}")
+            if applied_mdp_overrides:
+                STORE.update(meta["id"], mdp_overrides=applied_mdp_overrides)
+                for item in applied_mdp_overrides:
+                    STORE.append_log(meta["id"], f"[web] mdp override {item['file']} {item['key']} = {item['value']} ({item['label']})\n")
+            try:
+                copied_force_fields = copy_local_force_fields(
+                    BASE_DIR,
+                    workdir,
+                    force_fields_used_by_steps(steps, job_params.get("force_field", "")),
+                )
+            except OSError as exc:
+                STORE.update(meta["id"], status="failed", error=f"Failed to copy local force field: {exc}")
+                raise HTTPException(status_code=500, detail=f"Failed to copy local force field: {exc}")
+            if copied_force_fields:
+                STORE.update(meta["id"], local_force_fields=copied_force_fields)
+                for force_field in copied_force_fields:
+                    STORE.append_log(meta["id"], f"[web] local force field {force_field['directory']} {force_field['status']}\n")
+            prepared = STORE.get(meta["id"])
+            try:
+                manifest = write_experiment_manifest(prepared, prepared_hashes=prepared_hashes)
+                STORE.update(meta["id"], experiment_manifest="experiment-manifest.json", input_hashes=manifest["input_files"])
+            except OSError as exc:
+                STORE.update(meta["id"], status="failed", error=f"Failed to prepare experiment manifest: {exc}")
+                raise HTTPException(status_code=500, detail="Failed to prepare experiment manifest; task was not queued.") from exc
+            if STORE.get(meta["id"])["status"] != "preparing":
+                return STORE.get(meta["id"])
+            STORE.start(meta["id"], steps, dry_run=dry_run)
+            return STORE.get(meta["id"])
+
+    except sqlite3.IntegrityError:
+        # Cancellation may race the final preparing -> queued transition.
+        current = STORE.get(meta["id"])
+        if current["status"] == "cancelled":
+            return current
+        raise
+    except RuntimeError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 
 @app.get("/api/jobs/{job_id}/research")
@@ -404,14 +536,13 @@ def research_report(job_id: str) -> dict:
 
 
 @app.get("/api/research/jobs")
-def research_jobs() -> dict:
-    page = STORE.list_page(limit=200)
-    jobs = []
-    for job in page["jobs"]:
-        path = STORE.job_dir(job["id"]) / "research-report.json"
-        if job["status"] == "completed" and path.is_file() and not path.is_symlink():
-            jobs.append({"id": job["id"], "name": job["name"]})
-    return {"jobs": jobs, "truncated": page["has_more"]}
+def research_jobs(
+    limit: Annotated[int, Query(ge=1, le=200)] = 50,
+    offset: Annotated[int, Query(ge=0)] = 0,
+    search: Annotated[str, Query(max_length=256)] = "",
+) -> dict:
+    page = STORE.research_page(limit, offset, search)
+    return {**page, "truncated": page["has_more"]}
 
 
 @app.post("/api/research/compare")
@@ -432,7 +563,7 @@ def existing_analysis_inputs(job_id: str) -> dict:
         return analysis_inputs(STORE, job_id)
     except FileNotFoundError:
         raise HTTPException(status_code=404, detail="Job not found")
-    except (OSError, ValueError):
+    except (OSError, RuntimeError, ValueError):
         raise HTTPException(status_code=409, detail="无法读取分析输入，请确认来源任务已完成且文件可用。")
 
 
@@ -476,9 +607,7 @@ def analyze_existing_job(job_id: str, request: ExistingAnalysisRequest) -> dict:
 @app.post("/api/jobs/{job_id}/clone")
 def clone_job(job_id: str, request: CloneRequest | None = None) -> dict:
     try:
-        cloned = STORE.clone(job_id, request.name if request else None)
-        manifest = write_experiment_manifest(cloned)
-        return STORE.update(cloned["id"], experiment_manifest="experiment-manifest.json", input_hashes=manifest["input_files"])
+        return STORE.clone(job_id, request.name if request else None)
     except FileNotFoundError:
         raise HTTPException(status_code=404, detail="Job not found")
     except (OSError, RuntimeError, ValueError) as exc:
@@ -510,80 +639,92 @@ def _benchmark_tpr(meta: dict) -> Path:
 def benchmark_job(job_id: str, request: BenchmarkRequest | None = None) -> dict:
     request = request or BenchmarkRequest()
     try:
-        source = STORE.get(job_id)
-        source_tpr = _benchmark_tpr(source)
-        host = host_information()
-        physical = int(host["physical_core_count"])
-        logical = int(host["cpu_count"])
-        threads = list(dict.fromkeys(request.threads)) or sorted({physical, max(physical, (physical + logical + 1) // 2), logical})
-        if any(isinstance(value, bool) or value < 1 or value > logical for value in threads):
-            raise ValueError(f"Benchmark thread counts must be between 1 and {logical}.")
-        profiles = []
-        steps = []
-        gmx_bin = str((source.get("params") or {}).get("gmx_bin") or current_settings()["gmx_bin"])
-        for ntomp in threads:
-            stem = f"benchmark-1x{ntomp}"
-            args = [
-                gmx_bin,
-                "mdrun",
-                "-s",
-                "benchmark.tpr",
-                "-deffnm",
-                stem,
-                "-ntmpi",
-                "1",
-                "-ntomp",
-                str(ntomp),
-                "-nsteps",
-                str(request.nsteps),
-                "-noconfout",
-                "-pin",
-                request.pin,
-            ]
-            if request.gpu:
-                args.extend(["-nb", "gpu"])
-            profiles.append({"ntmpi": 1, "ntomp": ntomp, "log": f"{stem}.log"})
-            steps.append(Step(f"Benchmark 1×{ntomp}", args, outputs=[f"{stem}.log"]))
-        steps.append(
-            Step(
-                "Summarize benchmark",
-                ["internal", "summarize_benchmarks"],
-                outputs=["benchmark-results.json", "benchmark-report.txt"],
-                kind="internal",
-                operation="summarize_benchmarks",
-                data={
-                    "profiles": profiles,
-                    "nsteps": request.nsteps,
-                    "json_output": "benchmark-results.json",
-                    "text_output": "benchmark-report.txt",
-                },
+        with ExitStack() as locks:
+            locks.enter_context(STORE.job_files_lock(job_id))
+            source = STORE.get(job_id)
+            if source.get("deletion_pending") or source.get("maintenance_pending"):
+                raise RuntimeError("Source task files are under maintenance.")
+            source_tpr = _benchmark_tpr(source)
+            host = host_information()
+            physical = int(host["physical_core_count"])
+            logical = int(host["cpu_count"])
+            threads = list(dict.fromkeys(request.threads)) or sorted({physical, max(physical, (physical + logical + 1) // 2), logical})
+            if any(isinstance(value, bool) or value < 1 or value > logical for value in threads):
+                raise ValueError(f"Benchmark thread counts must be between 1 and {logical}.")
+            profiles = []
+            steps = []
+            gmx_bin = str((source.get("params") or {}).get("gmx_bin") or current_settings()["gmx_bin"])
+            for ntomp in threads:
+                stem = f"benchmark-1x{ntomp}"
+                args = [
+                    gmx_bin,
+                    "mdrun",
+                    "-s",
+                    "benchmark.tpr",
+                    "-deffnm",
+                    stem,
+                    "-ntmpi",
+                    "1",
+                    "-ntomp",
+                    str(ntomp),
+                    "-nsteps",
+                    str(request.nsteps),
+                    "-noconfout",
+                    "-pin",
+                    request.pin,
+                ]
+                if request.gpu:
+                    args.extend(["-nb", "gpu"])
+                profiles.append({"ntmpi": 1, "ntomp": ntomp, "log": f"{stem}.log"})
+                steps.append(Step(f"Benchmark 1×{ntomp}", args, outputs=[f"{stem}.log"]))
+            steps.append(
+                Step(
+                    "Summarize benchmark",
+                    ["internal", "summarize_benchmarks"],
+                    outputs=["benchmark-results.json", "benchmark-report.txt"],
+                    kind="internal",
+                    operation="summarize_benchmarks",
+                    data={
+                        "profiles": profiles,
+                        "nsteps": request.nsteps,
+                        "json_output": "benchmark-results.json",
+                        "text_output": "benchmark-report.txt",
+                    },
+                )
             )
-        )
-        params = {
-            "workflow": "benchmark",
-            "source_job_id": job_id,
-            "ntmpi": 1,
-            "ntomp": max(threads),
-            "benchmark_threads": threads,
-            "benchmark_nsteps": request.nsteps,
-            "gpu": request.gpu,
-            "pin": request.pin,
-        }
-        created = STORE.create(f"{source.get('name') or 'GROMACS'} benchmark", params, ["benchmark.tpr"], steps)
-        try:
-            shutil.copy2(source_tpr, STORE.job_dir(created["id"]) / "benchmark.tpr")
-            STORE.start(created["id"], steps)
-            prepared = STORE.get(created["id"])
-            manifest = write_experiment_manifest(prepared)
-            return STORE.update(
-                created["id"],
-                benchmark_source_job=job_id,
-                experiment_manifest="experiment-manifest.json",
-                input_hashes=manifest["input_files"],
-            )
-        except Exception as exc:
-            STORE.update(created["id"], status="failed", error=f"Failed to prepare benchmark: {exc}")
-            raise
+            params = {
+                "workflow": "benchmark",
+                "source_job_id": job_id,
+                "ntmpi": 1,
+                "ntomp": max(threads),
+                "benchmark_threads": threads,
+                "benchmark_nsteps": request.nsteps,
+                "gpu": request.gpu,
+                "pin": request.pin,
+            }
+            created = STORE.create(f"{source.get('name') or 'GROMACS'} benchmark", params, ["benchmark.tpr"], steps)
+            try:
+                locks.enter_context(STORE.job_files_lock(created["id"]))
+                if STORE.get(created["id"])["status"] != "preparing":
+                    return STORE.get(created["id"])
+                shutil.copy2(source_tpr, STORE.job_dir(created["id"]) / "benchmark.tpr")
+                prepared = STORE.get(created["id"])
+                manifest = write_experiment_manifest(prepared)
+                STORE.update(
+                    created["id"],
+                    benchmark_source_job=job_id,
+                    experiment_manifest="experiment-manifest.json",
+                    input_hashes=manifest["input_files"],
+                )
+                if STORE.get(created["id"])["status"] != "preparing":
+                    return STORE.get(created["id"])
+                STORE.start(created["id"], steps)
+                return STORE.get(created["id"])
+            except Exception as exc:
+                if STORE.get(created["id"])["status"] == "cancelled":
+                    return STORE.get(created["id"])
+                STORE.update(created["id"], status="failed", error=f"Failed to prepare benchmark: {exc}")
+                raise
     except FileNotFoundError:
         raise HTTPException(status_code=404, detail="Job or TPR not found")
     except (OSError, RuntimeError, ValueError) as exc:
@@ -711,10 +852,11 @@ async def job_events(
     log_tail: Annotated[int, Query(ge=0, le=MAX_LOG_TAIL_BYTES)] = 0,
     jobs_offset: Annotated[int, Query(ge=0)] = 0,
     jobs_search: Annotated[str, Query(max_length=256)] = "",
+    jobs_project: Annotated[str, Query(max_length=80)] = "",
 ) -> StreamingResponse:
     if job_id:
         try:
-            STORE.get(job_id)
+            await run_in_threadpool(STORE.get, job_id)
         except FileNotFoundError:
             raise HTTPException(status_code=404, detail="Job not found")
 
@@ -725,18 +867,27 @@ async def job_events(
         first_log_read = True
         heartbeat_at = 0.0
         while not await request.is_disconnected():
-            page = _job_page(50, jobs_offset, jobs_search)
+            page = await run_in_threadpool(_job_page, 50, jobs_offset, jobs_search, jobs_project)
             signature = json.dumps(page, ensure_ascii=False, sort_keys=True)
             if signature != jobs_signature:
                 jobs_signature = signature
                 yield _sse_event("jobs", page)
             if job_id:
                 try:
-                    detail = STORE.get(job_id)
-                except FileNotFoundError:
+                    detail = await run_in_threadpool(get_job, job_id)
+                except (FileNotFoundError, HTTPException):
                     yield _sse_event("deleted", {"id": job_id})
                     return
-                signature = f"{detail.get('updated_at')}:{detail.get('status')}:{detail.get('step_index')}"
+                signature = json.dumps(
+                    [
+                        detail.get("updated_at"),
+                        detail.get("status"),
+                        detail.get("step_index"),
+                        detail.get("simulation_progress"),
+                        detail.get("progress_observation"),
+                    ],
+                    sort_keys=True,
+                )
                 if signature != job_signature:
                     job_signature = signature
                     yield _sse_event("job", detail)
@@ -746,13 +897,13 @@ async def job_events(
                     if log_tail > 0:
                         # Fresh panel open: jump to the tail instead of streaming
                         # a multi-MB log from byte 0 (which used to take minutes).
-                        size = log_path.stat().st_size if log_path.exists() else 0
+                        size = await run_in_threadpool(lambda: log_path.stat().st_size if log_path.exists() else 0)
                         current_offset = max(0, size - int(log_tail))
-                        chunk = read_log_chunk(log_path, current_offset, int(log_tail))
+                        chunk = await run_in_threadpool(read_log_chunk, log_path, current_offset, int(log_tail))
                     else:
-                        chunk = read_log_chunk(log_path, current_offset, SSE_LOG_CHUNK_BYTES)
+                        chunk = await run_in_threadpool(read_log_chunk, log_path, current_offset, SSE_LOG_CHUNK_BYTES)
                 else:
-                    chunk = read_log_chunk(log_path, current_offset, SSE_LOG_CHUNK_BYTES)
+                    chunk = await run_in_threadpool(read_log_chunk, log_path, current_offset, SSE_LOG_CHUNK_BYTES)
                 if chunk["reset"] or chunk["text"]:
                     current_offset = int(chunk["offset"])
                     yield _sse_event("log", chunk)
@@ -775,7 +926,7 @@ def job_files(job_id: str) -> dict:
         meta = STORE.get(job_id)
     except FileNotFoundError:
         raise HTTPException(status_code=404, detail="Job not found")
-    cache_key = f"{meta.get('status')}:{meta.get('step_index')}"
+    cache_key = f"{meta.get('status')}:{meta.get('step_index')}:{meta.get('storage_revision', 0)}"
     cached = FILE_LIST_CACHE.get(job_id)
     if cached and cached[0] == cache_key:
         return {"files": cached[1], "truncated": cached[2]}
@@ -859,3 +1010,6 @@ def download_file(job_id: str, path: str) -> FileResponse:
     if not target.exists() or not target.is_file():
         raise HTTPException(status_code=404, detail="File not found")
     return FileResponse(target, filename=target.name)
+
+
+app.include_router(product_router(lambda: STORE, current_settings, require_storage_origin, BASE_DIR))

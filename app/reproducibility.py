@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import tempfile
 from pathlib import Path
 
 from .diagnostics import gpu_information, host_information
@@ -17,9 +18,11 @@ def sha256_file(path: Path) -> str:
     return digest.hexdigest()
 
 
-def write_experiment_manifest(meta: dict) -> dict:
+def write_experiment_manifest(meta: dict, *, prepared_hashes: dict[str, dict] | None = None) -> dict:
     workdir = Path(meta["workdir"])
     selected_names = set(str(name) for name in meta.get("uploaded_files") or [])
+    if any(Path(name).name == "experiment-manifest.json" for name in selected_names):
+        raise ValueError("experiment-manifest.json is reserved for the generated experiment manifest.")
     selected_names.update(path.name for path in workdir.glob("*.mdp") if path.is_file())
     files = []
     for name in sorted(selected_names):
@@ -28,7 +31,15 @@ def write_experiment_manifest(meta: dict) -> dict:
         except ValueError:
             continue
         if path.is_file():
-            files.append({"path": name, "size": path.stat().st_size, "sha256": sha256_file(path)})
+            stat = path.stat()
+            prepared = (prepared_hashes or {}).get(name, {})
+            unchanged = (prepared.get("size"), prepared.get("mtime_ns"), prepared.get("inode")) == (
+                stat.st_size,
+                stat.st_mtime_ns,
+                stat.st_ino,
+            )
+            digest = prepared["sha256"] if unchanged else sha256_file(path)
+            files.append({"path": name, "size": stat.st_size, "sha256": digest})
     gmx_bin = str((meta.get("params") or {}).get("gmx_bin") or "gmx")
     manifest = {
         "schema_version": 1,
@@ -47,5 +58,15 @@ def write_experiment_manifest(meta: dict) -> dict:
         "gpu": gpu_information(),
     }
     target = ensure_under_root(workdir / "experiment-manifest.json", workdir)
-    target.write_text(json.dumps(manifest, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    temporary = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="w", encoding="utf-8", dir=workdir, prefix=".experiment-manifest-", suffix=".tmp", delete=False
+        ) as handle:
+            temporary = Path(handle.name)
+            handle.write(json.dumps(manifest, ensure_ascii=False, indent=2) + "\n")
+        temporary.replace(target)
+    finally:
+        if temporary is not None:
+            temporary.unlink(missing_ok=True)
     return manifest

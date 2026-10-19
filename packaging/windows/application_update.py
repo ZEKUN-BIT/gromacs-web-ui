@@ -17,6 +17,7 @@ ITEMS = (
     "app",
     "mdp",
     "scripts",
+    "docs",
     "requirements.txt",
     "run.sh",
     "desktop_service.py",

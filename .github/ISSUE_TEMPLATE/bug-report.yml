@@ -1,0 +1,52 @@
+name: 使用问题或错误
+description: 提供环境、复现步骤和已脱敏的诊断，帮助定位安装或计算问题。
+title: "[问题] "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        请先查看应用内“帮助与诊断”和仓库快速上手。
+        请勿附带私有结构、轨迹、完整本地路径、账号信息或未经检查的日志。诊断摘要需要你主动选择上传，软件不会自动发送。
+  - type: input
+    id: version
+    attributes:
+      label: 软件版本与安装来源
+      placeholder: 例如 0.2.7 / GitHub Release；源码运行请填写提交号
+    validations:
+      required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: 运行环境
+      description: 操作系统、WSL 版本（如适用）、CPU/GPU、GROMACS 版本，以及首次安装还是升级。
+    validations:
+      required: true
+  - type: dropdown
+    id: stage
+    attributes:
+      label: 发生阶段
+      options:
+        - 安装或环境配置
+        - 输入或参数准备
+        - 模拟运行或续跑
+        - 分析、图表或导出
+        - 界面、任务整理或其他
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: 复现步骤、预期结果和实际结果
+      description: 尽可能使用教学示例或可公开的小型输入，说明是否每次出现。
+    validations:
+      required: true
+  - type: textarea
+    id: diagnostics
+    attributes:
+      label: 错误信息与脱敏诊断
+      description: 贴出具体错误或已检查的诊断摘要；如正在计算，请勿为了复现而强行停止任务。
+  - type: textarea
+    id: recovery
+    attributes:
+      label: 已尝试的恢复方式
+      placeholder: 例如重新选择文件、修正电荷、重试失败步骤，以及结果是否改变。

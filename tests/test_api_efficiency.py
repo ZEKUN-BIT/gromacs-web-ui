@@ -16,14 +16,14 @@ class EfficientApiTests(unittest.TestCase):
         with patch.object(main, "STORE", store):
             payload = main.list_jobs(limit=50, offset=0)
         self.assertEqual(payload["jobs"], [])
-        store.list_page.assert_called_once_with(limit=50, offset=0)
+        store.list_page.assert_called_once_with(limit=50, offset=0, project="")
 
     def test_history_search_keeps_original_text_and_translates_chinese_status(self) -> None:
         store = Mock()
         store.list_page.return_value = {"jobs": [], "limit": 50, "offset": 50, "total": 0, "has_more": False}
         with patch.object(main, "STORE", store):
             payload = main.list_jobs(limit=50, offset=50, search=" 已完成 ")
-        store.list_page.assert_called_once_with(limit=50, offset=50, search="已完成", search_aliases=("completed",))
+        store.list_page.assert_called_once_with(limit=50, offset=50, search="已完成", search_aliases=("completed",), project="")
         self.assertEqual(payload["search"], "已完成")
 
     def test_history_search_can_match_multiple_workflow_labels(self) -> None:
@@ -31,7 +31,9 @@ class EfficientApiTests(unittest.TestCase):
         store.list_page.return_value = {"jobs": []}
         with patch.object(main, "STORE", store):
             main.list_jobs(search="MD")
-        store.list_page.assert_called_once_with(limit=50, offset=0, search="MD", search_aliases=("protein_md", "protein_ligand_md"))
+        store.list_page.assert_called_once_with(
+            limit=50, offset=0, search="MD", search_aliases=("protein_md", "protein_ligand_md"), project=""
+        )
 
     def test_log_endpoint_returns_incremental_offset_payload(self) -> None:
         with tempfile.TemporaryDirectory() as folder:

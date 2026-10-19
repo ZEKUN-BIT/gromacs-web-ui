@@ -7,6 +7,7 @@ import re
 import shlex
 import shutil
 import signal
+import sqlite3
 import subprocess
 import threading
 import time
@@ -22,6 +23,8 @@ PROGRESS_UPDATE_INTERVAL_SECONDS = 1.0
 
 MIN_FREE_DISK_BYTES = int(os.environ.get("GROMACS_WEB_MIN_FREE_DISK_BYTES", str(2 * 1024**3)))
 TERMINATION_GRACE_SECONDS = 5.0
+DISK_CHECK_INTERVAL_SECONDS = 5.0
+DISK_STOP_GRACE_SECONDS = 120.0
 
 
 def command_fingerprint(args: list[str]) -> str:
@@ -399,6 +402,96 @@ class WorkerEngine:
             usage["peak_rss_bytes"] = max(int(usage.get("peak_rss_bytes") or 0), peak_rss)
             usage["cpu_seconds"] = max(float(usage.get("cpu_seconds") or 0), cpu_seconds)
 
+    def _watch_disk(self, job_id: str, procs: list[subprocess.Popen], stop: threading.Event, state: dict) -> None:
+        """Give mdrun time to write a checkpoint after a verified SIGTERM."""
+        previous = None
+        while not stop.wait(DISK_CHECK_INTERVAL_SECONDS):
+            live = [proc for proc in procs if proc.poll() is None]
+            if not live:
+                return
+            for proc in live:
+                current = process_identity(proc.pid)
+                records = state.get("process_identities") or []
+                birth_fields = ("process_pid", "process_pgid", "process_started_ticks", "process_cwd")
+                if current and any(all(current[key] == record.get(key) for key in birth_fields) for record in records):
+                    state["process_identities"] = [record for record in records if record["process_pid"] != proc.pid] + [current]
+                try:
+                    self._refresh_owned_process(job_id, proc)
+                except (OSError, sqlite3.Error):
+                    pass
+            try:
+                previous = self._inspect_running_disk(job_id, state, previous)
+            except (OSError, sqlite3.Error) as error:
+                state["monitor_error"] = str(error)
+
+    def _inspect_running_disk(self, job_id: str, state: dict, previous: tuple | None) -> tuple:
+        workdir = self.store.job_dir(job_id)
+        usage = shutil.disk_usage(workdir)
+        now = time.monotonic()
+        growth = max(0, (previous[1] - usage.free) / (now - previous[0])) if previous and now > previous[0] else 0
+        low = usage.free < MIN_FREE_DISK_BYTES
+        warning = usage.free < 2 * MIN_FREE_DISK_BYTES
+        info = {
+            "free_bytes": usage.free,
+            "total_bytes": usage.total,
+            "growth_bytes_per_second": round(growth),
+            "seconds_to_limit": round(max(0, usage.free - MIN_FREE_DISK_BYTES) / growth) if growth else None,
+            "warning": warning,
+            "checked_at": utc_now(),
+        }
+        try:
+            self.store.update(job_id, disk_usage=info)
+            if warning and not state.get("warned"):
+                self.store.append_log(job_id, "\n[worker] 磁盘空间接近保护阈值，请释放空间。\n")
+                state["warned"] = True
+        except (OSError, sqlite3.Error):
+            # Stopping owned processes must still work if storage is full.
+            pass
+        if not low and "stopped_at" not in state:
+            return (now, usage.free)
+        state.setdefault("stopped_at", now)
+        state.setdefault("reason", "磁盘空间不足，已请求受控停止。释放空间后可检查 checkpoint 并续跑。")
+        signum = signal.SIGKILL if now - state["stopped_at"] >= DISK_STOP_GRACE_SECONDS else signal.SIGTERM
+        signal_key = "kill_sent" if signum == signal.SIGKILL else "term_sent"
+        if state.get(signal_key):
+            return (now, usage.free)
+        try:
+            meta = self.store.get(job_id)
+        except (OSError, sqlite3.Error):
+            meta = {"process_identities": state.get("process_identities") or []}
+        signalled = False
+        for identity in live_process_identities(meta, workdir):
+            if identity_matches(identity, workdir):
+                try:
+                    os.killpg(int(identity["process_pgid"]), signum)
+                    signalled = True
+                except ProcessLookupError:
+                    pass
+        state[signal_key] = signalled
+        return (now, usage.free)
+
+    def _finish_disk_stop(self, job_id: str, state: dict) -> bool:
+        if not state.get("reason"):
+            return False
+        meta = self.store.get(job_id)
+        checkpoint = None
+        step = self._current_step(meta)
+        args = (step or {}).get("args") or []
+        if "-cpi" in args and args.index("-cpi") + 1 < len(args):
+            candidate = ensure_under_root(self.store.job_dir(job_id) / args[args.index("-cpi") + 1], self.store.job_dir(job_id))
+            if candidate.is_file() and candidate.stat().st_size:
+                checkpoint = candidate.name
+        self.store.update(
+            job_id,
+            status="interrupted",
+            desired_action=None,
+            worker_id=None,
+            error=state["reason"],
+            disk_stop={"at": utc_now(), "checkpoint_file": checkpoint, "forced": bool(state.get("kill_sent"))},
+        )
+        self.store.append_log(job_id, f"\n[worker] {state['reason']} checkpoint: {checkpoint or '未找到，请检查任务文件'}\n")
+        return True
+
     def _record_progress(
         self,
         job_id: str,
@@ -540,8 +633,11 @@ class WorkerEngine:
         usage = {"peak_rss_bytes": 0, "cpu_seconds": 0.0}
         watcher = threading.Thread(target=self._watch_cancel, args=(job_id, proc, stop), daemon=True)
         resource_watcher = threading.Thread(target=self._watch_resources, args=(job_id, proc, stop, usage), daemon=True)
+        disk_state: dict = {"process_identities": [identity] if identity else []}
+        disk_watcher = threading.Thread(target=self._watch_disk, args=(job_id, [proc], stop, disk_state), daemon=True)
         watcher.start()
         resource_watcher.start()
+        disk_watcher.start()
         total_steps = _mdrun_total_steps(workdir, step.args, list(meta.get("commands") or []))
         dt_ps = _mdrun_mdp_number(workdir, step.args, list(meta.get("commands") or []), "dt")
         try:
@@ -569,6 +665,7 @@ class WorkerEngine:
             stop.set()
             watcher.join(timeout=1)
             resource_watcher.join(timeout=1)
+            disk_watcher.join(timeout=2)
         step_run.update(
             ended_at=utc_now(),
             duration_seconds=round(time.monotonic() - step_started_monotonic, 3),
@@ -578,6 +675,10 @@ class WorkerEngine:
             status="completed" if exit_code == 0 else "failed",
         )
         self.store.update(job_id, step_runs=step_runs)
+        if self._finish_disk_stop(job_id, disk_state):
+            step_run["status"] = "interrupted"
+            self.store.update(job_id, step_runs=step_runs)
+            return False
         if self._cancel_requested(job_id):
             step_run["status"] = "cancelled"
             self.store.update(job_id, step_runs=step_runs)
@@ -634,6 +735,8 @@ class WorkerEngine:
         stop = threading.Event()
         reader_error = threading.Event()
         cancel_watcher = None
+        disk_watcher = None
+        disk_state: dict = {}
         results: dict[int, dict] = {}
 
         def drain(proc: subprocess.Popen, offset: int) -> None:
@@ -687,8 +790,11 @@ class WorkerEngine:
                 if step.stdin_text and proc.stdin:
                     proc.stdin.write(step.stdin_text)
                     proc.stdin.close()
+            disk_state["process_identities"] = list(identities)
             cancel_watcher = threading.Thread(target=watch_cancel, daemon=True)
             cancel_watcher.start()
+            disk_watcher = threading.Thread(target=self._watch_disk, args=(job_id, procs, stop, disk_state), daemon=True)
+            disk_watcher.start()
             for reader in readers:
                 while True:
                     reader.join(timeout=0.05)
@@ -701,6 +807,8 @@ class WorkerEngine:
             stop.set()
             if cancel_watcher:
                 cancel_watcher.join(timeout=TERMINATION_GRACE_SECONDS + 2)
+            if disk_watcher:
+                disk_watcher.join(timeout=2)
             # Includes partially launched batches and reader/stdin failures.
             # Persisted identities also let a restarted worker stop the group.
             # Keep an independent local registry: a database failure must not
@@ -755,6 +863,11 @@ class WorkerEngine:
                 failed_title = failed_title or step.title
                 run.update(status="failed", ended_at=utc_now(), duration_seconds=duration, exit_code=info.get("exit_code"))
         self.store.update(job_id, step_runs=step_runs)
+        if self._finish_disk_stop(job_id, disk_state):
+            for run in step_runs[-len(steps) :]:
+                run["status"] = "interrupted"
+            self.store.update(job_id, step_runs=step_runs)
+            return False
         if cancelled:
             self.store.update(job_id, status="cancelled", desired_action=None, worker_id=None, current_step=None, cancelled_at=utc_now())
             return False
@@ -795,6 +908,7 @@ class WorkerEngine:
                 best = benchmark_results.get("best") or {}
                 if best.get("ns_per_day") is not None:
                     completion_updates["performance_ns_per_day"] = float(best["ns_per_day"])
+            self.store.append_log(job_id, "\n[worker] completed\n")
             self.store.update(
                 job_id,
                 status="completed",
@@ -806,7 +920,6 @@ class WorkerEngine:
                 progress_percent=100.0,
                 **completion_updates,
             )
-            self.store.append_log(job_id, "\n[worker] completed\n")
         except Exception as exc:
             message = f"Executable not found: {exc.filename}" if isinstance(exc, FileNotFoundError) else str(exc)
             try:
@@ -841,11 +954,17 @@ class WorkerEngine:
             return
         pid = int(current["process_pid"])
         self.store.append_log(job_id, f"\n[worker] re-adopted verified process pid={pid} pgid={current['process_pgid']}\n")
+        disk_state: dict = {"process_identities": registered_process_identities(current)}
+        disk_sample = None
         while identity_matches(self.store.get(job_id), workdir):
+            if disk_sample is None or time.monotonic() - disk_sample[0] >= DISK_CHECK_INTERVAL_SECONDS:
+                disk_sample = self._inspect_running_disk(job_id, disk_state, disk_sample)
             if self._cancel_requested(job_id):
                 self._cancel_job(self.store.get(job_id))
                 return
             time.sleep(1)
+        if self._finish_disk_stop(job_id, disk_state):
+            return
         current = self.store.get(job_id)
         args = [str(arg) for arg in current.get("process_args") or []]
         deffnm = args[args.index("-deffnm") + 1] if "-deffnm" in args and args.index("-deffnm") + 1 < len(args) else None

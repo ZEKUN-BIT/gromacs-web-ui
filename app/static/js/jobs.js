@@ -12,14 +12,15 @@ import {
   updateText,
   toast,
   api,
+  formatApiError,
   confirmDialog,
   confirmSubmitWarnings,
   replaySwapAnimation,
   showWorkspaceView,
   showDetailTab,
-} from "./core.js?v=20261006-026";
-import { renderPlots, resetPlotFilters, updatePlotOptions } from "./plots.js?v=20261006-026";
-import { renderResearch } from "./research.js?v=20261006-026";
+} from "./core.js?v=58a36b0fc94d0be8";
+import { renderPlots, resetPlotFilters, updatePlotOptions } from "./plots.js?v=58a36b0fc94d0be8";
+import { renderResearch } from "./research.js?v=58a36b0fc94d0be8";
 import {
   formObject,
   selectedUploadFiles,
@@ -28,13 +29,13 @@ import {
   friendlyPreviewError,
   friendlyJobActionError,
   refreshPreview,
-} from "./form.js?v=20261006-026";
+} from "./form.js?v=58a36b0fc94d0be8";
 
 /* ---------- 任务列表（签名对比，按需渲染 + 事件委托） ---------- */
 
 function computeJobsSignature() {
   return (
-    state.jobs.map((job) => `${job.id}:${job.status}:${job.step_index}:${job.name}`).join("|") +
+    state.jobs.map((job) => `${job.id}:${job.status}:${job.step_index}:${job.name}:${job.project}:${job.pinned}:${JSON.stringify(job.tags)}`).join("|") +
     `#${state.activeJobId}:${state.jobFilter}:${state.jobsOffset}:${state.jobsTotal}:${state.jobsHasMore}:${state.jobsBusy}`
   );
 }
@@ -75,6 +76,7 @@ export function renderJobs() {
         <div class="job-item ${isActive ? "active" : ""}" data-job-id="${escapeHtml(job.id)}" data-status="${escapeHtml(job.status)}">
           <button class="job-select" type="button" data-action="select" title="${escapeHtml(job.name)}&#10;结果目录：${escapeHtml(job.directory_name || job.id)}">
             <strong>${escapeHtml(job.name)}</strong>
+            ${job.project || job.pinned ? `<small class="job-project-label">${job.pinned ? "置顶 · " : ""}${escapeHtml(job.project || "未归入项目")}</small>` : ""}
             <span class="job-meta">
               <span class="badge ${escapeHtml(job.status)} ${state.changedJobIds.has(job.id) ? "status-changed" : ""}">${escapeHtml(STATUS_LABELS[job.status] || job.status)}</span>
               <small>${escapeHtml(WORKFLOW_LABELS[job.workflow] || job.workflow || "")}</small>
@@ -149,6 +151,10 @@ export function applyJobDetail(job) {
     progress_percent: job.progress_percent,
     simulation_progress: job.simulation_progress,
     performance_ns_per_day: job.performance_ns_per_day,
+    project: job.project,
+    tags: job.tags,
+    notes: job.notes,
+    pinned: job.pinned,
   });
   renderJobs();
   renderActiveJob();
@@ -159,7 +165,7 @@ let jobsRequestGeneration = 0;
 export async function refreshJobs() {
   const generation = ++jobsRequestGeneration;
   const search = state.jobFilter.trim();
-  const query = new URLSearchParams({ limit: "50", offset: String(state.jobsOffset), search });
+  const query = new URLSearchParams({ limit: "50", offset: String(state.jobsOffset), search, project: state.jobProject || "" });
   state.jobsBusy = true;
   renderJobs();
   try {
@@ -203,6 +209,7 @@ export async function changeJobsPage(direction) {
 /* ---------- 活动任务详情（日志/文件智能拉取） ---------- */
 
 function resetActiveJobPanel() {
+  window.dispatchEvent(new CustomEvent("job-rendered", { detail: null }));
   updateText(els.activeJobTitle, "未选择任务");
   updateText(els.terminalTitle, "run.log");
   updateText(els.jobStatus, "空闲");
@@ -215,6 +222,7 @@ function resetActiveJobPanel() {
   updateText(els.jobPerformance, "-");
   updateText(els.jobEta, "-");
   updateText(els.jobDirectory, "-");
+  updateText(document.querySelector("#progress-observation"), "");
   els.progress.dataset.state = "idle";
   els.progressFill.style.transform = "scaleX(0)";
   els.cancelJob.disabled = true;
@@ -258,6 +266,7 @@ export async function renderActiveJob() {
     resetActiveJobPanel();
     return;
   }
+  window.dispatchEvent(new CustomEvent("job-rendered", { detail: job }));
 
   updateText(els.activeJobTitle, job.name);
   document.querySelector("#analyze-job").hidden = job.status !== "completed" || Boolean(job.dry_run);
@@ -276,21 +285,34 @@ export async function renderActiveJob() {
   updateText(els.jobDirectory, job.workdir || job.directory_name || job.id);
   els.progress.dataset.state = job.status;
   const fallbackPercent = job.step_count ? Math.min(100, ((job.step_index || 0) / job.step_count) * 100) : 0;
-  const percent = Number.isFinite(Number(job.progress_percent)) ? Number(job.progress_percent) : fallbackPercent;
-  els.progressFill.style.transform = `scaleX(${percent / 100})`;
+  const unknown = job.status === "running" && (job.progress_percent == null || job.progress_observation?.state === "waiting");
+  const percent = job.progress_percent != null && Number.isFinite(Number(job.progress_percent)) ? Number(job.progress_percent) : fallbackPercent;
+  els.progress.dataset.unknown = String(unknown);
+  els.progressFill.style.transform = `scaleX(${unknown ? 0 : percent / 100})`;
   const simulation = job.simulation_progress || {};
   const simulationLabel = simulation.step != null ? ` · step ${simulation.step}${simulation.total_steps ? `/${simulation.total_steps}` : ""}` : "";
-  updateText(els.jobPercent, `${percent.toFixed(1)}%${simulationLabel}`);
+  const physicalTime = simulation.time_ps != null ? ` · ${(simulation.time_ps / 1000).toFixed(3)} ns` : "";
+  updateText(els.jobPercent, `${unknown ? "暂无法估算" : `${percent.toFixed(1)}%`}${physicalTime || simulationLabel}`);
+  const observation = document.querySelector("#progress-observation");
+  if (observation) {
+    observation.hidden = !job.progress_observation;
+    observation.dataset.state = job.progress_observation?.state || "";
+    const updated = job.progress_observation?.updated_at ? ` 最后更新 ${new Date(job.progress_observation.updated_at).toLocaleTimeString()}` : "";
+    observation.textContent = `${job.progress_observation?.message || ""}${updated}`;
+  }
   const currentRun = (job.step_runs || []).at(-1);
-  updateText(els.jobDuration, currentRun?.duration_seconds != null ? `${Number(currentRun.duration_seconds).toFixed(2)} s` : currentRun ? "运行中" : "-");
+  const startedAt = currentRun?.started_at || job.process_started_at || job.started_at;
+  const elapsed = startedAt && job.status === "running" ? Math.max(0, (Date.now() - new Date(startedAt).getTime()) / 60000) : null;
+  updateText(els.jobDuration, currentRun?.duration_seconds != null ? `${Number(currentRun.duration_seconds).toFixed(2)} s` : elapsed != null ? `${Math.floor(elapsed / 60)} 小时 ${Math.floor(elapsed % 60)} 分钟` : currentRun ? "运行中" : "-");
   updateText(els.jobPeakMemory, currentRun?.peak_rss_bytes ? formatSize(currentRun.peak_rss_bytes) : "-");
   const benchmarkBest = job.benchmark_results?.best;
-  const nsPerDay = Number(benchmarkBest?.ns_per_day ?? simulation.ns_per_day ?? job.performance_ns_per_day);
+  const rawSpeed = benchmarkBest?.ns_per_day ?? simulation.ns_per_day ?? job.performance_ns_per_day;
+  const nsPerDay = rawSpeed == null ? NaN : Number(rawSpeed);
   const performanceLabel = Number.isFinite(nsPerDay)
     ? `${nsPerDay.toFixed(2)} ns/day${benchmarkBest ? ` · 1×${benchmarkBest.ntomp}` : ""}`
     : "-";
   updateText(els.jobPerformance, performanceLabel);
-  const etaSeconds = Number(simulation.eta_seconds);
+  const etaSeconds = simulation.eta_seconds == null ? NaN : Number(simulation.eta_seconds);
   const etaText = Number.isFinite(etaSeconds)
     ? etaSeconds < 3600
       ? `${Math.ceil(etaSeconds / 60)} 分钟`
@@ -314,12 +336,19 @@ export async function renderActiveJob() {
   els.resumeJob.hidden = !job.can_resume_checkpoint;
   els.retryJob.hidden = job.status !== "failed";
   els.skipJob.hidden = !job.can_skip_failed_step;
-  els.jobError.hidden = !job.error;
+  const diskWarning = job.disk_usage?.warning ? `磁盘空间告警：剩余 ${formatSize(job.disk_usage.free_bytes)}，请及时清理空间。` : "";
+  els.jobError.hidden = !job.error && !diskWarning && !job.deletion_pending;
   const reason = job.skip_step_block_reason || "";
   const recoveryHint = job.status === "failed" && !job.can_skip_failed_step
     ? reason.includes("Parallel") ? "请重试整组并行分析。" : "此步骤不可跳过，请修正原因后重试。"
     : "";
-  els.jobError.textContent = [job.error, recoveryHint].filter(Boolean).join("\n");
+  els.jobError.textContent = [job.failure_advice?.message, job.failure_advice?.recovery, job.error, recoveryHint, diskWarning,
+    job.deletion_pending ? "任务文件删除未完成，请再次删除该任务以完成清理。" : ""].filter(Boolean).join("\n");
+  if (job.deletion_pending) {
+    els.resumeJob.hidden = true;
+    els.retryJob.hidden = true;
+    els.skipJob.hidden = true;
+  }
   const skipped = job.skipped_steps || [];
   els.skippedStepsNotice.hidden = !skipped.length;
   els.skippedStepsNotice.textContent = skipped.length
@@ -332,7 +361,7 @@ export async function renderActiveJob() {
 async function refreshJobArtifacts(job) {
   const tab = state.detailTab;
   const filters = state.plotFilters;
-  const key = `${job.id}:${job.status}:${job.step_index}:${job.exit_code ?? ""}:${tab}:${JSON.stringify(filters)}`;
+  const key = `${job.id}:${job.status}:${job.step_index}:${job.exit_code ?? ""}:${job.storage_revision || 0}:${tab}:${JSON.stringify(filters)}`;
   if (key === state.artifactKey) return;
   state.artifactKey = key;
 
@@ -511,6 +540,34 @@ function renderFiles(jobId, files, truncated = false) {
 
 /* ---------- 任务操作 ---------- */
 
+function uploadJob(data, button) {
+  return new Promise((resolve, reject) => {
+    const request = new XMLHttpRequest();
+    request.open("POST", "/api/jobs");
+    request.responseType = "json";
+    request.upload.addEventListener("progress", (event) => {
+      const label = event.lengthComputable && event.loaded < event.total
+        ? `正在上传 ${Math.round(event.loaded / event.total * 100)}%…` : "正在校验并准备输入…";
+      updateText(button.querySelector(".button-label"), label);
+    });
+    request.addEventListener("load", () => {
+      if (request.status >= 200 && request.status < 300) resolve(request.response);
+      else {
+        const problem = request.response?.problem;
+        const detail = problem?.code && !["operation_failed", "invalid_request"].includes(problem.code)
+          ? [problem.message, problem.recovery].filter(Boolean).join("；")
+          : request.response?.detail || request.statusText || "任务提交失败";
+        const error = new Error(formatApiError(detail));
+        error.status = request.status;
+        reject(error);
+      }
+    });
+    request.addEventListener("error", () => reject(new Error("连接中断，请检查服务，并先查看任务列表确认是否已提交。")));
+    request.addEventListener("abort", () => reject(new Error("上传已取消。")));
+    request.send(data);
+  });
+}
+
 export async function submitJob() {
   const button = els.submitJob;
   if (button.disabled) return;
@@ -547,9 +604,9 @@ export async function submitJob() {
   button.disabled = true;
   button.dataset.busy = "true";
   button.setAttribute("aria-busy", "true");
-  updateText(button.querySelector(".button-label"), "正在启动…");
+  updateText(button.querySelector(".button-label"), "正在上传…");
   try {
-    const job = await api("/api/jobs", { method: "POST", body: data });
+    const job = await uploadJob(data, button);
     state.activeJobId = job.id;
     state.activeJob = job;
     state.logKey = "";

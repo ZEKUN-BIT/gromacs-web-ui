@@ -4,12 +4,12 @@
 
 ## 给普通用户
 
-1. 运行 `GromacsConsole-0.2.6-windows-x64-setup.exe`，按向导安装。
+1. 运行 `GromacsConsole-0.2.7-windows-x64-setup.exe`，按向导安装。
 2. 双击桌面的 **GROMACS Console**。启动器首先检查发行版的 WSL1/2 类型、Ubuntu 版本与 CPU 架构。已有 x64 Ubuntu 24.04 WSL2 时，显示复用提示并跳过 WSL 和 Ubuntu 镜像下载；缺少兼容环境时才下载、校验官方 Ubuntu 镜像并直接导入 WSL2。需要重启时，重启后再次双击。
 3. 首次运行自动安装 Python 依赖、Open Babel、ACPYPE、配体参数化所需的 AmberTools 和 DSSP，并检测 GPU。兼容 NVIDIA GPU 使用预编译 CUDA 版 GROMACS 2026.3；其他机器复用或下载同版本预编译 CPU 版，无需源码编译。窗口实时显示系统依赖、计算环境、科学工具和程序更新四个阶段；期间不要关闭窗口。以后日常启动不重复安装。
 4. 页面打开后即可使用。关闭网页和启动窗口不会停止正在进行的模拟。完成或取消所有任务后，通过开始菜单的 **Stop Service** 停止后台服务。
 
-也可以解压 `GromacsConsole-0.2.6-windows-x64.zip` 到固定目录，双击 `Start.cmd`。不要只拿出其中一个脚本运行。安装包与 ZIP 使用相同的安装逻辑。
+也可以解压 `GromacsConsole-0.2.7-windows-x64.zip` 到固定目录，双击 `Start.cmd`。不要只拿出其中一个脚本运行。安装包与 ZIP 使用相同的安装逻辑。
 
 桌面、开始菜单与 `Start.cmd` 共用 PowerShell 入口：优先使用电脑上已经安装的 **x64 PowerShell 7**，找不到时使用 Windows 自带的 **Windows PowerShell 5.1**。WSL 基础组件的管理员权限步骤也使用同一选择规则。安装器不下载或捆绑 PowerShell，不要求用户先安装 PowerShell 7；诊断日志记录实际使用的版本与位数。
 
@@ -76,7 +76,7 @@
 
 ## 更新与卸载
 
-将 0.2.6 安装器安装到原 Windows 目录（或把新版 ZIP 全部文件覆盖到原目录），再运行 **Configure or Update**。启动器复用已经登记的兼容 WSL2 Ubuntu；匹配且验证通过的 GROMACS/GPU 运行库跳过下载，设置和模拟结果保留。日常启动也会比较应用内容校验值并自动更新。
+将 0.2.7 安装器安装到原 Windows 目录（或把新版 ZIP 全部文件覆盖到原目录），再运行 **Configure or Update**。启动器复用已经登记的兼容 WSL2 Ubuntu；匹配且验证通过的 GROMACS/GPU 运行库跳过下载，设置和模拟结果保留。日常启动也会比较应用内容校验值并自动更新。
 
 更新、停止与移除均先检查活动任务：准备中、排队、运行中，以及中断后等待执行、续跑、接管或取消的任务都会阻止操作。即使任务已标记失败、取消或完成，只要登记的任务进程仍存活，也会继续保护计算环境。检查兼容旧版单进程记录与并行进程列表，核对 PID、启动时钟、进程组、命令指纹和任务工作目录，只识别本应用目录内身份匹配的进程。请先在页面完成或取消任务，并等待进程实际停止。
 
@@ -120,7 +120,7 @@ WSL 程序版本与 Linux 发行版版本不同：WSL2 已安装，并不代表�
 
 如果新版仍失败，请根据原始 WSL 错误文字与退出码诊断。升级安装器不会删除已有 Ubuntu 或结果；不要使用 `wsl --unregister` 排错。
 
-若 0.1.2 出现 `/bin/bash: --install: command not found`、退出码 `127`，这是启动器给 WSL 选项添加引号导致的参数解析错误，也会让已有环境的检测失败。0.1.3 让普通选项直接传递，仅对含空格等内容的参数进行转义，并在日志中记录实际执行路径与参数。将当前 0.2.6 安装器安装到原目录（例如 `E:\GromacsConsole`），或将新版 ZIP 的全部文件覆盖到原目录，再启动即可；无需因此重启或重装 WSL。已有发行版、设置与模拟结果保留。
+若 0.1.2 出现 `/bin/bash: --install: command not found`、退出码 `127`，这是启动器给 WSL 选项添加引号导致的参数解析错误，也会让已有环境的检测失败。0.1.3 让普通选项直接传递，仅对含空格等内容的参数进行转义，并在日志中记录实际执行路径与参数。将当前 0.2.7 安装器安装到原目录（例如 `E:\GromacsConsole`），或将新版 ZIP 的全部文件覆盖到原目录，再启动即可；无需因此重启或重装 WSL。已有发行版、设置与模拟结果保留。
 
 0.1.4 改用原始 UTF-8/LF 字节向 Bash 传入安装脚本，避免 Windows PowerShell 管道附加 CRLF 被解析为额外的 Linux 命令。Linux 安装阶段的 stdout、stderr 和退出码现在也写入同一诊断日志，失败提示会标明发行版和执行用户。旧版本仅记录 `WSL operation failed (127)` 时，不能从日志确定具体缺失的命令。已有成功导入的 Ubuntu 24.04 会在重试时复用，无需再次下载或删除它。
 
@@ -132,7 +132,7 @@ WSL 程序版本与 Linux 发行版版本不同：WSL2 已安装，并不代表�
 
 若科学工具验证报 `sqm: error while loading shared libraries: liblapack.so.3`，是 0.2.2 及更早版本漏列 AmberTools 系统运行库导致的。0.2.3 自动检查并补装 LAPACK、BLAS 和 GNU Fortran 运行库，并在配体转换前检查 SQM 的实际启动状态，失败时保留原始库名和修复提示。对固定 ACPYPE wheel 的全部 53 个 ELF 已检查依赖；SQM 的同一个乙醇计算在隔离 Ubuntu 24.04 库中先复现缺库错误，再补库运行成功。开发主机已有这些库的验证不能替代该检查。
 
-安装当前 0.2.6 到原目录，再运行 **Configure or Update** 即可；已验证的相同 GPU 运行库会复用。也可先在 Windows PowerShell 手动补库，再用原快捷方式重新配置：
+安装当前 0.2.7 到原目录，再运行 **Configure or Update** 即可；已验证的相同 GPU 运行库会复用。也可先在 Windows PowerShell 手动补库，再用原快捷方式重新配置：
 
 ```powershell
 wsl -d GromacsConsole-Ubuntu-24.04 -u root --exec apt-get update
@@ -187,8 +187,8 @@ Windows 示例：
 python packaging/windows/build.py --makensis "C:\Program Files (x86)\NSIS\makensis.exe"
 ```
 
-产物位于 `dist/`，每个发布文件都有 `.sha256`。CPU 与 GPU GROMACS 均使用固定 conda-forge 预编译包，CUDA 运行库使用 NVIDIA 发布的 PyPI wheel；只解压所需文件，不安装 Conda。安装前均校验固定 SHA-256。应用载荷在 Windows 和 WSL 两侧核对 SHA-256。这些校验用于检测损坏，不替代发行者身份验证：公开分发前建议给 EXE 做代码签名；当前生成的安装器未签名，Windows 可能提示未知发布者。
+产物位于 `dist/`，EXE 与 ZIP 均有 `.sha256`。CPU 与 GPU GROMACS 均使用固定 conda-forge 预编译包，CUDA 运行库使用 NVIDIA 发布的 PyPI wheel；只解压所需文件，不安装 Conda。安装前均校验固定 SHA-256。应用载荷在 Windows 和 WSL 两侧核对 SHA-256。这些校验用于检测损坏，不替代发行者身份验证；默认未配置签名证书时生成的安装器未签名，Windows 可能提示未知发布者。实际签名状态记录在对应构建的 windows-signing.json 中。
 
-GitHub Actions 的 **Windows installer** 可手动执行，或在 `v*` 标签推送时生成 EXE/ZIP 并保存为 workflow artifact，不会自动发布。Linux CI 验证安装辅助模块、科学工具、服务和脚本语法；Windows CI 已配置 **Windows PowerShell 5.1 和 PowerShell 7 两个宿主**，两者均执行安装、控制台与宿主选择测试，包括生产脚本的 `[System.UInt64]` 变量声明。Windows 测试还要求真实 `wsl.exe --help` 正确识别 Windows 选项，并在该平台调用真实磁盘 API；发行版安装、复用、编码与提权宿主选择使用隔离模拟，不安装或启动发行版。
+GitHub Actions 的 **Windows installer** 可手动执行，或在 `v*` 标签推送时生成 EXE/ZIP 并保存为 workflow artifact。标签必须与 pyproject.toml 版本一致；标签构建额外准备 Draft Release，附安装包、校验和与签名状态，由维护者审核后正式发布。下载入口为[最新正式版本](https://github.com/ZEKUN-BIT/gromacs-web-ui/releases/latest)。可选代码签名与实机验收见[发布清单](RELEASE-CHECKLIST.md)。Linux CI 验证安装辅助模块、科学工具、服务和脚本语法；Windows CI 已配置 **Windows PowerShell 5.1 和 PowerShell 7 两个宿主**，两者均执行安装、控制台、宿主选择和未签名状态测试，包括生产脚本的 `[System.UInt64]` 变量声明。Windows 测试还要求真实 `wsl.exe --help` 正确识别 Windows 选项，并在该平台调用真实磁盘 API；发行版安装、复用、编码与提权宿主选择使用隔离模拟，不安装或启动发行版。
 
 开发主机上的 PowerShell 7、Linux 辅助程序及隔离测试已验证；**Windows PowerShell 5.1、实际 UAC 提权、完整 WSL2 安装/重启、Windows 浏览器转发和 GPU 硬件运行尚未在本机实测**。上述双宿主 CI 是已配置的验收流程，不能当作已经取得的 Windows 实机测试结果。完整安装与硬件加速仍需在相应 Windows 机器上验收。

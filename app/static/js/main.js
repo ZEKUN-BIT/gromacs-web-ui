@@ -11,7 +11,7 @@ import {
   closeConfirmDialog,
   showWorkspaceView,
   showDetailTab,
-} from "./core.js?v=20261006-026";
+} from "./core.js?v=58a36b0fc94d0be8";
 import {
   saveSettings,
   setMdpPanelExpanded,
@@ -33,7 +33,7 @@ import {
   refreshRowMode,
   applyHardwareRecommendation,
   updateResourceAdvice,
-} from "./form.js?v=20261006-026";
+} from "./form.js?v=58a36b0fc94d0be8";
 import {
   submitJob,
   cancelActiveJob,
@@ -56,11 +56,14 @@ import {
   renderActiveJob,
   changeJobsPage,
   forgetDeletedJob,
-} from "./jobs.js?v=20261006-026";
-import { bindDraftSaving, restoreDraft } from "./drafts.js?v=20261006-026";
-import { bindPlotControls } from "./plots.js?v=20261006-026";
-import { bindExistingAnalysis } from "./existing-analysis.js?v=20261006-026";
-import { bindResearch } from "./research.js?v=20261006-026";
+} from "./jobs.js?v=58a36b0fc94d0be8";
+import { bindDraftSaving, restoreDraft } from "./drafts.js?v=58a36b0fc94d0be8";
+import { bindPlotControls } from "./plots.js?v=58a36b0fc94d0be8";
+import { bindExistingAnalysis } from "./existing-analysis.js?v=58a36b0fc94d0be8";
+import { bindResearch } from "./research.js?v=58a36b0fc94d0be8";
+import { bindStorage } from "./storage.js?v=58a36b0fc94d0be8";
+import { prepareWorkspace, bindWorkspace, refreshComposerSummary } from "./workspace.js?v=58a36b0fc94d0be8";
+import { bindResultSummary } from "./result-summary.js?v=58a36b0fc94d0be8";
 
 function disconnectEventStream() {
   window.clearTimeout(state.reconnectTimer);
@@ -75,6 +78,7 @@ function connectEventStream() {
   const query = new URLSearchParams();
   query.set("jobs_offset", String(state.jobsOffset));
   query.set("jobs_search", state.jobFilter.trim());
+  query.set("jobs_project", state.jobProject || "");
   if (state.activeJobId) query.set("job_id", state.activeJobId);
   if (state.logOffset > 0) {
     // Resume where we left off after a reconnect.
@@ -115,6 +119,15 @@ function connectEventStream() {
 /* ---------- 事件绑定 ---------- */
 
 function bindUI() {
+  bindStorage();
+  document.addEventListener("storage-cleaned", async (event) => {
+    for (const jobId of event.detail.deleted_jobs) forgetDeletedJob(jobId);
+    state.artifactKey = "";
+    state.filesSignature = "";
+    await refreshJobs().catch((error) => toast(error.message, "error"));
+    await renderActiveJob().catch((error) => toast(error.message, "error"));
+    connectEventStream();
+  });
   bindExistingAnalysis();
   bindResearch();
   document.querySelectorAll("[data-workspace-view]").forEach((button) => {
@@ -190,7 +203,7 @@ function bindUI() {
     }
   });
   document.addEventListener("keydown", (event) => {
-    if (event.key === "Escape" && !els.submitWarning?.open && document.body.classList.contains("sidebar-open")) {
+    if (event.key === "Escape" && !document.querySelector("dialog[open]") && document.body.classList.contains("sidebar-open")) {
       document.body.classList.remove("sidebar-open");
       els.toggleSidebar.setAttribute("aria-expanded", "false");
       els.toggleSidebar.focus();
@@ -369,7 +382,11 @@ function bindUI() {
 
 async function boot() {
   cacheElements();
+  await prepareWorkspace();
   bindUI();
+  bindWorkspace();
+  bindResultSummary();
+  window.addEventListener("open-source-job", event => selectJob(event.detail));
   bindPlotControls(renderActiveJob);
   ensureDefaultLigandRow();
   restoreDraft();
@@ -381,6 +398,8 @@ async function boot() {
   await refreshHealth().catch((error) => toast(error.message, "error"));
   await refreshPreview();
   await refreshJobs().catch((error) => toast(error.message, "error"));
+  if (state.jobsTotal > 0) document.querySelector("#start-guide").open = false;
+  refreshComposerSummary();
   connectEventStream();
 }
 

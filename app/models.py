@@ -32,6 +32,9 @@ class SimulationParams(BaseModel):
 
     workflow: str = "protein_md"
     name: str = "GROMACS run"
+    project: str = Field(default="", max_length=80)
+    tags: list[Annotated[str, Field(min_length=1, max_length=40)]] = Field(default_factory=list, max_length=12)
+    notes: str = Field(default="", max_length=4000)
     dry_run: bool = False
     gmx_bin: str = "gmx"
     force_field: str = "amber19sb"

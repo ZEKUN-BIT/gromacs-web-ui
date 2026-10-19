@@ -1,11 +1,10 @@
 from __future__ import annotations
 
-import math
 import re
 from pathlib import Path
-from statistics import fmean
 
 from ..files import ensure_under_root
+from .xvg_stream import MAX_XVG_BYTES, XvgUnavailable, load_xvg
 
 XVG_SERIES_UNITS = {
     "potential": "Potential energy (kJ/mol)",
@@ -70,21 +69,20 @@ def xvg_plots(
     max_files: int = 12,
     max_plots: int = 24,
     max_points: int = 1200,
-    max_bytes: int = 5_000_000,
+    max_bytes: int = MAX_XVG_BYTES,
     *,
     replica: int | None = None,
     metric: str | None = None,
     begin_ns: float | None = None,
     end_ns: float | None = None,
 ) -> dict:
-    """Return bounded chart data for XVG analysis outputs in a job directory."""
+    """Return bounded, peak-preserving charts with statistics from all matching rows."""
     workdir = workdir.resolve()
+    max_points = max(2, min(max_points, 10_000))
+    max_bytes = min(max_bytes, MAX_XVG_BYTES)
     plots: list[dict] = []
-    title_pattern = re.compile(r'^@\s+title\s+"([^"]+)"')
-    axis_pattern = re.compile(r'^@\s+([xy])axis\s+label\s+"([^"]+)"')
-    legend_pattern = re.compile(r'^@\s+s(\d+)\s+legend\s+"([^"]+)"')
+    skipped_files: list[dict] = []
     all_paths = sorted(workdir.rglob("*.xvg"))
-    total = len(all_paths)
     replica_pattern = re.compile(r"_r(\d{2})(?=[-_.]|$)")
     catalog = []
     for path in all_paths:
@@ -96,7 +94,6 @@ def xvg_plots(
         for item in catalog
         if (replica is None or item["replica"] == replica) and (not metric or item["metric"] == metric)
     }
-    matching_files = len(selected)
     files_seen = 0
     truncated = False
     for path in all_paths:
@@ -104,118 +101,57 @@ def xvg_plots(
         if metadata is None:
             continue
         if files_seen >= max_files or len(plots) >= max_plots:
+            code = "file_limit" if files_seen >= max_files else "plot_limit"
+            skipped_files.append({**metadata, "code": code, "reason": "达到本次展示数量上限；请选择具体指标或副本。"})
             truncated = True
-            break
+            continue
         files_seen += 1
         try:
-            if path.is_symlink() or path.stat().st_size > max_bytes:
-                truncated = True
-                continue
+            if path.is_symlink():
+                raise XvgUnavailable("symlink", "为保护任务文件，符号链接不参与图表读取。")
             safe_path = ensure_under_root(path, workdir)
-            title = safe_path.stem.replace("_", " ").replace("-", " ")
-            x_label = "X"
-            y_label = "Value"
-            legends: dict[int, str] = {}
-            rows: list[list[float]] = []
-            for raw_line in safe_path.read_text(encoding="utf-8", errors="replace").splitlines():
-                line = raw_line.strip()
-                if match := title_pattern.match(line):
-                    title = match.group(1)
-                elif match := axis_pattern.match(line):
-                    if match.group(1) == "x":
-                        x_label = match.group(2)
-                    else:
-                        y_label = match.group(2)
-                elif match := legend_pattern.match(line):
-                    legends[int(match.group(1))] = match.group(2)
-                elif line and line[0] not in "#@&":
-                    try:
-                        values = [float(value) for value in line.split()]
-                    except ValueError:
-                        continue
-                    if len(values) >= 2 and all(math.isfinite(value) for value in values):
-                        rows.append(values)
-            if len(rows) < 2:
-                continue
-            original_count = len(rows)
-            time_match = re.fullmatch(r"Time\s*\((ps|ns|us|ms|s)\)", x_label, re.IGNORECASE)
-            time_unit = time_match.group(1).lower() if time_match else None
-            if begin_ns is not None or end_ns is not None:
-                if time_unit is None:
-                    continue
-                ns_factor = {"ps": 0.001, "ns": 1, "us": 1000, "ms": 1e6, "s": 1e9}[time_unit]
-                rows = [
-                    row
-                    for row in rows
-                    if (begin_ns is None or row[0] * ns_factor >= begin_ns) and (end_ns is None or row[0] * ns_factor <= end_ns)
-                ]
-                if len(rows) < 2:
-                    continue
-            width = min(min(len(row) for row in rows), 13)
-            stem = safe_path.stem.lower()
-            if any(token in stem for token in ("protein-rg", "protein-sasa", "protein-ligand-hbonds")):
-                width = min(width, 2)
-            if width < 2:
-                continue
-            stride = max(1, math.ceil(len(rows) / max_points))
-            sampled = [row[:width] for row in rows[::stride]]
-            if sampled[-1] != rows[-1][:width]:
-                sampled.append(rows[-1][:width])
-            path_name = safe_path.relative_to(workdir).as_posix()
-            source_title = _xvg_source_title(safe_path, title)
-            series_names = [legends.get(index, f"Series {index + 1}")[:120] for index in range(width - 1)]
-            if width == 2 and series_names == ["Series 1"] and "rmsd" in safe_path.stem.lower():
+            data = load_xvg(safe_path, max_points, max_bytes, begin_ns, end_ns)
+            source_title = _xvg_source_title(safe_path, data["title"])
+            series_names = [data["legends"].get(index, f"Series {index + 1}") for index in range(len(data["points"]))]
+            if series_names == ["Series 1"] and "rmsd" in safe_path.stem.lower():
                 series_names = ["RMSD"]
-            if width > 2:
-                for series_index, series_name in enumerate(series_names):
-                    if len(plots) >= max_plots:
-                        truncated = True
-                        break
-                    series_points = [[row[0], row[series_index + 1]] for row in sampled]
-                    values = [row[series_index + 1] for row in rows]
-                    plots.append(
-                        {
-                            "path": path_name,
-                            "category": _xvg_category(safe_path),
-                            "title": f"{source_title} — {series_name}"[:160],
-                            "x_label": x_label[:120],
-                            "y_label": _xvg_series_label(series_name, y_label)[:120],
-                            "series": [series_name],
-                            "points": series_points,
-                            "sample_count": len(rows),
-                            "original_count": original_count,
-                            "time_unit": time_unit,
-                            "mean": fmean(values),
-                            "last": values[-1],
-                        }
-                    )
-            else:
-                values = [row[1] for row in rows]
+            for index, (series_name, points) in enumerate(zip(series_names, data["points"])):
+                if len(plots) >= max_plots:
+                    skipped_files.append({**metadata, "code": "plot_limit", "reason": "此文件的部分序列达到展示数量上限；请下载完整 XVG。"})
+                    truncated = True
+                    break
+                split = len(series_names) > 1
                 plots.append(
                     {
-                        "path": path_name,
+                        **metadata,
                         "category": _xvg_category(safe_path),
-                        "title": source_title[:160],
-                        "x_label": x_label[:120],
-                        "y_label": y_label[:120],
-                        "series": series_names,
-                        "points": sampled,
-                        "sample_count": len(rows),
-                        "original_count": original_count,
-                        "time_unit": time_unit,
-                        "mean": fmean(values),
-                        "last": values[-1],
+                        "title": (f"{source_title} — {series_name}" if split else source_title)[:160],
+                        "x_label": data["x_label"],
+                        "y_label": (_xvg_series_label(series_name, data["y_label"]) if split else data["y_label"])[:120],
+                        "series": [series_name],
+                        "points": points,
+                        "sample_count": data["sample_count"],
+                        "original_count": data["original_count"],
+                        "time_unit": data["time_unit"],
+                        "mean": data["means"][index],
+                        "last": data["last"][index],
+                        "sampled_points": len(points),
+                        "sampling": ("minmax" if max_points >= 4 else "endpoints") if len(points) < data["sample_count"] else "all",
                     }
                 )
+        except XvgUnavailable as exc:
+            skipped_files.append({**metadata, "code": exc.code, "reason": exc.reason})
+            if exc.code not in {"insufficient_points", "non_time_axis"}:
+                truncated = True
         except (OSError, ValueError):
-            continue
-    for plot in plots:
-        plot.update(selected[plot["path"]])
+            skipped_files.append({**metadata, "code": "unreadable", "reason": "无法安全读取此文件；请检查文件权限和格式。"})
+            truncated = True
     return {
         "plots": plots,
         "truncated": truncated,
-        "total": total,
-        "matching_files": matching_files,
+        "total": len(all_paths),
+        "matching_files": len(selected),
         "metrics": sorted({item["metric"] for item in catalog}),
         "replicas": sorted({item["replica"] for item in catalog if item["replica"] is not None}),
+        "skipped_files": skipped_files,
     }

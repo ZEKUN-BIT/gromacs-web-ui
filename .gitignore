@@ -20,6 +20,7 @@ dist/
 *.trr
 *.edr
 *.xvg
+!/app/static/examples/files/*.xvg
 *.ndx
 *.log
 /posre*.itp

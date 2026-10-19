@@ -184,7 +184,23 @@ function Invoke-WslCommand([string[]]$Arguments, [switch]$ShowOutput, [string]$I
     $timedOut = $false
     $started = $false
     try {
-        [void]$process.Start()
+        if ($info.RedirectStandardInput) {
+            $utf8WithoutBom = New-Object Text.UTF8Encoding($false)
+            if ($info.PSObject.Properties['StandardInputEncoding']) {
+                $info.StandardInputEncoding = $utf8WithoutBom
+                [void]$process.Start()
+            } else {
+                # .NET Framework creates and auto-flushes the stdin writer with
+                # Console.InputEncoding inside Start(), before BaseStream is
+                # available. A BOM-capable console encoding otherwise prepends
+                # bytes to the Linux script even though our writes are raw UTF-8.
+                $consoleInputEncoding = [Console]::InputEncoding
+                try {
+                    [Console]::InputEncoding = $utf8WithoutBom
+                    [void]$process.Start()
+                } finally { [Console]::InputEncoding = $consoleInputEncoding }
+            }
+        } else { [void]$process.Start() }
         $started = $true
         foreach ($reader in @($process.StandardOutput, $process.StandardError)) {
             $buffer = New-Object byte[] 8192

@@ -162,6 +162,7 @@ def environment_diagnostics(base_dir: Path, settings: dict) -> dict:
         "ambertools": _probe(["antechamber", "-h"]),
         "open_babel": _probe([str(settings.get("obabel_bin") or "obabel"), "-V"]),
         "dssp": _probe(["mkdssp", "--version"]),
+        "gromacs_dssp": _probe([gmx_bin, "dssp", "-h"]),
         "gpu": gpu,
         "force_fields": {
             "available": bool(force_fields) or configured_force_field_available,

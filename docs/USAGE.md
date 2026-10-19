@@ -24,6 +24,8 @@ NVT 可在出现异常盒子振荡、极端初始压力或结构仍不稳定时�
 
 `POST /api/jobs` 使用 multipart：`params` 字段是与 `/api/preview` 共用的 JSON 参数模型，`files` 字段可重复附加上传文件。未知参数会返回 422，避免预览与实际任务的参数定义漂移。
 
+上传时界面显示传输进度，传输完成后显示输入校验与准备状态。上传文件会边写入边计算 SHA-256；复制文件、准备模板与实验清单在线程池中执行，实验清单成功保存后任务才会入队。`experiment-manifest.json`、`metadata.json`、`run.log` 是任务保留文件名，不能作为上传文件名。
+
 任务读取接口采用分层数据：`GET /api/jobs?limit=50&offset=0` 只返回分页摘要，`GET /api/jobs/{id}` 才返回完整参数和命令。浏览器通过 `GET /api/events` 的 SSE 流接收任务状态和增量日志；`GET /api/jobs/{id}/log?offset=N&limit=N` 也可供脚本按字节偏移增量读取。文件列表每个任务步骤只重新索引一次，最多返回 1000 项，并通过 `truncated` 标记是否截断。
 
 ## 任务执行架构
@@ -32,11 +34,13 @@ NVT 可在出现异常盒子振荡、极端初始压力或结构仍不稳定时�
 
 `run.sh` 同时启动一个 Web 进程和一个独立执行 worker。Web 进程只负责准备任务、查询 SQLite 状态库和写入取消/接管/续跑指令；worker 通过事务领取任务并启动 GROMACS。`--workers` 和 `WEB_CONCURRENCY` 只能为 `1`，执行 worker 也通过独占锁避免重复启动。
 
-任务状态保存在 `runtime/jobs.sqlite3`，旧的 `runtime/jobs/*/metadata.json` 会在首次启动时自动导入，并继续作为便于人工查看的镜像。运行进程会记录 PID、PGID、启动时间、`/proc` 启动时钟和命令 SHA-256 指纹；重启后的接管和取消只有在这些身份信息全部匹配时才会操作进程组。
+任务状态以 `runtime/jobs.sqlite3` 为准，旧的 `runtime/jobs/*/metadata.json` 仅在首次迁移时导入一次。之后不会持续重写 JSON；开发脚本需要人工可读快照时，可调用 `JobStore(runtime_root).export_metadata(job_id)`，导出文件不能替代数据库备份，也不会在重启时覆盖数据库中的状态。运行进程会记录 PID、PGID、启动时间、`/proc` 启动时钟和命令 SHA-256 指纹；重启后的接管和取消只有在这些身份信息全部匹配时才会操作进程组。
 
 每个任务还会记录各步骤的开始/结束时间、耗时、CPU 时间和峰值常驻内存。`mdrun` 输出可解析时，页面会结合模拟 step 与 MDP `nsteps` 展示进度。任务目录中的 `experiment-manifest.json` 包含 GROMACS 版本、命令、参数、输入与 MDP 的 SHA-256、力场来源和主机/GPU 信息，可用于复现实验。
 
 任务详情支持复制任务和结构化参数差异比较。复制只带原始上传、MDP 和任务内力场，不复制 XTC、EDR 等大输出。
+
+复制、已有结果分析、清理和删除通过跨进程文件锁协调；忙碌的任务会提示稍后重试。删除失败会保留待删除状态，允许重试，避免残留文件被误当成可运行任务。文件扫描与实际删除在 SQLite 写事务外执行，避免阻塞其他任务更新。
 
 如果 `gmx` 已经在 `PATH` 中：
 
@@ -76,6 +80,7 @@ GROMACS_WEB_MAX_UPLOAD_FILE_BYTES=5368709120
 GROMACS_WEB_MAX_UPLOAD_TOTAL_BYTES=21474836480
 GMX_NTMPI=1
 GMX_NTOMP=8
+GROMACS_WEB_MIN_FREE_DISK_BYTES=2147483648
 HOST=127.0.0.1
 PORT=8000
 ```
@@ -83,6 +88,8 @@ PORT=8000
 上传限制分别控制单次请求的文件数、单文件字节数和总字节数。默认值为 20 个文件、单文件 5 GiB、总计 20 GiB；请结合运行盘容量调整。
 
 服务重启后，worker 会检查保存的进程身份并处理任务恢复。运行中的任务可以在身份匹配时重新接管；没有匹配进程的任务会保留中断状态，供检查后续跑或重试。
+
+worker 在启动计算前和运行期间检查输出盘剩余空间，默认每 5 秒采样。低于停止阈值的两倍时显示预警，并记录空间消耗速度和预计触达阈值的时间；低于阈值时向身份匹配的计算进程发送 SIGTERM，等待 GROMACS 保存 checkpoint。任务随后记为中断，详情中显示停止原因和找到的 checkpoint；超过 120 秒仍未退出才会强制终止。默认阈值为 2 GiB，可通过上面的环境变量调整。该检查不能保证在突发大量写入或文件系统故障时一定生成 checkpoint。
 
 运行产生的任务数据默认保存在项目内的 `runtime/jobs/`。页面里的 `gmx binary` 设置会写入 `settings.json`。
 
@@ -212,6 +219,36 @@ System
 3. 开启 PCA/SHAM 前，先确认 `gmx covar` 和 `gmx anaeig` 的 group 选择符合体系。
 
 生产阶段自带的骨架 RMSD 在 nojump 后用 `trjconv -pbc cluster -center` 聚拢并居中，再明确使用 `gmx rms -fit rot+trans`。新流程只应用于新建任务，旧 XVG 需要重新分析。
+
+## 项目空间管理
+
+侧栏的“空间管理”显示磁盘剩余空间、运行目录总占用，以及输入、轨迹、checkpoint、拓扑参数、日志和报告等分类占用。可以按名称或 ID 筛选任务，选择任务后先点击“预览清理”，检查文件明细和预计回收量，再确认执行。预览有效期为 10 分钟；任务状态或待清理文件发生变化后，需要重新预览。
+
+常规清理仅面向已完成或已取消、没有待处理操作和活跃计算进程的任务，清理已标记为可丢弃的轨迹以及蛋白/复合物 MD 的 EM、NVT、NPT 中间轨迹及对应 GROMACS 备份。输入、拓扑、MDP、checkpoint、生产轨迹和分析报告默认保留；“同时清理日志”需要单独勾选。失败、中断、运行、排队及准备中的任务受保护，方便诊断和恢复。
+
+需要彻底移除旧结果时，显式选择“删除所选任务及全部结果”。这会一并删除任务记录、输入、checkpoint、生产轨迹和报告，确认前请先备份需要的数据。清理范围限定在本项目配置的运行目录，包含符号链接或特殊文件的任务会被跳过。源码、力场模板、Python 环境和项目缓存不属于此功能的清理范围。界面中的回收量按文件大小估算，实际磁盘可用空间还受文件系统、硬链接和其他程序写入影响。
+
+对应 API 为 `GET /api/storage`、`POST /api/storage/preview` 和 `POST /api/storage/cleanup`。执行请求需要携带预览返回的 `preview_token`，令牌仅可用一次，并绑定所选任务、清理选项及文件快照；状态或文件发生变化时会拒绝旧预览。浏览器的操作请求必须来自当前本机控制台。
+
+## 大文件与研究历史
+
+XVG 图表采用流式读取，单文件默认上限 512 MiB。降采样保留分箱中的极值，统计量基于筛选窗口内全部有效数据；返回的 `sampling` 说明采样规模，`skipped_files` 说明被跳过的文件及原因。缓存有数量和内存上限，并在文件变化后失效；图表只用于浏览，原始 XVG 仍可下载。
+
+研究比较页面通过 `GET /api/research/jobs?limit=50&offset=0&search=...` 分页搜索全部已索引报告，不再受普通任务列表最近 200 条的限制。翻页或搜索会保留已选择的参考和比较任务。
+
+## 回归验证
+
+```bash
+.venv/bin/pytest
+.venv/bin/ruff check app tests
+.venv/bin/ruff format --check app tests
+node scripts/check_frontend_state.mjs
+.venv/bin/python scripts/check_frontend_browser.py
+.venv/bin/python scripts/check_storage_browser.py
+GROMACS_INTEGRATION=1 .venv/bin/pytest -m gromacs_integration -v
+```
+
+浏览器检查需要安装 Playwright 和 Chromium，所有接口使用合成数据，不会提交真实模拟或清理真实任务。真实 GROMACS 检查默认跳过；启用后在临时目录中生成 64 原子的氩体系，验证 HTTP 提交、实际计算、RMSD/XVG API 与 checkpoint 续跑，缺少 GROMACS 时会失败。CI 覆盖 Python 3.11/3.12，并在手动、每周和标签发布时运行真实引擎检查。
 
 ## 安全边界
 

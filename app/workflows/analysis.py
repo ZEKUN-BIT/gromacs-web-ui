@@ -3,7 +3,9 @@ from __future__ import annotations
 import math
 from pathlib import Path
 
-from ..gromacs import Step, _as_gmx, _bool_param, _index_arg, _internal_step, _output_name_param, _selection_text, _str_param, slugify
+from ..steps import Step, internal_step
+from ..workflow_parameters import bool_param, output_name_param, slugify, str_param
+from .common import as_gmx, index_arg, selection_text
 
 
 def _analysis_window_args(params: dict, time_unit: str, *, include_begin: bool = True) -> list[str]:
@@ -26,23 +28,23 @@ def _analysis_window_args(params: dict, time_unit: str, *, include_begin: bool =
 
 def _postprocess_steps(params: dict, gmx_bin: str, tpr: str, trajectory: str, index_file: str = "") -> list[Step]:
     steps: list[Step] = []
-    centered = _output_name_param(params, "center_output", "md_0_100_center.xtc", "Centered trajectory output")
-    fitted = _output_name_param(params, "fit_output", "md_0_100_fit.xtc", "Fitted trajectory output")
-    start_pdb = _output_name_param(params, "start_pdb", "start.pdb", "First-frame output")
-    do_center = _bool_param(params, "do_center", True)
-    do_fit = _bool_param(params, "do_fit", True)
-    do_dump = _bool_param(params, "do_dump", True)
-    keep_centered = _bool_param(params, "keep_centered_trajectory", False)
-    keep_fitted = _bool_param(params, "keep_fitted_trajectory", False)
+    centered = output_name_param(params, "center_output", "md_0_100_center.xtc", "Centered trajectory output")
+    fitted = output_name_param(params, "fit_output", "md_0_100_fit.xtc", "Fitted trajectory output")
+    start_pdb = output_name_param(params, "start_pdb", "start.pdb", "First-frame output")
+    do_center = bool_param(params, "do_center", True)
+    do_fit = bool_param(params, "do_fit", True)
+    do_dump = bool_param(params, "do_dump", True)
+    keep_centered = bool_param(params, "keep_centered_trajectory", False)
+    keep_fitted = bool_param(params, "keep_fitted_trajectory", False)
 
     if do_center:
         # For homo-/hetero-multimers, -pbc mol only makes each chain whole
         # independently and can leave the two subunits on opposite sides of the
         # box. -pbc cluster keeps the whole solute (all chains + ligand) in one
         # periodic image, which is what intra-complex analyses need.
-        pbc_mode = _str_param(params, "pbc_mode", "cluster")
-        center_group = _str_param(params, "center_group", "Protein_Lig")
-        output_group = _str_param(params, "output_group", "System")
+        pbc_mode = str_param(params, "pbc_mode", "cluster")
+        center_group = str_param(params, "center_group", "Protein_Lig")
+        output_group = str_param(params, "output_group", "System")
         center_args = [
             "trjconv",
             "-s",
@@ -56,17 +58,17 @@ def _postprocess_steps(params: dict, gmx_bin: str, tpr: str, trajectory: str, in
             pbc_mode,
         ]
         if pbc_mode in {"mol", "res", "atom"}:
-            center_args.extend(["-ur", _str_param(params, "unitcell", "compact")])
-        center_args.extend(_index_arg(index_file))
+            center_args.extend(["-ur", str_param(params, "unitcell", "compact")])
+        center_args.extend(index_arg(index_file))
         if pbc_mode == "cluster":
             # cluster prompts for: clustering group, centering group, output group
-            center_stdin = _selection_text(center_group, center_group, output_group)
+            center_stdin = selection_text(center_group, center_group, output_group)
         else:
-            center_stdin = _selection_text(center_group, output_group)
+            center_stdin = selection_text(center_group, output_group)
         steps.append(
             Step(
                 "Center trajectory and repair PBC",
-                _as_gmx(gmx_bin, center_args),
+                as_gmx(gmx_bin, center_args),
                 stdin_text=center_stdin,
                 outputs=[centered],
             )
@@ -77,7 +79,7 @@ def _postprocess_steps(params: dict, gmx_bin: str, tpr: str, trajectory: str, in
         steps.append(
             Step(
                 "Fit trajectory",
-                _as_gmx(
+                as_gmx(
                     gmx_bin,
                     [
                         "trjconv",
@@ -88,11 +90,11 @@ def _postprocess_steps(params: dict, gmx_bin: str, tpr: str, trajectory: str, in
                         "-o",
                         fitted,
                         "-fit",
-                        _str_param(params, "fit_mode", "rot+trans"),
-                        *_index_arg(index_file),
+                        str_param(params, "fit_mode", "rot+trans"),
+                        *index_arg(index_file),
                     ],
                 ),
-                stdin_text=_selection_text(_str_param(params, "fit_group", "Backbone"), _str_param(params, "output_group", "System")),
+                stdin_text=selection_text(str_param(params, "fit_group", "Backbone"), str_param(params, "output_group", "System")),
                 outputs=[fitted],
             )
         )
@@ -102,7 +104,7 @@ def _postprocess_steps(params: dict, gmx_bin: str, tpr: str, trajectory: str, in
         steps.append(
             Step(
                 "Extract first frame",
-                _as_gmx(
+                as_gmx(
                     gmx_bin,
                     [
                         "trjconv",
@@ -113,11 +115,11 @@ def _postprocess_steps(params: dict, gmx_bin: str, tpr: str, trajectory: str, in
                         "-o",
                         start_pdb,
                         "-dump",
-                        _str_param(params, "dump_time", "0"),
-                        *_index_arg(index_file),
+                        str_param(params, "dump_time", "0"),
+                        *index_arg(index_file),
                     ],
                 ),
-                stdin_text=_selection_text(_str_param(params, "output_group", "System")),
+                stdin_text=selection_text(str_param(params, "output_group", "System")),
                 outputs=[start_pdb],
             )
         )
@@ -154,36 +156,34 @@ def _classic_complex_analysis_steps(
 ) -> list[Step]:
     """Core structural and protein-ligand analyses for a production trajectory."""
     prefix = Path(tpr).stem
-    index_args = _index_arg(index_file)
+    index_args = index_arg(index_file)
     complex_trajectory = f"{prefix}-complex-whole.xtc"
     complex_reference = f"{prefix}-complex-reference.gro"
     steps: list[Step] = [
         Step(
             "Keep protein and ligand in the same periodic image",
-            _as_gmx(gmx_bin, ["trjconv", "-s", tpr, "-f", trajectory, "-o", complex_trajectory, "-pbc", "cluster", "-center", *index_args]),
+            as_gmx(gmx_bin, ["trjconv", "-s", tpr, "-f", trajectory, "-o", complex_trajectory, "-pbc", "cluster", "-center", *index_args]),
             # Cluster and center on the solute while retaining the full system
             # in the output for compatibility with the full-system TPR.
-            stdin_text=_selection_text("Protein_Lig", "Protein_Lig", "System"),
+            stdin_text=selection_text("Protein_Lig", "Protein_Lig", "System"),
             outputs=[complex_trajectory],
         ),
         Step(
             "Extract protein-ligand RMSD reference",
-            _as_gmx(gmx_bin, ["trjconv", "-s", tpr, "-f", complex_trajectory, "-o", complex_reference, "-dump", "0", *index_args]),
-            stdin_text=_selection_text("System"),
+            as_gmx(gmx_bin, ["trjconv", "-s", tpr, "-f", complex_trajectory, "-o", complex_reference, "-dump", "0", *index_args]),
+            stdin_text=selection_text("System"),
             outputs=[complex_reference],
         ),
         Step(
             "Compute protein C-alpha RMSF",
-            _as_gmx(
-                gmx_bin, ["rmsf", "-s", tpr, "-f", complex_trajectory, "-o", f"{prefix}-protein-rmsf.xvg", "-res", "-fit", *index_args]
-            ),
-            stdin_text=_selection_text("C-alpha"),
+            as_gmx(gmx_bin, ["rmsf", "-s", tpr, "-f", complex_trajectory, "-o", f"{prefix}-protein-rmsf.xvg", "-res", "-fit", *index_args]),
+            stdin_text=selection_text("C-alpha"),
             outputs=[f"{prefix}-protein-rmsf.xvg"],
             parallel_group="complex-analysis",
         ),
         Step(
             "Compute protein radius of gyration",
-            _as_gmx(
+            as_gmx(
                 gmx_bin,
                 [
                     "gyrate",
@@ -205,7 +205,7 @@ def _classic_complex_analysis_steps(
         ),
         Step(
             "Compute protein solvent-accessible surface area",
-            _as_gmx(
+            as_gmx(
                 gmx_bin,
                 [
                     "sasa",
@@ -252,17 +252,17 @@ def _classic_complex_analysis_steps(
             [
                 Step(
                     rmsd_title,
-                    _as_gmx(
+                    as_gmx(
                         gmx_bin,
                         ["rms", "-s", tpr, "-f", complex_trajectory, "-o", rmsd_output, "-tu", "ns", "-fit", "rot+trans", *index_args],
                     ),
-                    stdin_text=_selection_text("Backbone", group),
+                    stdin_text=selection_text("Backbone", group),
                     outputs=[rmsd_output],
                     parallel_group="complex-analysis",
                 ),
                 Step(
                     mindist_title,
-                    _as_gmx(
+                    as_gmx(
                         gmx_bin,
                         [
                             "mindist",
@@ -282,13 +282,13 @@ def _classic_complex_analysis_steps(
                             *index_args,
                         ],
                     ),
-                    stdin_text=_selection_text(group, "Protein"),
+                    stdin_text=selection_text(group, "Protein"),
                     outputs=[mindist_output, contacts_output],
                     parallel_group="complex-analysis",
                 ),
                 Step(
                     hbond_title,
-                    _as_gmx(
+                    as_gmx(
                         gmx_bin,
                         [
                             "hbond-legacy",
@@ -303,7 +303,7 @@ def _classic_complex_analysis_steps(
                             *index_args,
                         ],
                     ),
-                    stdin_text=_selection_text(group, "Protein"),
+                    stdin_text=selection_text(group, "Protein"),
                     outputs=[hbond_output],
                     parallel_group="complex-analysis",
                 ),
@@ -326,17 +326,17 @@ def _analysis_steps(
     params: dict, gmx_bin: str, tpr: str, trajectory: str, index_file: str = "", *, trajectory_prepared: bool = False
 ) -> list[Step]:
     steps: list[Step] = []
-    time_unit = _str_param(params, "time_unit", "ns")
-    edr_file = _str_param(params, "edr_file", "md_0_100.edr")
-    fit_group = _str_param(params, "fit_group", "Backbone")
-    rmsd_group = _str_param(params, "rmsd_group", "Backbone")
-    do_pca = _bool_param(params, "do_pca", False)
-    do_sham = _bool_param(params, "do_sham", False)
+    time_unit = str_param(params, "time_unit", "ns")
+    edr_file = str_param(params, "edr_file", "md_0_100.edr")
+    fit_group = str_param(params, "fit_group", "Backbone")
+    rmsd_group = str_param(params, "rmsd_group", "Backbone")
+    do_pca = bool_param(params, "do_pca", False)
+    do_sham = bool_param(params, "do_sham", False)
     if do_sham:
         do_pca = True
-    do_rmsd = _bool_param(params, "do_rmsd", True)
+    do_rmsd = bool_param(params, "do_rmsd", True)
     needs_structure = (
-        any(_bool_param(params, key, default) for key, default in (("do_rg", True), ("do_dssp", False), ("do_hbond", True))) or do_pca
+        any(bool_param(params, key, default) for key, default in (("do_rg", True), ("do_dssp", False), ("do_hbond", True))) or do_pca
     )
     # These trajectories keep the original box orientation. Rigid-body fits
     # belong inside structural analyses, never in contact/H-bond inputs.
@@ -344,10 +344,10 @@ def _analysis_steps(
     intermediates: list[str] = []
 
     def cluster_step(source: str, output: str, title: str) -> Step:
-        group = _str_param(params, "center_group", "Protein")
+        group = str_param(params, "center_group", "Protein")
         return Step(
             title,
-            _as_gmx(
+            as_gmx(
                 gmx_bin,
                 [
                     "trjconv",
@@ -360,31 +360,31 @@ def _analysis_steps(
                     "-pbc",
                     "cluster",
                     "-center",
-                    *_index_arg(index_file),
+                    *index_arg(index_file),
                     *_analysis_window_args(params, "ps"),
                 ],
             ),
-            stdin_text=_selection_text(group, group, "System"),
+            stdin_text=selection_text(group, group, "System"),
             outputs=[output],
         )
 
-    if _bool_param(params, "do_energy", True):
-        energy_output = _output_name_param(params, "energy_output", "potential.xvg", "Energy output")
+    if bool_param(params, "do_energy", True):
+        energy_output = output_name_param(params, "energy_output", "potential.xvg", "Energy output")
         steps.append(
             Step(
                 "Extract energy term",
-                _as_gmx(gmx_bin, ["energy", "-f", edr_file, "-o", energy_output]),
-                stdin_text=_selection_text(_str_param(params, "energy_terms", "Potential"), "0"),
+                as_gmx(gmx_bin, ["energy", "-f", edr_file, "-o", energy_output]),
+                stdin_text=selection_text(str_param(params, "energy_terms", "Potential"), "0"),
                 outputs=[energy_output],
             )
         )
 
     if do_rmsd:
-        rmsd_output = _output_name_param(params, "rmsd_output", "rmsd.xvg", "RMSD output")
+        rmsd_output = output_name_param(params, "rmsd_output", "rmsd.xvg", "RMSD output")
         unwrapped_trajectory = f"{Path(rmsd_output).stem}-nojump.xtc"
         rmsd_whole_trajectory = f"{Path(rmsd_output).stem}-whole.xtc"
         rmsd_input = (
-            _output_name_param(params, "rmsd_trajectory_file", trajectory, "RMSD trajectory input")
+            output_name_param(params, "rmsd_trajectory_file", trajectory, "RMSD trajectory input")
             if "rmsd_trajectory_file" in params
             else trajectory
         )
@@ -396,7 +396,7 @@ def _analysis_steps(
         steps.append(
             Step(
                 "Unwrap trajectory for RMSD",
-                _as_gmx(
+                as_gmx(
                     gmx_bin,
                     [
                         "trjconv",
@@ -408,20 +408,20 @@ def _analysis_steps(
                         unwrapped_trajectory,
                         "-pbc",
                         "nojump",
-                        *_index_arg(index_file),
+                        *index_arg(index_file),
                         *_analysis_window_args(params, "ps", include_begin=False),
                     ],
                 ),
-                stdin_text=_selection_text("System"),
+                stdin_text=selection_text("System"),
                 outputs=[unwrapped_trajectory],
             )
         )
         steps.append(cluster_step(unwrapped_trajectory, rmsd_whole_trajectory, "Cluster and center trajectory for RMSD"))
-        steps.append(_internal_step("Remove intermediate unwrapped trajectory", "remove_files", {"paths": [unwrapped_trajectory]}))
+        steps.append(internal_step("Remove intermediate unwrapped trajectory", "remove_files", {"paths": [unwrapped_trajectory]}))
         steps.append(
             Step(
                 "Compute RMSD",
-                _as_gmx(
+                as_gmx(
                     gmx_bin,
                     [
                         "rms",
@@ -435,16 +435,16 @@ def _analysis_steps(
                         time_unit,
                         "-fit",
                         "rot+trans",
-                        *_index_arg(index_file),
+                        *index_arg(index_file),
                         *_analysis_window_args(params, time_unit),
                     ],
                 ),
-                stdin_text=_selection_text(fit_group, rmsd_group),
+                stdin_text=selection_text(fit_group, rmsd_group),
                 outputs=[rmsd_output],
             )
         )
         if trajectory_prepared or not needs_structure or rmsd_input != trajectory:
-            steps.append(_internal_step("Remove intermediate RMSD trajectory", "remove_files", {"paths": [rmsd_whole_trajectory]}))
+            steps.append(internal_step("Remove intermediate RMSD trajectory", "remove_files", {"paths": [rmsd_whole_trajectory]}))
         else:
             # Reuse the full-system, unrotated RMSD preparation for the other
             # metrics instead of writing another large trajectory.
@@ -455,12 +455,12 @@ def _analysis_steps(
         steps.append(cluster_step(trajectory, prepared_trajectory, "Prepare whole-system trajectory for analysis"))
         intermediates.append(prepared_trajectory)
 
-    if _bool_param(params, "do_rg", True):
-        rg_output = _output_name_param(params, "rg_output", "gyrate.xvg", "Radius of gyration output")
+    if bool_param(params, "do_rg", True):
+        rg_output = output_name_param(params, "rg_output", "gyrate.xvg", "Radius of gyration output")
         steps.append(
             Step(
                 "Compute radius of gyration",
-                _as_gmx(
+                as_gmx(
                     gmx_bin,
                     [
                         "gyrate",
@@ -471,23 +471,23 @@ def _analysis_steps(
                         "-o",
                         rg_output,
                         "-sel",
-                        _str_param(params, "rg_selection", "Protein"),
+                        str_param(params, "rg_selection", "Protein"),
                         "-tu",
                         time_unit,
-                        *_index_arg(index_file),
+                        *index_arg(index_file),
                     ],
                 ),
                 outputs=[rg_output],
             )
         )
 
-    if _bool_param(params, "do_dssp", False):
-        dssp_output = _output_name_param(params, "dssp_output", "dssp.dat", "DSSP output")
-        dssp_num_output = _output_name_param(params, "dssp_num_output", "dssp_num.xvg", "DSSP number output")
+    if bool_param(params, "do_dssp", False):
+        dssp_output = output_name_param(params, "dssp_output", "dssp.dat", "DSSP output")
+        dssp_num_output = output_name_param(params, "dssp_num_output", "dssp_num.xvg", "DSSP number output")
         steps.append(
             Step(
                 "Assign secondary structure with DSSP",
-                _as_gmx(
+                as_gmx(
                     gmx_bin,
                     [
                         "dssp",
@@ -501,28 +501,28 @@ def _analysis_steps(
                         dssp_output,
                         "-num",
                         dssp_num_output,
-                        *_index_arg(index_file),
+                        *index_arg(index_file),
                     ],
                 ),
                 outputs=[dssp_output, dssp_num_output],
             )
         )
 
-    if _bool_param(params, "do_hbond", True):
+    if bool_param(params, "do_hbond", True):
         hbond_pairs = [
             (
                 "mainchain",
-                _str_param(params, "hbond_main_a", "MainChain+H"),
-                _str_param(params, "hbond_main_b", "MainChain+H"),
+                str_param(params, "hbond_main_a", "MainChain+H"),
+                str_param(params, "hbond_main_b", "MainChain+H"),
                 "hbnum_mainchain.xvg",
             ),
             (
                 "sidechain",
-                _str_param(params, "hbond_side_a", "SideChain"),
-                _str_param(params, "hbond_side_b", "SideChain"),
+                str_param(params, "hbond_side_a", "SideChain"),
+                str_param(params, "hbond_side_b", "SideChain"),
                 "hbnum_sidechain.xvg",
             ),
-            ("protein-water", _str_param(params, "hbond_pw_a", "Protein"), _str_param(params, "hbond_pw_b", "Water"), "hbnum_prot_wat.xvg"),
+            ("protein-water", str_param(params, "hbond_pw_a", "Protein"), str_param(params, "hbond_pw_b", "Water"), "hbnum_prot_wat.xvg"),
         ]
         for label, group_a, group_b, output in hbond_pairs:
             if not group_a or not group_b:
@@ -530,11 +530,11 @@ def _analysis_steps(
             steps.append(
                 Step(
                     f"Compute hydrogen bonds: {label}",
-                    _as_gmx(
+                    as_gmx(
                         gmx_bin,
-                        ["hbond-legacy", "-s", tpr, "-f", prepared_trajectory, "-tu", time_unit, "-num", output, *_index_arg(index_file)],
+                        ["hbond-legacy", "-s", tpr, "-f", prepared_trajectory, "-tu", time_unit, "-num", output, *index_arg(index_file)],
                     ),
-                    stdin_text=_selection_text(group_a, group_b),
+                    stdin_text=selection_text(group_a, group_b),
                     outputs=[output],
                 )
             )
@@ -544,7 +544,7 @@ def _analysis_steps(
             [
                 Step(
                     "Build covariance matrix",
-                    _as_gmx(
+                    as_gmx(
                         gmx_bin,
                         [
                             "covar",
@@ -559,17 +559,15 @@ def _analysis_steps(
                             "eigenvectors.trr",
                             "-xpma",
                             "covapic.xpm",
-                            *_index_arg(index_file),
+                            *index_arg(index_file),
                         ],
                     ),
-                    stdin_text=_selection_text(
-                        _str_param(params, "pca_align_group", "C-alpha"), _str_param(params, "pca_group", "C-alpha")
-                    ),
+                    stdin_text=selection_text(str_param(params, "pca_align_group", "C-alpha"), str_param(params, "pca_group", "C-alpha")),
                     outputs=["eigenvalues.xvg", "eigenvectors.trr", "covapic.xpm"],
                 ),
                 Step(
                     "Project PC1",
-                    _as_gmx(
+                    as_gmx(
                         gmx_bin,
                         [
                             "anaeig",
@@ -585,15 +583,15 @@ def _analysis_steps(
                             "1",
                             "-proj",
                             "pc1.xvg",
-                            *_index_arg(index_file),
+                            *index_arg(index_file),
                         ],
                     ),
-                    stdin_text=_selection_text(_str_param(params, "pca_group", "C-alpha")),
+                    stdin_text=selection_text(str_param(params, "pca_group", "C-alpha")),
                     outputs=["pc1.xvg"],
                 ),
                 Step(
                     "Project PC2",
-                    _as_gmx(
+                    as_gmx(
                         gmx_bin,
                         [
                             "anaeig",
@@ -609,13 +607,13 @@ def _analysis_steps(
                             "2",
                             "-proj",
                             "pc2.xvg",
-                            *_index_arg(index_file),
+                            *index_arg(index_file),
                         ],
                     ),
-                    stdin_text=_selection_text(_str_param(params, "pca_group", "C-alpha")),
+                    stdin_text=selection_text(str_param(params, "pca_group", "C-alpha")),
                     outputs=["pc2.xvg"],
                 ),
-                _internal_step(
+                internal_step(
                     "Combine PC projections",
                     "combine_pc_projection",
                     {"pc1": "pc1.xvg", "pc2": "pc2.xvg", "output": "pc12_sham_1.xvg"},
@@ -628,14 +626,14 @@ def _analysis_steps(
         steps.append(
             Step(
                 "Build Gibbs landscape with SHAM",
-                _as_gmx(
+                as_gmx(
                     gmx_bin,
                     [
                         "sham",
                         "-tsham",
-                        _str_param(params, "sham_temp", "310"),
+                        str_param(params, "sham_temp", "310"),
                         "-nlevels",
-                        _str_param(params, "sham_levels", "100"),
+                        str_param(params, "sham_levels", "100"),
                         "-f",
                         "pc12_sham_1.xvg",
                         "-ls",
@@ -653,5 +651,5 @@ def _analysis_steps(
         )
 
     if intermediates:
-        steps.append(_internal_step("Remove intermediate analysis trajectory", "remove_files", {"paths": intermediates}))
+        steps.append(internal_step("Remove intermediate analysis trajectory", "remove_files", {"paths": intermediates}))
     return steps

@@ -24,6 +24,8 @@ INPUT_SUFFIXES = {
 
 def analysis_source(store: JobStore, job_id: str) -> dict:
     source = store.get(job_id)
+    if source.get("maintenance_pending") or source.get("deletion_pending"):
+        raise RuntimeError("Task maintenance or deletion is pending; finish it before creating an analysis.")
     if source["status"] != "completed" or source.get("dry_run"):
         raise ValueError("仅可使用已完成的正式任务结果创建分析。")
     return source
@@ -45,6 +47,11 @@ def source_file(root: Path, name: str, suffixes: set[str]) -> Path:
 
 
 def analysis_inputs(store: JobStore, job_id: str) -> dict:
+    with store.job_files_lock(job_id):
+        return _analysis_inputs(store, job_id)
+
+
+def _analysis_inputs(store: JobStore, job_id: str) -> dict:
     source = analysis_source(store, job_id)
     root = store.job_dir(job_id)
     listed = relative_files(root, max_files=1001)
@@ -91,6 +98,13 @@ def require_analysis_disk_space(destination: Path, budget: dict) -> None:
 
 
 def create_existing_analysis(store: JobStore, job_id: str, request: ExistingAnalysisRequest, settings: dict) -> dict:
+    # Keep source validation and every read/copy in the same reservation so
+    # cleanup cannot remove a selected trajectory before staging finishes.
+    with store.job_files_lock(job_id):
+        return _create_existing_analysis(store, job_id, request, settings)
+
+
+def _create_existing_analysis(store: JobStore, job_id: str, request: ExistingAnalysisRequest, settings: dict) -> dict:
     source = analysis_source(store, job_id)
     if not any(getattr(request, key) for key in ("do_rmsd", "do_rg", "do_energy", "do_dssp", "do_hbond", "do_pca", "do_research")):
         raise ValueError("请至少选择一项分析指标。")
@@ -210,57 +224,72 @@ def create_existing_analysis(store: JobStore, job_id: str, request: ExistingAnal
     require_analysis_disk_space(store.jobs_root, disk_budget)
     created = store.create(name, params, uploaded, steps)
     target = store.job_dir(created["id"])
-    try:
-        # Another task may consume space between preflight and staging.
-        require_analysis_disk_space(target, disk_budget)
-        for item in mapping:
-            shutil.copy2(selected[item["role"]], target / item["path"])
-        if research_index is not None:
-            (target / "research-index.ndx").write_text(research_index, encoding="utf-8")
-        protocol = dict((source.get("analysis_source") or {}).get("protocol") or {})
-        if not protocol:
-            protocol = {key: (source.get("params") or {}).get(key) for key in ("force_field", "water_model", "ion_concentration")}
-            for mdp_name in (Path(request.tpr_file).with_suffix(".mdp").as_posix(), "md.mdp"):
-                try:
-                    mdp = source_file(root, mdp_name, {".mdp"})
-                    if mdp.stat().st_size > 262144:
+    with store.job_files_lock(created["id"]):
+        # Cancellation/deletion can win the brief gap after create(). Check
+        # before touching files; the reservation then prevents directory removal.
+        if store.get(created["id"])["status"] != "preparing":
+            raise RuntimeError("Analysis preparation was cancelled before inputs were ready.")
+        try:
+            # Another task may consume space between preflight and staging.
+            require_analysis_disk_space(target, disk_budget)
+            for item in mapping:
+                shutil.copy2(selected[item["role"]], target / item["path"])
+            if research_index is not None:
+                (target / "research-index.ndx").write_text(research_index, encoding="utf-8")
+            if store.get(created["id"])["status"] != "preparing":
+                raise RuntimeError("Analysis preparation was cancelled before inputs were ready.")
+            protocol = dict((source.get("analysis_source") or {}).get("protocol") or {})
+            if not protocol:
+                protocol = {key: (source.get("params") or {}).get(key) for key in ("force_field", "water_model", "ion_concentration")}
+                for mdp_name in (Path(request.tpr_file).with_suffix(".mdp").as_posix(), "md.mdp"):
+                    try:
+                        mdp = source_file(root, mdp_name, {".mdp"})
+                        if mdp.stat().st_size > 262144:
+                            continue
+                        values = _read_mdp_values(mdp.read_text(encoding="utf-8"))
+                    except (OSError, ValueError):
                         continue
-                    values = _read_mdp_values(mdp.read_text(encoding="utf-8"))
-                except (OSError, ValueError):
-                    continue
-                protocol.update({key: values.get(key) for key in ("ref_t", "ref_p", "dt", "tcoupl", "pcoupl", "constraints")})
-                break
-        provenance = {
-            "job_id": job_id,
-            "name": source["name"],
-            "files": mapping,
-            "storage": "independent_copy",
-            "protocol": protocol,
-            "window_ns": [request.begin_ns, request.end_ns],
-            "storage_estimate": disk_budget,
-        }
-        if request.do_rmsd:
-            provenance["rmsd_reference"] = {
-                "source": "selected TPR coordinates",
-                "fit_group": request.fit_group,
-                "rmsd_group": request.rmsd_group,
-                "pbc": "nojump from source trajectory start, then cluster+center; time window applied after nojump",
-                "center_group": params["center_group"],
-                "fit": "rot+trans within gmx rms",
+                    protocol.update({key: values.get(key) for key in ("ref_t", "ref_p", "dt", "tcoupl", "pcoupl", "constraints")})
+                    break
+            provenance = {
+                "job_id": job_id,
+                "name": source["name"],
+                "files": mapping,
+                "storage": "independent_copy",
+                "protocol": protocol,
+                "window_ns": [request.begin_ns, request.end_ns],
+                "storage_estimate": disk_budget,
             }
-        prepared = store.update(created["id"], analysis_source=provenance)
-        manifest = write_experiment_manifest(prepared)
-        store.update(created["id"], experiment_manifest="experiment-manifest.json", input_hashes=manifest["input_files"])
-        store.append_log(created["id"], f"[web] analysis inputs copied from {job_id}\n")
-        store.start(created["id"], steps, dry_run=request.dry_run)
-    except Exception:
-        # A partial copy must never become runnable through the retry action.
-        # This preparing task has no process to cancel; leave no claimable action.
-        store.update(created["id"], status="cancelled", error="分析输入准备失败，未加入运行队列。", desired_action=None)
-        for filename in uploaded:
-            try:
-                (target / filename).unlink(missing_ok=True)
-            except OSError:
-                store.append_log(created["id"], "[web] could not remove partial analysis input\n")
-        raise
-    return store.get(created["id"])
+            if request.do_rmsd:
+                provenance["rmsd_reference"] = {
+                    "source": "selected TPR coordinates",
+                    "fit_group": request.fit_group,
+                    "rmsd_group": request.rmsd_group,
+                    "pbc": "nojump from source trajectory start, then cluster+center; time window applied after nojump",
+                    "center_group": params["center_group"],
+                    "fit": "rot+trans within gmx rms",
+                }
+            prepared = store.update(created["id"], analysis_source=provenance)
+            manifest = write_experiment_manifest(prepared)
+            store.update(created["id"], experiment_manifest="experiment-manifest.json", input_hashes=manifest["input_files"])
+            store.append_log(created["id"], f"[web] analysis inputs copied from {job_id}\n")
+            if store.get(created["id"])["status"] != "preparing":
+                raise RuntimeError("Analysis preparation was cancelled before inputs were ready.")
+            store.start(created["id"], steps, dry_run=request.dry_run)
+        except Exception as exc:
+            # Keep cleanup in the reservation too: a user may have cancelled
+            # during copying and must wait before deleting the target directory.
+            cancelled = store.get(created["id"])["status"] == "cancelled"
+            if not cancelled:
+                store.update(created["id"], status="cancelled", error="分析输入准备失败，未加入运行队列。", desired_action=None)
+            for filename in uploaded:
+                try:
+                    (target / filename).unlink(missing_ok=True)
+                except OSError:
+                    store.append_log(created["id"], "[web] could not remove partial analysis input\n")
+            if cancelled:
+                # Cancellation can race the final preparing -> queued database
+                # transition; expose the same conflict as an earlier cancellation.
+                raise RuntimeError("Analysis preparation was cancelled before inputs were ready.") from exc
+            raise
+        return store.get(created["id"])

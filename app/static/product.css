@@ -1,0 +1,141 @@
+/* Shared product surfaces: identical controls and colors at every viewport. */
+body { background: var(--paper); }
+[hidden] { display: none !important; }
+button, input, select, textarea { max-width: 100%; }
+button, a, input, select, textarea, summary { scroll-margin-top: 90px; scroll-margin-bottom: 110px; }
+button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-visible, summary:focus-visible { outline: 2px solid var(--blue); outline-offset: 3px; }
+body:has(dialog[open]) { overflow: hidden; }
+.rail-tools { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+.rail-tools button:last-child { grid-column: 1 / -1; }
+.rail-tools button { margin: 0; min-height: 36px; padding: 6px 8px; font-size: 12px; }
+.project-filter-label { color: var(--muted); font-size: 12px; }
+.product-availability { padding: 12px 14px; border: 1px solid var(--line); border-left: 3px solid var(--amber); border-radius: 5px; background: var(--field); color: var(--ink); font-size: 13px; line-height: 1.6; }
+#project-filter { width: 100%; background-color: var(--panel); color: var(--ink); }
+.start-guide { border: 1px solid var(--line); border-radius: 8px; margin: 14px 0; background: var(--field); }
+.start-guide > summary { padding: 14px 16px; color: var(--ink); font-weight: 600; cursor: pointer; }
+.start-guide-body { padding: 0 16px 16px; }
+.start-guide ol { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 20px; padding-left: 22px; margin: 4px 0 16px; }
+.start-guide li strong, .start-guide li span { display: block; }
+.start-guide li span { font-size: 13px; color: var(--muted); margin-top: 4px; }
+.product-actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.product-actions .tool-button, .product-actions .primary-action { min-height: 38px; }
+.composer-toolbar { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px; padding: 8px 0; }
+.compose-path { display: flex; flex-wrap: wrap; gap: 4px; }
+.compose-path button { border: 0; background: transparent; color: var(--muted); padding: 8px; font-size: 12px; }
+.compose-path button:hover { color: var(--blue); background: var(--cyan-soft); }
+.view-mode { display: flex; padding: 3px; background: var(--field); border: 1px solid var(--line); border-radius: 7px; }
+.view-mode button { border: 0; border-radius: 4px; padding: 6px 10px; color: var(--muted); background: transparent; font-size: 12px; }
+.view-mode button[aria-pressed="true"] { color: var(--blue); background: var(--panel); box-shadow: var(--shadow-sm); }
+.workflow-intent { display: grid; gap: 8px; font-weight: 600; }
+.new-job-organization { margin: 12px 0; }
+.new-job-organization summary, .organization-panel summary { cursor: pointer; color: var(--muted); font-size: 13px; }
+.new-job-organization label { display: grid; gap: 6px; margin-top: 12px; }
+.input-mapping { font-size: 12px; overflow-wrap: anywhere; }
+.input-mapping:empty { display: none; }
+.input-mapping ul { margin: 8px 0; padding-left: 18px; color: var(--muted); }
+.parameter-column { display: flex; flex-direction: column; }
+.parameter-column > [data-section="ligand"] { order: -2; }
+body[data-workflow="analysis_rmsd"] .trajectory-section,
+body[data-workflow="analysis_suite"] .trajectory-section,
+body[data-workflow="postprocess"] .trajectory-section { order: -1; }
+body[data-form-mode="guided"] .advanced-field, body[data-form-mode="guided"] .advanced-section { display: none !important; }
+body[data-form-mode="guided"] .parameter-column .dense-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+body[data-form-mode="guided"] .parameter-column .dense-grid > label { grid-column: auto; }
+body[data-form-mode="guided"] .parameter-column .dense-grid > .wide-field { grid-column: 1 / -1; }
+.parameter-column .input-section { border-top: 0; }
+.field-help { display: inline-grid; place-items: center; width: 20px; min-width: 20px; height: 20px; padding: 0; margin-left: 5px; border: 1px solid var(--line); border-radius: 50%; color: var(--muted); background: var(--field); font-size: 11px; vertical-align: middle; }
+.parameter-column label:has(.field-help) { position: relative; }
+.parameter-column label > .field-help { position: absolute; top: 0; right: 0; }
+.parameter-column label:has(.field-help) > small { margin-right: 24px; }
+.submission-bar { position: sticky; bottom: 0; z-index: 14; display: flex; align-items: center; justify-content: space-between; gap: 16px; border: 1px solid var(--line); border-radius: 7px; padding: 12px 16px; background: var(--panel); box-shadow: 0 -4px 18px #18212b0a; margin: 12px 0; }
+.submission-bar > div { min-width: 0; }
+.submission-bar strong, .submission-bar small { display: block; }
+.submission-bar strong { font-size: 14px; }
+.submission-bar small { color: var(--muted); font-size: 12px; overflow-wrap: anywhere; margin-top: 4px; }
+.submission-bar button { flex-shrink: 0; }
+.organization-panel { border-bottom: 1px solid var(--line); padding: 12px 0; }
+.organization-panel form { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; padding: 14px 0; }
+.organization-panel label { display: grid; gap: 6px; }
+.organization-panel .wide-field { grid-column: 1 / -1; }
+.organization-panel .check-row { display: flex; }
+.result-summary { padding: 16px; margin-bottom: 16px; border: 1px solid var(--line); background: var(--field); border-radius: 8px; }
+.result-summary h3 { margin: 0 0 10px; font-size: 15px; }
+.result-summary p { margin: 8px 0; font-size: 13px; }
+.scientific-note { color: var(--muted); }
+.quality-summary-list { list-style: none; padding: 0; margin: 10px 0; }
+.quality-summary-list li { padding: 7px 0; font-size: 13px; }
+.quality-summary-list span { margin-left: 12px; }
+.progress-observation { font-size: 12px; margin: 8px 0; color: var(--muted); }
+.progress-observation[data-state="stale"] { color: var(--amber); }
+.progress[data-unknown="true"] .progress-fill { transform: scaleX(0) !important; }
+.product-dialog { width: min(760px, calc(100vw - 32px)); max-height: calc(100dvh - 48px); overflow: auto; margin: auto; padding: 24px; color: var(--ink); background: var(--panel); border: 1px solid var(--line); border-radius: 12px; box-shadow: var(--shadow); }
+.product-dialog::backdrop { background: #12192280; }
+.product-dialog-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; position: sticky; top: -24px; padding: 12px 0; margin-top: -12px; background: var(--panel); z-index: 1; }
+.product-dialog-head h2 { margin: 0; font-size: 20px; }
+.product-dialog-head button { padding: 6px 12px; border: 1px solid var(--line); background: var(--field); color: var(--ink); border-radius: 5px; }
+.product-dialog p { color: var(--muted); font-size: 13px; }
+.product-dialog label { display: grid; gap: 6px; margin: 14px 0; }
+.product-dialog details { border-top: 1px solid var(--line); margin-top: 20px; padding-top: 14px; }
+.product-dialog summary { cursor: pointer; }
+.product-dialog pre { background: var(--field); padding: 14px; white-space: pre-wrap; overflow-wrap: anywhere; font: 13px/1.7 var(--sans); max-height: 45vh; overflow-y: auto; border-radius: 6px; }
+.template-details { white-space: pre-wrap; overflow-wrap: anywhere; font-size: 13px; color: var(--muted); margin: 14px 0; }
+.product-dialog .product-error { color: var(--red); }
+.import-template { position: relative; overflow: hidden; margin: 0 !important; }
+.import-template:focus-within { outline: 2px solid var(--blue); outline-offset: 3px; }
+.import-template:has(input:disabled) { opacity: 0.5; }
+.import-template input { position: absolute; inset: 0; width: 100%; height: 100%; opacity: 0; cursor: pointer; }
+.rail .job-project-label { color: var(--muted); font-size: 11px; overflow-wrap: anywhere; }
+@media (max-width: 1180px) {
+  .app-shell { display: block; }
+  .workspace { padding: 16px 20px; max-width: none; }
+  .workspace-bar { margin: -16px -20px 16px; padding: 8px 20px; }
+  .rail { display: none; }
+  body.sidebar-open .rail { display: flex; position: fixed; inset: 56px auto 0 0; width: 320px; max-width: 90vw; height: calc(100dvh - 56px); z-index: 40; }
+  .rail .jobs-list { min-height: 120px; max-height: none; overflow-y: auto; }
+  #toggle-sidebar { display: inline-flex; }
+  .composer-grid { grid-template-columns: minmax(230px, 0.8fr) minmax(0, 1.5fr); margin: 12px -20px 0; }
+  .form-column { padding: 20px; }
+  .parameter-column { padding: 20px; }
+  .workflow-switch { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .detail-tabs { top: 56px; gap: 10px; overflow-x: auto; }
+}
+@media (max-width: 700px) {
+  .workspace { padding: 12px; }
+  .workspace-bar { margin: -12px -12px 12px; padding: 8px 12px; }
+  .workspace-nav button { padding: 6px 10px; min-height: 40px; }
+  .run-composer > .section-head h2, .detail-title { font-size: 19px; }
+  .start-guide ol { grid-template-columns: 1fr; gap: 10px; }
+  .composer-toolbar { align-items: flex-start; }
+  .compose-path { width: 100%; }
+  .compose-path button { padding: 8px 4px; font-size: 11px; }
+  .composer-grid { grid-template-columns: 1fr; margin: 12px -12px 0; }
+  .form-column, .parameter-column { padding: 16px 12px; }
+  .parameter-column { border-left: 0; }
+  .workflow-switch { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .dense-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .detail-header { align-items: flex-start; flex-direction: column; }
+  .detail-analysis-actions { max-width: none; justify-content: flex-start; flex-wrap: wrap; }
+  .detail-tabs { margin-top: 8px; gap: 0; }
+  .detail-tabs button { padding: 8px; font-size: 12px; white-space: nowrap; }
+  .metrics-row { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .metrics-row > div { padding: 10px; }
+  .metrics-row strong { font-size: 16px; overflow-wrap: anywhere; }
+  .organization-panel form { grid-template-columns: 1fr; }
+  .submission-bar { padding: 10px; gap: 8px; }
+  .submission-bar button { min-width: 90px; min-height: 42px; padding: 8px 12px; }
+  .submission-bar small { font-size: 11px; }
+  .product-dialog { padding: 16px; }
+  .product-dialog-head h2 { font-size: 18px; }
+  .product-dialog-head { top: -16px; }
+  .product-dialog .product-actions { align-items: stretch; }
+  .product-actions button, .product-actions a { font-size: 12px; }
+}
+.submission-bar > div { flex: 1 1 auto; }
+.submission-bar > button { width: auto; flex: 0 0 auto; }
+body[data-form-mode="guided"] .mdp-section:not(:has([name="mdp_override_enabled"]:checked)) > .dense-grid { display: none; }
+.job-name-field:has(.field-help) { position: relative; }
+.job-name-field > .field-help { position: absolute; top: 0; right: 0; }
+@media (prefers-color-scheme: dark) {
+  .primary-action { color: #17242b; }
+  .rail .primary-action { color: #17242b; }
+}

@@ -42,6 +42,14 @@ def upload(name: str, content: bytes) -> FakeUpload:
 
 
 class UploadTests(unittest.IsolatedAsyncioTestCase):
+    async def test_reserved_task_names_are_rejected_before_writing(self) -> None:
+        with tempfile.TemporaryDirectory() as folder:
+            for name in ("experiment-manifest.json", "metadata.json", "run.log", "RUN.LOG"):
+                with self.subTest(name=name), self.assertRaises(HTTPException) as raised:
+                    await stage_uploads([upload(name, b"scientific input")], Path(folder))
+                self.assertEqual(raised.exception.status_code, 400)
+            self.assertEqual(list(Path(folder).iterdir()), [])
+
     async def test_duplicate_names_are_staged_without_overwrite(self) -> None:
         with tempfile.TemporaryDirectory() as folder:
             names, _ = await stage_uploads(

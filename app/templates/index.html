@@ -6,9 +6,10 @@
     <meta name="description" content="本地 GROMACS 分子动力学工作台：配置、提交、查看模拟任务" />
     <link rel="icon" type="image/svg+xml" href="/static/gromacs-console.svg" />
     <title>GROMACS 控制台</title>
-    <link rel="stylesheet" href="/static/styles.css?v=20261006-026" />
-    <link rel="stylesheet" href="/static/icons.css?v=20260908" />
-    <link rel="stylesheet" href="/static/desktop.css?v=20261006-026" media="(min-width: 1181px)" />
+    <link rel="stylesheet" href="/static/styles.css?v=58a36b0fc94d0be8" />
+    <link rel="stylesheet" href="/static/icons.css?v=58a36b0fc94d0be8" />
+    <link rel="stylesheet" href="/static/desktop.css?v=58a36b0fc94d0be8" />
+    <link rel="stylesheet" href="/static/product.css?v=58a36b0fc94d0be8" />
   </head>
   <body>
     <div class="app-shell">
@@ -46,6 +47,12 @@
           </div>
         </details>
 
+        <div class="rail-tools">
+          <button id="open-library" class="tool-button" type="button">协议模板</button>
+          <button id="open-storage" class="tool-button storage-open" type="button">空间管理</button>
+          <button id="open-help" class="tool-button" type="button">帮助与诊断</button>
+        </div>
+
         <details class="about-project">
           <summary>关于项目</summary>
         <section class="research-signature" aria-label="作者和用途声明">
@@ -77,6 +84,8 @@
         </details>
 
         <div class="rail-label">任务列表</div>
+        <label class="project-filter-label" for="project-filter">研究项目</label>
+        <select id="project-filter" aria-label="按研究项目筛选"><option value="">全部项目</option></select>
         <div class="rail-search" data-ui-icon="search">
           <input id="job-filter" class="job-filter" type="search" maxlength="256" placeholder="搜索全部任务…" autocomplete="off" spellcheck="false" aria-label="搜索全部历史任务" />
         </div>
@@ -111,6 +120,17 @@
             </button>
           </div>
 
+          <details id="start-guide" class="start-guide" open>
+            <summary>第一次使用：从一个可完成的示例开始</summary>
+            <div class="start-guide-body">
+              <ol><li><strong>确认运行环境</strong><span id="onboarding-environment">正在检测计算工具…</span></li><li><strong>体验完整流程</strong><span>1 ps 氩体系，单 CPU 线程，练习提交、查看图表和导出。</span></li><li><strong>开始自己的研究</strong><span>选择输入和协议；教学示例不作为研究参数推荐。</span></li></ol>
+              <div class="product-actions"><button id="start-example" class="primary-action compact" type="button">运行教学示例</button><a class="tool-button" href="/static/examples/index.html" target="_blank" rel="noopener">查看离线示例结果</a><button id="start-own-data" class="tool-button" type="button">使用自己的数据</button></div>
+            </div>
+          </details>
+          <div class="composer-toolbar">
+            <nav class="compose-path" aria-label="创建任务步骤"><button type="button" data-compose-anchor="inputs">1 选择流程与文件</button><button type="button" data-compose-anchor="parameters">2 确认协议</button><button type="button" data-compose-anchor="resources">3 资源与提交</button></nav>
+            <div class="view-mode" role="group" aria-label="参数显示方式"><button id="guided-mode" type="button" aria-pressed="true">引导视图</button><button id="expert-mode" type="button" aria-pressed="false">专业视图</button></div>
+          </div>
           <form id="job-form" class="composer-grid" autocomplete="off">
             <div class="form-column">
               <label class="job-name-field" for="job-name" title="任务的显示名，会用于生成任务目录名；必填">
@@ -118,6 +138,7 @@
                 <input id="job-name" name="name" required placeholder="例如 protein-md-run" spellcheck="false" />
               </label>
 
+              <label class="workflow-intent">我要做什么<select id="workflow-intent"><option value="simulation">准备并运行模拟</option><option value="analysis">分析已有轨迹</option><option value="tpr">运行已有 TPR</option><option value="all">查看全部工作流</option></select></label>
               <fieldset class="workflow-switch">
                 <legend>工作流</legend>
                 <label title="蛋白 + 水溶液全流程：pdb2gmx → 能量最小化 → NPT → 生产 NPT MD">
@@ -154,6 +175,7 @@
                 </label>
               </fieldset>
 
+              <details class="new-job-organization"><summary>添加项目、标签和备注</summary><label>研究项目<input name="project" maxlength="80" list="project-options" placeholder="例如 蛋白突变体比较" /></label><label>标签<input name="tags" placeholder="用逗号分隔，例如 WT, 300K" /></label><label>实验备注<textarea name="notes" maxlength="4000" rows="3" placeholder="记录研究目的与实验条件"></textarea></label></details>
               <div class="dropzone" id="dropzone">
                 <input id="files" name="files" type="file" multiple />
                 <span class="dropzone-icon" data-ui-icon="upload" aria-hidden="true"></span>
@@ -161,6 +183,7 @@
                 <span id="file-summary">可上传结构、拓扑、MDP 和轨迹文件</span>
               </div>
 
+              <div id="input-mapping" class="input-mapping" aria-live="polite"></div>
               <section class="workflow-guide" id="workflow-guide" aria-live="polite">
                 <div class="guide-overview">
                   <div>
@@ -240,7 +263,7 @@
                 </div>
                 <div class="dense-grid execution-options">
                 <label class="check-row" title="pdb2gmx -ignh：忽略输入结构中的氢原子命名">
-                  <input name="ignh" type="checkbox" checked />
+                  <input name="ignh" type="checkbox" />
                   <span>忽略氢原子名</span>
                 </label>
                 <label class="check-row" title="会移除结晶水、常见离子和蛋白流程中的全部 HETATM；可能丢失辅因子，确认后再启用">
@@ -383,12 +406,12 @@
                   </div>
                   <div class="dense-grid execution-options">
                     <label class="check-row" title="mdrun -v：在日志中输出详细运行信息">
-                      <input name="verbose" type="checkbox" checked />
+                      <input name="verbose" type="checkbox" />
                       <span>mdrun 详细输出</span>
                     </label>
                     <label class="check-row" title="只生成并检查命令链，不真正执行">
                       <input name="dry_run" type="checkbox" />
-                      <span>试运行 Dry run</span>
+                      <span>只检查命令（Dry run）</span>
                     </label>
                   </div>
                 </fieldset>
@@ -657,6 +680,7 @@
               </label>
             </div>
           </form>
+          <div class="submission-bar"><div><strong id="submission-summary">请先选择输入文件</strong><small id="submission-readiness" role="status">填写必要参数后可提交</small></div><button id="submit-job-footer" class="primary-action" type="button" disabled>补全输入</button></div>
             <details class="command-panel">
               <summary>命令预览</summary>
               <div class="panel-head">
@@ -672,10 +696,13 @@
           <div class="detail-header">
             <h2 id="active-job-title" class="detail-title">未选择任务</h2>
             <div class="detail-analysis-actions">
+              <button id="clone-job" class="tool-button" data-ui-icon="copy" type="button" title="复制输入和参数并创建新任务">复制任务</button>
+              <a id="download-result-bundle" class="tool-button" href="#" download hidden>导出结果摘要包</a>
               <button id="analyze-job" class="tool-button" data-ui-icon="chart" type="button" hidden>继续分析</button>
               <button id="analysis-source-job" class="tool-button" type="button" hidden></button>
             </div>
           </div>
+          <details class="organization-panel"><summary id="organization-summary">项目、标签与实验备注</summary><form id="organization-form"><label>研究项目<input id="job-project" maxlength="80" list="project-options" /></label><label>标签<input id="job-tags" placeholder="用逗号分隔" /></label><label class="wide-field">实验备注<textarea id="job-notes" maxlength="4000" rows="3"></textarea></label><label class="check-row"><input id="job-pinned" type="checkbox" />置顶任务</label><button type="submit" class="tool-button">保存实验记录</button></form></details>
           <nav class="detail-tabs" aria-label="任务详情视图">
             <button type="button" data-detail-tab="overview" data-ui-icon="activity" aria-pressed="true">运行概览</button>
             <button type="button" data-detail-tab="quality" data-ui-icon="shield" aria-pressed="false">质量检查</button>
@@ -750,6 +777,7 @@
               <div id="output-files" class="output-files"></div>
             </div>
 
+          <section id="result-summary" class="result-summary" data-detail-panel="overview"><h3>结果与下一步</h3><div id="result-summary-content">选择任务后查看。</div></section>
           <div class="panel job-panel" data-detail-panel="overview">
             <div class="panel-head">
               <div class="overview-heading">
@@ -761,7 +789,7 @@
                   <summary>更多操作</summary>
                   <div class="job-more-actions-body">
                 <button id="copy-job-directory" class="tool-button" data-ui-icon="folder" type="button" title="复制当前任务结果目录">复制目录</button>
-                <button id="clone-job" class="tool-button" data-ui-icon="copy" type="button" title="复制输入和参数并创建新任务">复制任务</button>
+
                 <button id="benchmark-job" class="tool-button" type="button" title="复制当前 TPR，短跑多个线程组合并比较 ns/day">性能基准</button>
                 <select id="compare-job-select" class="compact-select" aria-label="选择参数比较任务"></select>
                 <button id="compare-job" class="tool-button" type="button">比较参数</button>
@@ -786,6 +814,7 @@
             <div class="progress" id="job-progress" title="步骤进度">
               <div class="progress-fill" id="progress-fill"></div>
             </div>
+            <p id="progress-observation" class="progress-observation" role="status" hidden></p>
             <div class="metrics-secondary">
               <div><span>步骤耗时</span><strong id="job-duration">-</strong></div>
               <div><span>峰值内存</span><strong id="job-peak-memory">-</strong></div>
@@ -853,6 +882,33 @@
         </div>
       </form>
     </dialog>
+    <dialog id="storage-dialog" class="storage-dialog" aria-labelledby="storage-title">
+      <div class="storage-heading">
+        <div><h3 id="storage-title">项目空间管理</h3><p>查看占用，预览后清理已完成或已取消的任务。</p></div>
+        <button id="close-storage" class="tool-button" type="button" aria-label="关闭空间管理">关闭</button>
+      </div>
+      <div id="storage-summary" class="storage-summary" role="status" aria-live="polite"></div>
+      <p id="storage-error" class="job-alert" role="alert" hidden></p>
+      <fieldset id="storage-options" class="storage-options">
+        <legend>清理范围</legend>
+        <label><input type="radio" name="storage-mode" value="intermediates" checked />清理可丢弃的中间轨迹与备份</label>
+        <label><input id="storage-logs" type="checkbox" />同时清理所选任务的日志与日志备份</label>
+        <label class="storage-delete-option"><input type="radio" name="storage-mode" value="delete_jobs" />删除所选任务及全部结果（包括输入、生产轨迹和报告）</label>
+      </fieldset>
+      <p class="storage-note">常规清理保留输入、拓扑、MDP、checkpoint、生产轨迹及分析报告。失败、中断和活动任务自动受保护。</p>
+      <div class="storage-toolbar">
+        <label for="storage-search">筛选任务<input id="storage-search" type="search" placeholder="名称或 ID" maxlength="255" /></label>
+        <button id="storage-select-visible" class="tool-button" type="button">选择当前可清理任务</button>
+        <button id="storage-refresh" class="tool-button" type="button">刷新占用</button>
+      </div>
+      <div id="storage-jobs" class="storage-jobs" aria-label="任务占用列表"></div>
+      <div id="storage-preview" class="storage-preview" hidden></div>
+      <p id="storage-status" role="status" aria-live="polite"></p>
+      <div class="dialog-actions">
+        <button id="storage-preview-button" class="tool-button" type="button">预览清理</button>
+        <button id="storage-execute" class="danger-action" type="button" disabled>确认清理…</button>
+      </div>
+    </dialog>
     <div id="toast" class="toast" role="status" aria-live="polite"></div>
     <dialog id="submit-warning" class="confirm-modal" aria-labelledby="submit-warning-title" aria-describedby="submit-warning-subtitle" hidden>
       <div class="run-dialog">
@@ -870,6 +926,22 @@
         </div>
       </div>
     </dialog>
-    <script src="/static/js/main.js?v=20261006-026" type="module"></script>
+    <datalist id="project-options"></datalist>
+    <dialog id="library-dialog" class="product-dialog" aria-labelledby="library-title">
+      <div class="product-dialog-head"><h2 id="library-title">协议模板</h2><button type="button" data-close-dialog="library-dialog" aria-label="关闭协议模板">关闭</button></div>
+      <p>保存可复用的参数。输入文件、执行工具路径与配体电荷确认需在使用时重新选择。</p>
+      <label>已保存版本<select id="template-select"><option value="">暂无模板</option></select></label><div id="template-details" class="template-details"></div>
+      <div class="product-actions"><button id="apply-template" class="primary-action compact" type="button">应用到新任务</button><button id="export-template" class="tool-button" type="button">导出 JSON</button><button id="delete-template" class="tool-button" type="button">删除此版本</button><label class="tool-button import-template">导入模板<input id="import-template" type="file" accept=".json,application/json" /></label></div>
+      <details><summary>把当前表单保存为模板</summary><form id="template-form"><label>模板名称<input id="template-name" required maxlength="80" /></label><label>适用体系与限制<input id="template-applicability" maxlength="500" placeholder="例如 可溶性蛋白；不适用于膜体系" /></label><label>协议来源<input id="template-source" maxlength="500" placeholder="文献、实验室协议或版本说明" /></label><label>说明<textarea id="template-description" rows="3" maxlength="1000"></textarea></label><button class="primary-action compact" type="submit">保存为新版本</button></form></details>
+      <p id="template-error" class="product-error" role="status"></p>
+    </dialog>
+    <dialog id="help-dialog" class="product-dialog help-dialog" aria-labelledby="help-title">
+      <div class="product-dialog-head"><h2 id="help-title">帮助与运行诊断</h2><button type="button" data-close-dialog="help-dialog" aria-label="关闭帮助">关闭</button></div>
+      <div class="product-actions"><a class="tool-button" href="https://github.com/ZEKUN-BIT/gromacs-web-ui/releases" target="_blank" rel="noopener">下载与版本说明</a><a class="tool-button" href="https://github.com/ZEKUN-BIT/gromacs-web-ui/issues/new/choose" target="_blank" rel="noopener">报告问题</a></div>
+      <label>使用文档<select id="help-document"><option value="QUICKSTART">第一次使用</option><option value="USAGE">使用与配置</option><option value="WINDOWS">Windows 安装</option><option value="TRAJECTORY-ANALYSIS">轨迹分析</option><option value="RESEARCH-ANALYSIS">研究分析</option><option value="PLOTTING">图表导出</option></select></label><pre id="help-content" tabindex="0">正在读取文档…</pre>
+      <details><summary>排错与本机使用记录</summary><p>诊断信息仅在本机生成，预览后可自行下载并提供给维护者。</p><div class="product-actions"><button id="preview-diagnostics" class="tool-button" type="button">预览环境诊断</button><button id="download-diagnostics" class="tool-button" type="button" disabled>下载诊断 JSON</button><button id="show-local-usage" class="tool-button" type="button">查看本机使用记录</button></div><pre id="diagnostic-preview" tabindex="0"></pre></details>
+    </dialog>
+    <dialog id="field-help-dialog" class="product-dialog" aria-labelledby="field-help-title"><div class="product-dialog-head"><h2 id="field-help-title">参数说明</h2><button type="button" data-close-dialog="field-help-dialog">关闭</button></div><p id="field-help-content"></p></dialog>
+    <script src="/static/js/main.js?v=58a36b0fc94d0be8" type="module"></script>
   </body>
 </html>

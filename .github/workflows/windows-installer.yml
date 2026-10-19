@@ -11,6 +11,10 @@ on:
       - 'tests/windows_setup.Tests.ps1'
       - 'tests/windows_console.Tests.ps1'
       - 'tests/windows_host.Tests.ps1'
+      - 'tests/windows_signing.Tests.ps1'
+      - 'docs/QUICKSTART.md'
+      - 'docs/RELEASE-CHECKLIST.md'
+      - 'app/static/examples/**'
       - '.github/workflows/windows-installer.yml'
 
 jobs:
@@ -23,6 +27,12 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
+      - name: Verify release tag matches the package version
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          python -c 'import os,tomllib; v=tomllib.load(open("pyproject.toml","rb"))["project"]["version"]; assert os.environ["RELEASE_TAG"] == "v"+v, "Tag must match pyproject.toml version"'
       - name: Install test dependencies
         run: python -m pip install -e '.[test]'
       - name: Check Linux scripts and installer behavior
@@ -54,17 +64,28 @@ jobs:
           ./tests/windows_setup.Tests.ps1 -RequireWindowsWsl
           ./tests/windows_console.Tests.ps1
           ./tests/windows_host.Tests.ps1
+          ./tests/windows_signing.Tests.ps1
       - name: Test PowerShell 7 launcher and provisioning compatibility
         shell: pwsh
         run: |
           ./tests/windows_setup.Tests.ps1 -RequireWindowsWsl
           ./tests/windows_console.Tests.ps1
           ./tests/windows_host.Tests.ps1
+          ./tests/windows_signing.Tests.ps1
       - name: Install NSIS compiler
         run: choco install nsis --yes --no-progress
       - name: Build setup.exe and portable archive
         shell: powershell
         run: python packaging/windows/build.py --makensis "${env:ProgramFiles(x86)}\NSIS\makensis.exe"
+      - name: Sign installer when a publisher certificate is configured
+        shell: powershell
+        env:
+          WINDOWS_SIGNING_PFX_BASE64: ${{ github.event_name != 'pull_request' && secrets.WINDOWS_SIGNING_PFX_BASE64 || '' }}
+          WINDOWS_SIGNING_PASSWORD: ${{ github.event_name != 'pull_request' && secrets.WINDOWS_SIGNING_PASSWORD || '' }}
+        run: |
+          $installers = @(Get-ChildItem -File dist/*-setup.exe)
+          if ($installers.Count -ne 1) { throw "Expected exactly one freshly built installer." }
+          ./packaging/windows/Sign-Installer.ps1 -Installer $installers[0].FullName
       - uses: actions/upload-artifact@v4
         with:
           name: GromacsConsole-windows-x64
@@ -72,4 +93,47 @@ jobs:
             dist/*-setup.exe
             dist/*-windows-x64.zip
             dist/*.sha256
+            dist/windows-signing.json
           if-no-files-found: error
+
+  draft-release:
+    if: startsWith(github.ref, 'refs/tags/')
+    needs: package
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: GromacsConsole-windows-x64
+          path: dist
+      - name: Prepare reviewable release notes
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+          SOURCE_COMMIT: ${{ github.sha }}
+        run: |
+          python - <<'PY'
+          import json, os
+          from pathlib import Path
+          status = json.loads(Path('dist/windows-signing.json').read_text(encoding='utf-8-sig'))
+          notes = Path('docs/RELEASE-NOTES.md').read_text()
+          notes += '\n\n构建信息\n\n'
+          notes += f"- 标签：{os.environ['RELEASE_TAG']}\n- 源码提交：{os.environ['SOURCE_COMMIT']}\n"
+          notes += f"- EXE 签名：{status['status']}（{status['reason']}）\n"
+          notes += '- Windows 实机验收：待维护者按 docs/RELEASE-CHECKLIST.md 填写；CI 产物不代表实机通过。\n'
+          Path('dist/release-notes.md').write_text(notes)
+          PY
+      - name: Create or update a draft without publishing it
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          if gh release view "$RELEASE_TAG" --json isDraft > dist/release-state.json 2>/dev/null; then
+            python -c 'import json; assert json.load(open("dist/release-state.json"))["isDraft"], "Refusing to overwrite a published release"'
+            gh release edit "$RELEASE_TAG" --notes-file dist/release-notes.md
+          else
+            gh release create "$RELEASE_TAG" --draft --verify-tag --title "GROMACS Console $RELEASE_TAG" --notes-file dist/release-notes.md
+          fi
+          gh release upload "$RELEASE_TAG" dist/*-setup.exe dist/*-windows-x64.zip dist/*.sha256 dist/windows-signing.json --clobber

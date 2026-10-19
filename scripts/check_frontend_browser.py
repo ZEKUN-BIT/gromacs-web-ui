@@ -34,9 +34,12 @@ def check_browser(artifact_dir: Path | None = None) -> None:
     ]
     requests: list[tuple[str, str]] = []
     errors: list[str] = []
-    core_match = re.search(r'"(\./core\.js\?[^\"]+)"', (APP / "static/js/main.js").read_text())
-    assert core_match
+    main_source = (APP / "static/js/main.js").read_text()
+    core_match = re.search(r'"(\./core\.js\?[^\"]+)"', main_source)
+    form_match = re.search(r'"(\./form\.js\?[^\"]+)"', main_source)
+    assert core_match and form_match
     core_url = "/static/js/" + core_match.group(1).removeprefix("./")
+    form_url = "/static/js/" + form_match.group(1).removeprefix("./")
 
     def fixture(route) -> None:
         parsed = urlsplit(route.request.url)
@@ -50,6 +53,8 @@ def check_browser(artifact_dir: Path | None = None) -> None:
                 "gromacs": {"available": False, "message": "合成界面测试，不运行模拟"},
                 "diagnostics": {},
             }
+        elif path == "/api/product":
+            payload = {"templates": [], "projects": [], "defaults": {}}
         elif path == "/api/preview":
             payload = {"commands": [], "mdp_overrides": []}
         elif path == "/api/protocol-preview":
@@ -66,6 +71,11 @@ def check_browser(artifact_dir: Path | None = None) -> None:
                 "limit": 50,
                 "has_more": offset + 50 < len(matches),
             }
+        elif path == "/api/research/jobs":
+            search = query.get("search", [""])[0]
+            matches = [job for job in jobs if search.lower() in (job["name"] + " " + job["id"]).lower()]
+            offset = int(query.get("offset", ["0"])[0])
+            payload = {"jobs": matches[offset : offset + 50], "total": len(matches), "has_more": offset + 50 < len(matches)}
         elif path.startswith("/api/jobs/"):
             parts = path.split("/")
             job = next((job for job in jobs if job["id"] == parts[3]), None)
@@ -73,8 +83,13 @@ def check_browser(artifact_dir: Path | None = None) -> None:
                 payload = job
             elif parts[4] == "files":
                 payload = {"files": [], "truncated": False}
+            elif parts[4] == "summary":
+                payload = {"quality": [], "input_count": 0, "manifest": False}
             elif parts[4] == "plots":
                 payload = {"plots": [], "metrics": [], "replicas": []}
+            elif parts[4] == "research":
+                route.fulfill(status=404, content_type="application/json", body=json.dumps({"detail": "合成任务无研究报告"}))
+                return
         if path.startswith("/api/"):
             assert payload is not None, f"Unexpected API call: {route.request.method} {path}"
             route.fulfill(status=200, content_type="application/json", body=json.dumps(payload))
@@ -167,6 +182,21 @@ def check_browser(artifact_dir: Path | None = None) -> None:
                 expect(page.locator("#submit-warning-title")).to_have_text("第二次")
                 page.locator("#submit-warning-confirm").click()
                 page.wait_for_function("window.nextConfirmation === true")
+                # Report selection searches the whole catalog, retaining chosen
+                # reference/comparison jobs across both pages and searches.
+                page.locator('[data-detail-tab="research"]').click()
+                page.locator('[data-research-tab="comparison"]').click()
+                expect(page.locator("#research-reference option")).to_have_count(50)
+                page.locator("#research-reference").select_option("job-00")
+                page.locator("#research-catalog-next").click()
+                expect(page.locator("#research-other option")).to_have_count(10)
+                expect(page.locator("#research-reference")).to_have_values(["job-00"])
+                page.locator("#research-other").select_option("job-55")
+                page.locator("#research-catalog-search").fill("job-57")
+                expect(page.locator("#research-catalog-status")).to_contain_text("1 个报告")
+                expect(page.locator("#research-reference")).to_have_values(["job-00"])
+                expect(page.locator("#research-other")).to_have_values(["job-55"])
+                expect(page.locator('#research-other option[value="job-57"]')).to_have_count(1)
                 assert not page.evaluate("document.documentElement.scrollWidth > window.innerWidth")
                 assert not errors, errors
                 if artifact_dir:
@@ -174,6 +204,7 @@ def check_browser(artifact_dir: Path | None = None) -> None:
                     page.screenshot(path=str(artifact_dir / f"frontend-{width}.png"), full_page=True)
                 # Switching workflow defaults must not erase a custom PBC group.
                 page.locator('[data-workspace-view="compose"]').click()
+                page.locator("#expert-mode").click()
                 center = page.locator('#job-form input[name="center_group"]')
                 for workflow, group in (("postprocess", "Protein_Lig"), ("analysis_suite", "Protein"), ("analysis_rmsd", "Protein")):
                     choice = page.locator(f'input[name="workflow"][value="{workflow}"]')
@@ -183,11 +214,61 @@ def check_browser(artifact_dir: Path | None = None) -> None:
                 center.fill("SelectedComplex")
                 page.locator('input[name="workflow"][value="analysis_suite"]').locator("..").click()
                 expect(center).to_have_value("SelectedComplex")
+                # Drafts can contain arbitrary strings despite the numeric input
+                # types. Restore them through the real form module and verify
+                # HTML parsing cannot turn a value into attributes or elements.
+                page.locator('input[name="workflow"][value="protein_ligand_md"]').locator("..").click()
+                malicious_numbers = {
+                    field: (
+                        f'1" data-draft-injected="{field}" onfocus="window.ligandInjectionExecuted=true">'
+                        f'<img data-draft-node="{field}" src="/draft-injection-{field}" '
+                        'onerror="window.ligandInjectionExecuted=true"><input value="'
+                    )
+                    for field in ("count", "charge", "ph")
+                }
+                card_index = page.evaluate(
+                    """async ({formUrl, values}) => {
+                    const {addLigandRow, ligandCards, refreshRowMode} = await import(formUrl);
+                    window.ligandInjectionExecuted = false;
+                    const before = ligandCards().length;
+                    const index = addLigandRow({key: 'draft-escape-test', mode: 'acpype', ...values});
+                    if (ligandCards().length !== before + 1) throw new Error('Draft created extra ligand cards');
+                    refreshRowMode(ligandCards().at(-1));
+                    return index;
+                }""",
+                    {"formUrl": form_url, "values": malicious_numbers},
+                )
+                card = page.locator(f'#ligand-list .ligand-card[data-ligand-index="{card_index}"]')
+                expect(card).to_have_count(1)
+                expect(page.locator("[data-draft-injected], [data-draft-node]")).to_have_count(0)
+                for field, value in malicious_numbers.items():
+                    numeric = card.locator(f'[data-ligand-field="{field}"]')
+                    expect(numeric).to_have_attribute("value", value)
+                    expect(numeric).to_have_value("")
+                assert card.evaluate(
+                    "element => [...element.querySelectorAll('*')].every(node => [...node.attributes].every(attr => !/^on/i.test(attr.name)))"
+                )
+                for field, value in {"count": "2", "charge": "-1", "ph": "7.2"}.items():
+                    numeric = card.locator(f'[data-ligand-field="{field}"]')
+                    expect(numeric).to_be_editable()
+                    numeric.fill(value)
+                    expect(numeric).to_have_value(value)
+                payload = page.evaluate(
+                    """async formUrl => {
+                    const {readLigandPayload} = await import(formUrl);
+                    return readLigandPayload().find(ligand => ligand.key === 'draft-escape-test');
+                }""",
+                    form_url,
+                )
+                assert {field: payload[field] for field in ("count", "charge", "ph")} == {"count": 2, "charge": -1, "ph": 7.2}
+                assert page.evaluate("window.ligandInjectionExecuted === false")
+                expect(page.locator("[data-draft-injected], [data-draft-node]")).to_have_count(0)
+                assert not errors, errors
                 page.close()
         finally:
             browser.close()
     assert any("search=job-57" in url for _, url in requests)
-    print("History pagination, full-history search, SSE selection, modal focus and repeated confirmation passed at 3 viewports.")
+    print("History/report navigation, SSE, confirmation, workflow fields and numeric draft HTML escaping passed at 3 viewports.")
 
 
 if __name__ == "__main__":

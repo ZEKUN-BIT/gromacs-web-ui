@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import os
 import re
 from datetime import datetime
@@ -7,6 +8,7 @@ from pathlib import Path
 from uuid import uuid4
 
 from fastapi import HTTPException, UploadFile
+from starlette.concurrency import run_in_threadpool
 
 
 def _positive_env_int(name: str, default: int) -> int:
@@ -44,6 +46,8 @@ FILE_REFERENCE_FIELDS = {
 LIGAND_FILE_FIELDS = ("gro_file", "itp_file", "structure_file", "chemistry_file")
 
 GENERATED_PDB_PATTERN = re.compile(r"^[A-Za-z0-9._-]+_from_complex\.pdb$")
+
+RESERVED_UPLOAD_NAMES = {"experiment-manifest.json", "metadata.json", "run.log"}
 
 
 def safe_filename(name: str) -> str:
@@ -105,6 +109,8 @@ async def stage_uploads(
     max_files: int = MAX_UPLOAD_FILES,
     max_file_bytes: int = MAX_UPLOAD_FILE_BYTES,
     max_total_bytes: int = MAX_UPLOAD_TOTAL_BYTES,
+    *,
+    hashes: dict[str, dict] | None = None,
 ) -> tuple[list[str], dict[str, str]]:
     uploads = [upload for upload in files if upload.filename]
     if len(uploads) > max_files:
@@ -116,11 +122,19 @@ async def stage_uploads(
     total_bytes = 0
     for upload in uploads:
         raw_filename = _raw_upload_filename(upload.filename or "")
+        if safe_filename(raw_filename).casefold() in RESERVED_UPLOAD_NAMES:
+            raise HTTPException(status_code=400, detail=f"File '{raw_filename}' uses a reserved task filename.")
         filename = _unique_safe_filename(safe_filename(raw_filename), used_names)
         used_names.add(filename)
         name_map[raw_filename] = filename
         target = ensure_under_root(temp_dir / filename, temp_dir)
         file_bytes = 0
+        digest = hashlib.sha256()
+
+        def write_chunk(handle, chunk: bytes) -> None:
+            handle.write(chunk)
+            digest.update(chunk)
+
         try:
             with target.open("wb") as handle:
                 while chunk := await upload.read(UPLOAD_CHUNK_BYTES):
@@ -130,11 +144,19 @@ async def stage_uploads(
                         raise HTTPException(status_code=413, detail=f"File '{filename}' exceeds the upload limit.")
                     if total_bytes > max_total_bytes:
                         raise HTTPException(status_code=413, detail="Total upload size exceeds the request limit.")
-                    handle.write(chunk)
+                    await run_in_threadpool(write_chunk, handle, chunk)
         except Exception:
             target.unlink(missing_ok=True)
             raise
         uploaded_names.append(filename)
+        if hashes is not None:
+            stat = target.stat()
+            hashes[filename] = {
+                "size": stat.st_size,
+                "mtime_ns": stat.st_mtime_ns,
+                "inode": stat.st_ino,
+                "sha256": digest.hexdigest(),
+            }
     return uploaded_names, name_map
 
 
