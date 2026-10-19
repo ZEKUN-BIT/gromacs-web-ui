@@ -83,7 +83,7 @@ def source_files(root: Path) -> list[Path]:
     files += [root / name for name in (*FONT_SOURCES, *LEGAL_SOURCES) if (root / name).is_file()]
     files += [root / "docs" / f"{name}.md" for name in HELP_NAMES if (root / "docs" / f"{name}.md").is_file()]
     files += [path for path in (root / "app/static/examples").rglob("*") if path.is_file() and path.suffix in EXAMPLE_SUFFIXES]
-    return sorted(set(files))
+    return sorted(set(files), key=lambda path: path.relative_to(root).as_posix())
 
 
 def write_payload(root: Path, target: Path) -> None:
@@ -97,7 +97,7 @@ def write_payload(root: Path, target: Path) -> None:
     for path in files:
         if path.suffix not in {".html", ".css"}:
             continue
-        for reference in re.findall(r"""(?:url\(\s*["']?|(?:src|href)=["'])(/static/[^\s"'<>\)]+)""", path.read_text()):
+        for reference in re.findall(r"""(?:url\(\s*["']?|(?:src|href)=["'])(/static/[^\s"'<>\)]+)""", path.read_text(encoding="utf-8")):
             resource = "app" + reference.split("?", 1)[0].split("#", 1)[0]
             if resource not in included:
                 raise ValueError(f"Packaged static resource is missing: {reference} (referenced by {path.relative_to(root)})")
@@ -116,14 +116,14 @@ def build(output: Path, compiler: str | None = None) -> list[Path]:
     for name in (*FONT_SOURCES, *LEGAL_SOURCES, *(f"docs/{name}.md" for name in HELP_NAMES), "app/static/examples/index.html"):
         if not (ROOT / name).is_file():
             raise ValueError(f"Required distribution asset or license is missing: {name}")
-    version = tomllib.loads((ROOT / "pyproject.toml").read_text())["project"]["version"]
+    version = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))["project"]["version"]
     output.mkdir(parents=True, exist_ok=True)
     staging = output / "windows-payload"
     staging.mkdir(exist_ok=True)
     payload = staging / "application.tar.gz"
     write_payload(ROOT, payload)
     digest = hashlib.sha256(payload.read_bytes()).hexdigest()
-    (staging / "application.sha256").write_text(digest + "  application.tar.gz\n", encoding="ascii")
+    (staging / "application.sha256").write_text(digest + "  application.tar.gz\n", encoding="ascii", newline="\n")
     for name in (
         "Console.ps1",
         "WslSetup.ps1",
@@ -144,7 +144,7 @@ def build(output: Path, compiler: str | None = None) -> list[Path]:
         "windows-python-requirements.lock",
     ):
         shutil.copyfile(ASSETS / name, staging / name)
-    (staging / "Start.cmd").write_bytes((ASSETS / "Start.cmd").read_text().replace("\n", "\r\n").encode("ascii"))
+    (staging / "Start.cmd").write_bytes((ASSETS / "Start.cmd").read_text(encoding="ascii").replace("\n", "\r\n").encode("ascii"))
     shutil.copyfile(ROOT / "docs" / "WINDOWS.md", staging / "README.md")
     for name in ("LICENSE", "THIRD_PARTY_NOTICES.md"):
         shutil.copyfile(ROOT / name, staging / name)
@@ -163,7 +163,9 @@ def build(output: Path, compiler: str | None = None) -> list[Path]:
                 "environment_sha256": environment_digest.hexdigest(),
             }
         )
-        + "\n"
+        + "\n",
+        encoding="utf-8",
+        newline="\n",
     )
     portable = output / f"GromacsConsole-{version}-windows-x64.zip"
     with zipfile.ZipFile(portable, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=9) as archive:
@@ -187,7 +189,7 @@ def build(output: Path, compiler: str | None = None) -> list[Path]:
         artifacts.append(installer)
     for artifact in artifacts:
         checksum = hashlib.sha256(artifact.read_bytes()).hexdigest()
-        artifact.with_suffix(artifact.suffix + ".sha256").write_text(f"{checksum}  {artifact.name}\n")
+        artifact.with_suffix(artifact.suffix + ".sha256").write_text(f"{checksum}  {artifact.name}\n", encoding="ascii", newline="\n")
         print(f"{artifact} ({artifact.stat().st_size:,} bytes)")
     return artifacts
 

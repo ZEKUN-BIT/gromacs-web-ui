@@ -35,9 +35,9 @@ service = load_module("windows_service", "desktop_service.py")
 
 def test_windows_entrypoints_share_the_power_shell_host_selector():
     assets = ROOT / "packaging/windows"
-    launcher = (assets / "Start.cmd").read_text()
-    installer = (assets / "installer.nsi").read_text()
-    setup = (assets / "WslSetup.ps1").read_text()
+    launcher = (assets / "Start.cmd").read_text(encoding="utf-8")
+    installer = (assets / "installer.nsi").read_text(encoding="utf-8")
+    setup = (assets / "WslSetup.ps1").read_text(encoding="utf-8")
     assert 'PowerShellHost.ps1" -LaunchAction %GROMACS_ACTION%' in launcher
     assert 'set "GROMACS_ACTION=Start"' in launcher
     for action in ("Install", "Stop", "Files", "Diagnose", "RemoveEnvironment"):
@@ -90,7 +90,7 @@ def test_payload_limits_example_assets_and_help_to_public_allowlists(tmp_path):
     for folder in ("app/static/examples/files", "docs", "scripts", "mdp"):
         (tmp_path / folder).mkdir(parents=True)
     for name in ("requirements.txt", "run.sh", "scripts/__init__.py", "scripts/md_plot.py"):
-        (tmp_path / name).write_text("")
+        (tmp_path / name).write_text("", encoding="utf-8")
     for name in (
         "docs/QUICKSTART.md",
         "docs/private-notes.md",
@@ -99,7 +99,7 @@ def test_payload_limits_example_assets_and_help_to_public_allowlists(tmp_path):
         "app/static/examples/files/energy.xvg",
         "app/static/examples/files/energy.png",
     ):
-        (tmp_path / name).write_text("example")
+        (tmp_path / name).write_text("example", encoding="utf-8")
     payload = tmp_path / "application.tar.gz"
     builder.write_payload(tmp_path, payload)
     with tarfile.open(payload) as archive:
@@ -115,10 +115,60 @@ def test_payload_is_reproducible(tmp_path):
     assert first.read_bytes() == second.read_bytes()
 
 
+@pytest.mark.parametrize("launcher_newline", [b"\n", b"\r\n"])
+def test_build_preserves_unicode_and_script_newlines_with_windows_text_defaults(tmp_path, monkeypatch, launcher_newline):
+    root = tmp_path / "中文源码"
+    for path in [*builder.source_files(ROOT), ROOT / "pyproject.toml"]:
+        target = root / path.relative_to(ROOT)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(path, target)
+    assets = tmp_path / "assets"
+    shutil.copytree(builder.ASSETS, assets)
+    launcher = (assets / "Start.cmd").read_bytes().replace(b"\r\n", b"\n")
+    (assets / "Start.cmd").write_bytes(launcher.replace(b"\n", launcher_newline))
+    html = '<p>中文数据</p><link href="/static/例子.css">'.encode("utf-8")
+    css = "/* 中文数据 */ body { color: green; }".encode("utf-8")
+    (root / "app/static/说明.html").write_bytes(html)
+    (root / "app/static/例子.css").write_bytes(css)
+    project = root / "pyproject.toml"
+    project.write_bytes(project.read_bytes() + "\n# 中文数据\n".encode("utf-8"))
+    original_open = Path.open
+
+    def windows_text_open(path, mode="r", buffering=-1, encoding=None, errors=None, newline=None):
+        if "b" not in mode:
+            if encoding in (None, "locale"):
+                encoding = "cp1252"
+            if newline is None and any(flag in mode for flag in "wax"):
+                newline = "\r\n"
+        return original_open(path, mode, buffering, encoding, errors, newline)
+
+    monkeypatch.setattr(builder, "ROOT", root)
+    monkeypatch.setattr(builder, "ASSETS", assets)
+    with monkeypatch.context() as context:
+        context.setattr(Path, "open", windows_text_open)
+        # Prove the fixture reproduces the Windows default-decoding failure.
+        with pytest.raises(UnicodeDecodeError):
+            (root / "app/static/说明.html").read_text()
+        artifact = builder.build(tmp_path / "中文输出")[0]
+    with zipfile.ZipFile(artifact) as archive:
+        assert archive.read("GromacsConsole/Start.cmd") == launcher.replace(b"\n", b"\r\n")
+        assert b"\r" not in archive.read("GromacsConsole/linux-install.sh")
+        assert archive.read("GromacsConsole/README.md") == (root / "docs/WINDOWS.md").read_bytes()
+        assert b"\r" not in archive.read("GromacsConsole/release.json")
+        assert b"\r" not in archive.read("GromacsConsole/application.sha256")
+        with tarfile.open(fileobj=io.BytesIO(archive.read("GromacsConsole/application.tar.gz"))) as payload:
+            assert payload.getnames() == sorted(payload.getnames())
+            assert payload.extractfile("app/static/说明.html").read() == html
+            assert payload.extractfile("app/static/例子.css").read() == css
+            assert payload.extractfile("docs/QUICKSTART.md").read() == (root / "docs/QUICKSTART.md").read_bytes()
+            assert b"\r" not in payload.extractfile("run.sh").read()
+    assert b"\r" not in artifact.with_suffix(artifact.suffix + ".sha256").read_bytes()
+
+
 def test_windows_archive_includes_provisioning_helpers_and_excludes_stale_files(tmp_path):
     staging = tmp_path / "windows-payload"
     staging.mkdir()
-    (staging / "private-settings.json").write_text('{"private":true}')
+    (staging / "private-settings.json").write_text('{"private":true}', encoding="utf-8")
     artifacts = builder.build(tmp_path)
     with zipfile.ZipFile(artifacts[0]) as archive:
         names = set(archive.namelist())
@@ -167,8 +217,8 @@ def test_payload_refuses_source_symlink(tmp_path):
     (tmp_path / "mdp").mkdir()
     (tmp_path / "scripts").mkdir()
     for name in ("requirements.txt", "run.sh", "scripts/__init__.py", "scripts/md_plot.py"):
-        (tmp_path / name).write_text("")
-    (tmp_path / "secret").write_text("sensitive")
+        (tmp_path / name).write_text("", encoding="utf-8")
+    (tmp_path / "secret").write_text("sensitive", encoding="utf-8")
     (tmp_path / "app/main.py").symlink_to(tmp_path / "secret")
     with pytest.raises(ValueError, match="symlink"):
         builder.write_payload(tmp_path, tmp_path / "payload.tar.gz")
@@ -178,12 +228,12 @@ def test_payload_refuses_parent_symlink_to_external_private_files(tmp_path):
     source, private = tmp_path / "source", tmp_path / "private"
     source.mkdir()
     private.mkdir()
-    (private / "main.py").write_text("private configuration")
+    (private / "main.py").write_text("private configuration", encoding="utf-8")
     (source / "app").symlink_to(private, target_is_directory=True)
     (source / "scripts").mkdir()
     (source / "mdp").mkdir()
     for name in ("requirements.txt", "run.sh", "scripts/__init__.py", "scripts/md_plot.py"):
-        (source / name).write_text("")
+        (source / name).write_text("", encoding="utf-8")
     with pytest.raises(ValueError, match="symlink"):
         builder.write_payload(source, tmp_path / "payload.tar.gz")
 
@@ -222,7 +272,7 @@ def test_stop_refuses_active_jobs_and_preserves_service_record(tmp_path):
     with sqlite3.connect(tmp_path / "runtime/jobs.sqlite3") as database:
         database.execute("CREATE TABLE jobs(status TEXT, desired_action TEXT)")
         database.execute("INSERT INTO jobs VALUES ('queued', 'run')")
-    (tmp_path / "service.json").write_text('{"processes": []}')
+    (tmp_path / "service.json").write_text('{"processes": []}', encoding="utf-8")
     with pytest.raises(RuntimeError, match="Jobs are still"):
         service.manage(tmp_path, "stop")
     assert (tmp_path / "service.json").exists()
@@ -231,11 +281,11 @@ def test_stop_refuses_active_jobs_and_preserves_service_record(tmp_path):
 def test_remove_keeps_simulation_results_and_settings(tmp_path):
     for folder in ("app", "mdp", "scripts", ".venv", "gromacs", "runtime"):
         (tmp_path / folder).mkdir()
-        (tmp_path / folder / "sample").write_text("data")
-    (tmp_path / "settings.json").write_text('{"gmx_bin":"gmx"}')
-    (tmp_path / "installed-release.json").write_text("{}")
+        (tmp_path / folder / "sample").write_text("data", encoding="utf-8")
+    (tmp_path / "settings.json").write_text('{"gmx_bin":"gmx"}', encoding="utf-8")
+    (tmp_path / "installed-release.json").write_text("{}", encoding="utf-8")
     service.manage(tmp_path, "remove")
-    assert (tmp_path / "runtime/sample").read_text() == "data"
+    assert (tmp_path / "runtime/sample").read_text(encoding="utf-8") == "data"
     assert (tmp_path / "settings.json").exists()
     assert not (tmp_path / ".venv").exists()
     assert not (tmp_path / "installed-release.json").exists()
@@ -249,8 +299,8 @@ def test_service_log_rotates_during_continuous_writes(tmp_path):
         stream.flush()
         assert (tmp_path / "service.log").stat().st_size <= 2048
         assert (tmp_path / "service.log.1").stat().st_size <= 2048
-        assert "99:" in (tmp_path / "service.log").read_text()
-        assert "0:" not in (tmp_path / "service.log").read_text()
+        assert "99:" in (tmp_path / "service.log").read_text(encoding="utf-8")
+        assert "0:" not in (tmp_path / "service.log").read_text(encoding="utf-8")
     finally:
         stream.handler.close()
 
@@ -314,8 +364,8 @@ def test_build_rejects_unshipped_static_reference(tmp_path, monkeypatch):
     for name in ("app", "mdp", "scripts"):
         (root / name).mkdir(parents=True)
     for name in ("requirements.txt", "run.sh", "scripts/__init__.py", "scripts/md_plot.py"):
-        (root / name).write_text("")
-    (root / "app/page.html").write_text('<img src="/static/missing.png">')
+        (root / name).write_text("", encoding="utf-8")
+    (root / "app/page.html").write_text('<img src="/static/missing.png">', encoding="utf-8")
     with pytest.raises(ValueError, match="missing.png"):
         builder.write_payload(root, tmp_path / "bad.tar.gz")
 
@@ -338,9 +388,9 @@ def test_packaged_service_start_reuse_http_and_stop(tmp_path):
         try:
             result = service.manage(tmp_path, "start")
             assert result["url"] != "http://127.0.0.1:8000"
-            state = json.loads((tmp_path / "service.json").read_text())
+            state = json.loads((tmp_path / "service.json").read_text(encoding="utf-8"))
             assert service.manage(tmp_path, "start") == result
-            assert json.loads((tmp_path / "service.json").read_text()) == state
+            assert json.loads((tmp_path / "service.json").read_text(encoding="utf-8")) == state
             opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
             with opener.open(result["url"]) as response:
                 assert b"GROMACS" in response.read()
