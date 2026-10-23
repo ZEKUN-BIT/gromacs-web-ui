@@ -1,9 +1,13 @@
 from __future__ import annotations
 
+import hashlib
 import shutil
 import sys
+import time
+from collections.abc import Callable
 from pathlib import Path
 
+from .analysis.preflight import inspect_research_inputs
 from .files import ensure_under_root, relative_files
 from .gromacs import Step, _read_mdp_values, build_steps
 from .job_store import JobStore
@@ -97,20 +101,7 @@ def require_analysis_disk_space(destination: Path, budget: dict) -> None:
         )
 
 
-def create_existing_analysis(store: JobStore, job_id: str, request: ExistingAnalysisRequest, settings: dict) -> dict:
-    # Keep source validation and every read/copy in the same reservation so
-    # cleanup cannot remove a selected trajectory before staging finishes.
-    with store.job_files_lock(job_id):
-        return _create_existing_analysis(store, job_id, request, settings)
-
-
-def _create_existing_analysis(store: JobStore, job_id: str, request: ExistingAnalysisRequest, settings: dict) -> dict:
-    source = analysis_source(store, job_id)
-    if not any(getattr(request, key) for key in ("do_rmsd", "do_rg", "do_energy", "do_dssp", "do_hbond", "do_pca", "do_research")):
-        raise ValueError("请至少选择一项分析指标。")
-    if request.do_energy and not request.edr_file:
-        raise ValueError("能量分析需要选择 EDR 文件。")
-    root = store.job_dir(job_id)
+def _selected_inputs(root: Path, request: ExistingAnalysisRequest) -> dict[str, Path]:
     selected = {}
     for key, suffixes in INPUT_SUFFIXES.items():
         name = getattr(request, key)
@@ -118,6 +109,65 @@ def _create_existing_analysis(store: JobStore, job_id: str, request: ExistingAna
             continue
         if name or key in {"tpr_file", "trajectory_file"}:
             selected[key] = source_file(root, name, suffixes)
+    return selected
+
+
+def preflight_existing_analysis(store: JobStore, job_id: str, request: ExistingAnalysisRequest, settings: dict) -> dict:
+    with store.job_files_lock(job_id):
+        analysis_source(store, job_id)
+        selected = _selected_inputs(store.job_dir(job_id), request)
+        budget = analysis_disk_budget(selected, request)
+        require_analysis_disk_space(store.jobs_root, budget)
+        research = inspect_research_inputs(selected, request, settings["gmx_bin"]) if request.do_research and not request.dry_run else None
+        return {"research": research, "storage": budget}
+
+
+def _copy_analysis_input(source: Path, target: Path, on_bytes: Callable[[int], None]) -> dict:
+    """Copy and hash once, reporting bytes and allowing cancellation between chunks."""
+    before = source.stat()
+    digest = hashlib.sha256()
+    copied = 0
+    with source.open("rb") as reader, target.open("xb") as writer:
+        while chunk := reader.read(1024 * 1024):
+            writer.write(chunk)
+            digest.update(chunk)
+            copied += len(chunk)
+            on_bytes(len(chunk))
+    after = source.stat()
+    if (before.st_ino, before.st_size, before.st_mtime_ns) != (after.st_ino, after.st_size, after.st_mtime_ns) or copied != before.st_size:
+        raise ValueError("来源文件在复制期间发生变化，请等文件写入结束后重试。")
+    shutil.copystat(source, target)
+    stat = target.stat()
+    return {"size": stat.st_size, "mtime_ns": stat.st_mtime_ns, "inode": stat.st_ino, "sha256": digest.hexdigest()}
+
+
+def create_existing_analysis(
+    store: JobStore, job_id: str, request: ExistingAnalysisRequest, settings: dict, *, progress: Callable[[dict], None] | None = None
+) -> dict:
+    # Keep source validation and every read/copy in the same reservation so
+    # cleanup cannot remove a selected trajectory before staging finishes.
+    with store.job_files_lock(job_id):
+        return _create_existing_analysis(store, job_id, request, settings, progress=progress)
+
+
+def _create_existing_analysis(
+    store: JobStore, job_id: str, request: ExistingAnalysisRequest, settings: dict, *, progress: Callable[[dict], None] | None = None
+) -> dict:
+    notify = progress or (lambda _: None)
+    source = analysis_source(store, job_id)
+    if not any(getattr(request, key) for key in ("do_rmsd", "do_rg", "do_energy", "do_dssp", "do_hbond", "do_pca", "do_research")):
+        raise ValueError("请至少选择一项分析指标。")
+    if request.do_energy and not request.edr_file:
+        raise ValueError("能量分析需要选择 EDR 文件。")
+    root = store.job_dir(job_id)
+    selected = _selected_inputs(root, request)
+    preflight = None
+    if request.do_research and not request.dry_run:
+        notify({"phase": "preflight", "message": "正在检查轨迹帧数、时间范围和蛋白规模…"})
+        preflight = inspect_research_inputs(selected, request, settings["gmx_bin"])
+        notify({"phase": "preflight", "research": preflight, "message": preflight["message"] or "轨迹规模检查通过。"})
+        if not preflight["valid"]:
+            raise ValueError(preflight["message"])
 
     params = request.model_dump(exclude={"name", "dry_run"})
     params.update(workflow="analysis_suite", gmx_bin=settings["gmx_bin"], time_unit="ns", ntomp=settings.get("default_ntomp", 4))
@@ -232,8 +282,24 @@ def _create_existing_analysis(store: JobStore, job_id: str, request: ExistingAna
         try:
             # Another task may consume space between preflight and staging.
             require_analysis_disk_space(target, disk_budget)
+            copied, updated = 0, 0.0
+            total = sum(path.stat().st_size for path in selected.values())
+
+            def report_copy(count: int, *, force: bool = False) -> None:
+                nonlocal copied, updated
+                copied += count
+                now = time.monotonic()
+                if force or now - updated >= 0.25:
+                    updated = now
+                    if store.get(created["id"])["status"] != "preparing":
+                        raise RuntimeError("Analysis preparation was cancelled before inputs were ready.")
+                    notify({"phase": "copy", "job_id": created["id"], "copied_bytes": copied, "total_bytes": total})
+
+            prepared_hashes = {}
+            report_copy(0, force=True)
             for item in mapping:
-                shutil.copy2(selected[item["role"]], target / item["path"])
+                prepared_hashes[item["path"]] = _copy_analysis_input(selected[item["role"]], target / item["path"], report_copy)
+            report_copy(0, force=True)
             if research_index is not None:
                 (target / "research-index.ndx").write_text(research_index, encoding="utf-8")
             if store.get(created["id"])["status"] != "preparing":
@@ -259,6 +325,7 @@ def _create_existing_analysis(store: JobStore, job_id: str, request: ExistingAna
                 "protocol": protocol,
                 "window_ns": [request.begin_ns, request.end_ns],
                 "storage_estimate": disk_budget,
+                "preflight": preflight,
             }
             if request.do_rmsd:
                 provenance["rmsd_reference"] = {
@@ -270,7 +337,8 @@ def _create_existing_analysis(store: JobStore, job_id: str, request: ExistingAna
                     "fit": "rot+trans within gmx rms",
                 }
             prepared = store.update(created["id"], analysis_source=provenance)
-            manifest = write_experiment_manifest(prepared)
+            notify({"phase": "manifest", "job_id": created["id"], "message": "输入已复制，正在保存实验清单…"})
+            manifest = write_experiment_manifest(prepared, prepared_hashes=prepared_hashes)
             store.update(created["id"], experiment_manifest="experiment-manifest.json", input_hashes=manifest["input_files"])
             store.append_log(created["id"], f"[web] analysis inputs copied from {job_id}\n")
             if store.get(created["id"])["status"] != "preparing":

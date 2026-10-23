@@ -8,6 +8,25 @@ on:
     - cron: "23 18 * * 0"
 
 jobs:
+  changes:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      gromacs: ${{ steps.paths.outputs.required }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Detect changes that affect simulations and analysis
+        id: paths
+        shell: bash
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: git diff --name-only --no-renames -z "$BASE_SHA...$HEAD_SHA" | python scripts/check_gromacs_changes.py >> "$GITHUB_OUTPUT"
+
   test:
     runs-on: ubuntu-latest
     strategy:
@@ -20,7 +39,16 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
           cache: pip
-      - run: python -m pip install -e ".[dev]"
+          cache-dependency-path: requirements/*.lock
+      - run: python scripts/lock_dependencies.py --check
+      - name: Validate the runtime lock in a fresh-environment resolution
+        run: |
+          python -m pip install --dry-run --ignore-installed --require-hashes --only-binary=:all: -r requirements/runtime.lock
+      - name: Install locked development dependencies
+        run: |
+          python -m pip install --require-hashes --only-binary=:all: -r requirements/dev.lock
+          python -m pip install --no-deps --no-build-isolation -e .
+          python -m pip check
       - run: ruff check app tests
       - run: ruff format --check app tests
       - run: python scripts/sync_frontend_assets.py --check
@@ -28,18 +56,25 @@ jobs:
       - name: Install browser test tools
         if: matrix.python-version == '3.12'
         run: |
-          python -m pip install playwright==1.62.0
           python -m playwright install --with-deps chromium
       - name: Check history navigation and confirmation dialogs in Chromium
         if: matrix.python-version == '3.12'
         run: |
           node scripts/check_frontend_state.mjs
+          node scripts/check_analysis_state.mjs
           python scripts/check_frontend_browser.py
+          python scripts/check_analysis_browser.py
+          python scripts/check_agent_browser.py
+          python scripts/check_agent_content_browser.py
           python scripts/check_storage_browser.py
           python scripts/check_product_browser.py
 
   gromacs-integration:
-    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/')
+    needs: changes
+    if: >-
+      always() && !cancelled() &&
+      (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' ||
+       startsWith(github.ref, 'refs/tags/') || needs.changes.outputs.gromacs == 'true')
     runs-on: ubuntu-latest
     timeout-minutes: 15
     env:
@@ -54,11 +89,15 @@ jobs:
         with:
           python-version: "3.12"
           cache: pip
+          cache-dependency-path: requirements/*.lock
       - name: Install GROMACS and application test dependencies
         run: |
           sudo apt-get update
           sudo apt-get install --yes --no-install-recommends gromacs
-          python -m pip install -e ".[test]"
+          python scripts/lock_dependencies.py --check
+          python -m pip install --require-hashes --only-binary=:all: -r requirements/dev.lock
+          python -m pip install --no-deps --no-build-isolation -e .
+          python -m pip check
       - name: Run a tiny simulation, checkpoint recovery and real trajectory analysis
         run: |
           gmx --version

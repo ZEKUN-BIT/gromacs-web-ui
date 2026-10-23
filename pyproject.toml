@@ -10,16 +10,7 @@ readme = "README.md"
 license = {file = "LICENSE"}
 authors = [{name = "yzk"}]
 requires-python = ">=3.11"
-dependencies = [
-    "fastapi==0.141.1",
-    "matplotlib==3.10.8",
-    "numpy>=2.0,<3",
-    "MDAnalysis==2.10.0",
-    "biopython==1.87",
-    "python-multipart==0.0.31",
-    "typing-extensions==4.16.0",
-    "uvicorn[standard]==0.30.3",
-]
+dynamic = ["dependencies"]
 
 [project.optional-dependencies]
 test = [
@@ -32,7 +23,11 @@ dev = [
     "pytest>=8,<10",
     "pytest-cov>=5,<8",
     "ruff>=0.12,<1",
+    "playwright==1.62.0",
 ]
+[tool.setuptools.dynamic]
+dependencies = {file = ["requirements.txt"]}
+
 [tool.setuptools.packages.find]
 include = ["app*", "scripts*"]
 

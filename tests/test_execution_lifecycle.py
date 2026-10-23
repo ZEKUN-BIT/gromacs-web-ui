@@ -224,6 +224,38 @@ def test_parallel_cancellation_persists_and_stops_every_member(tmp_path, monkeyp
         runner.join(timeout=4)
 
 
+@pytest.mark.parametrize("count", [1, 2])
+def test_cancellation_monitor_recovers_from_transient_database_error(tmp_path, count):
+    store = JobStore(tmp_path / "runtime")
+    steps = [
+        Step(f"analysis {index}", [sys.executable, "-c", "import time; time.sleep(8)"], parallel_group="analysis") for index in range(count)
+    ]
+    job = store.create("cancel after storage outage", {}, [], steps)
+    store.start(job["id"], steps)
+    engine = WorkerEngine(store, "worker")
+    original, failure = engine._cancel_requested, threading.Event()
+
+    def temporary_outage(job_id):
+        if store.get(job_id).get("process_pid") and not failure.is_set():
+            failure.set()
+            raise sqlite3.OperationalError("isolated transient cancellation read")
+        return original(job_id)
+
+    runner = threading.Thread(target=engine.run_once)
+    try:
+        with patch.object(engine, "_cancel_requested", temporary_outage):
+            runner.start()
+            assert failure.wait(3)
+            store.cancel(job["id"])
+            runner.join(timeout=3)
+        assert not runner.is_alive()
+        assert store.get(job["id"])["status"] == "cancelled"
+        assert not live_process_identities(store.get(job["id"]), store.job_dir(job["id"]))
+    finally:
+        engine._terminate_leftover(store.get(job["id"]))
+        runner.join(timeout=3)
+
+
 def test_restart_stops_whole_parallel_group_before_requeuing_it(tmp_path, finite_children):
     store = JobStore(tmp_path / "runtime")
     steps = [Step(f"analysis {index}", ["/bin/true"], parallel_group="analysis") for index in range(2)]

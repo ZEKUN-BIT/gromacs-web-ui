@@ -1,6 +1,6 @@
 // 环境诊断、力场水模型与硬件配置建议。
 
-import { $, els, state, escapeHtml, updateText, toast, api } from "./core.js?v=58a36b0fc94d0be8";
+import { $, els, state, escapeHtml, updateText, toast, api } from "./core.js?v=621bb939e2b97a80";
 
 function setHealthCard(dotClass, title, detail) {
   const dot = els.healthCard.querySelector(".dot");
@@ -26,9 +26,11 @@ export function renderReadiness() {
     if (needsBabel && !diagnostics.open_babel?.available) missing.push("Open Babel");
   }
   if (workflow === "analysis_suite" && $("input[name='do_dssp']")?.checked && diagnostics.gromacs_dssp?.available === false) missing.push("GROMACS DSSP 子命令");
-  const workerNote = payload.worker?.available === false ? "；执行服务未启动，提交后将等待运行" : "";
+  const workerUnavailable = payload.worker?.available === false;
+  const workerState = { offline: "未启动", starting: "正在启动", degraded: "正在恢复", stale: "心跳超时", failed: "异常", unavailable: "状态不可读取" };
+  const workerNote = workerUnavailable ? `；执行服务${workerState[payload.worker.state] || "异常"}，提交后将等待运行` : "";
   const text = missing.length ? `请配置 ${missing.join("、")}` : `当前流程所需工具可用${workerNote}`;
-  setHealthCard(missing.length ? "bad" : "ok", missing.length ? "运行环境待完善" : "运行环境已就绪", text);
+  setHealthCard(missing.length || workerUnavailable ? "bad" : "ok", missing.length ? "运行环境待完善" : workerUnavailable ? "执行服务待恢复" : "运行环境已就绪", text);
   const onboarding = document.querySelector("#onboarding-environment");
   if (onboarding) onboarding.textContent = payload.gromacs?.available ? `GROMACS 可用${workerNote}，可运行教学示例。` : "尚未检测到 GROMACS。可先查看离线示例，或打开帮助配置环境。";
 }
@@ -162,6 +164,8 @@ export async function refreshHealth() {
     state.healthPayload = payload;
     els.gmxBin.value = payload.settings.gmx_bin || "gmx";
     if (els.maxParallel) els.maxParallel.value = String(payload.settings.max_parallel || 1);
+    const analysisParallel = document.querySelector("#analysis-parallel");
+    if (analysisParallel) analysisParallel.value = String(payload.settings.analysis_parallel || 2);
     applyRuntimeDefaults(payload.settings || {});
     updateText(els.runtimePath, payload.settings.runtime_root || "runtime");
     state.localForceFields = payload.local_force_fields || [];

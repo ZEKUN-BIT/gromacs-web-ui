@@ -15,6 +15,7 @@ from threadpoolctl import threadpool_limits
 
 from ..files import ensure_under_root
 from ..models import ExistingAnalysisRequest
+from .limits import research_size
 
 
 class MissingIndexGroup(ValueError):
@@ -75,8 +76,9 @@ def analyze_universe(universe, request: ExistingAnalysisRequest, index_file: Pat
     protein = universe.select_atoms("protein and not (name H* or name [0-9]H*)")
     fit = _atom_group(universe, request.fit_group, index_file)
     frames = range(0, len(universe.trajectory), request.research_stride)
-    if not 3 <= len(frames) <= 5000 or not 3 <= len(ca) <= 3000 or len(frames) * len(ca) > 2_000_000:
-        raise ValueError("研究分析需要至少 3 帧和 3 个 C-alpha；上限为 5000 帧、3000 残基、200 万帧×残基。请调整取帧间隔或时间范围。")
+    size = research_size(len(universe.trajectory), len(ca), request.research_stride)
+    if not size["valid"]:
+        raise ValueError(size["message"])
     if len(fit) < 3 or len(set(ca.resindices)) != len(ca):
         raise ValueError("拟合至少需要 3 个原子，且每个蛋白残基必须只有一个 C-alpha。")
     if not np.isin(fit.indices, universe.select_atoms("protein").indices).all():

@@ -11,7 +11,7 @@ import {
   closeConfirmDialog,
   showWorkspaceView,
   showDetailTab,
-} from "./core.js?v=58a36b0fc94d0be8";
+} from "./core.js?v=621bb939e2b97a80";
 import {
   saveSettings,
   setMdpPanelExpanded,
@@ -33,7 +33,7 @@ import {
   refreshRowMode,
   applyHardwareRecommendation,
   updateResourceAdvice,
-} from "./form.js?v=58a36b0fc94d0be8";
+} from "./form.js?v=621bb939e2b97a80";
 import {
   submitJob,
   cancelActiveJob,
@@ -56,14 +56,16 @@ import {
   renderActiveJob,
   changeJobsPage,
   forgetDeletedJob,
-} from "./jobs.js?v=58a36b0fc94d0be8";
-import { bindDraftSaving, restoreDraft } from "./drafts.js?v=58a36b0fc94d0be8";
-import { bindPlotControls } from "./plots.js?v=58a36b0fc94d0be8";
-import { bindExistingAnalysis } from "./existing-analysis.js?v=58a36b0fc94d0be8";
-import { bindResearch } from "./research.js?v=58a36b0fc94d0be8";
-import { bindStorage } from "./storage.js?v=58a36b0fc94d0be8";
-import { prepareWorkspace, bindWorkspace, refreshComposerSummary } from "./workspace.js?v=58a36b0fc94d0be8";
-import { bindResultSummary } from "./result-summary.js?v=58a36b0fc94d0be8";
+} from "./jobs.js?v=621bb939e2b97a80";
+import { bindDraftSaving, restoreDraft } from "./drafts.js?v=621bb939e2b97a80";
+import { bindPlotControls } from "./plots.js?v=621bb939e2b97a80";
+import { bindExistingAnalysis } from "./existing-analysis.js?v=621bb939e2b97a80";
+import { bindResearch } from "./research.js?v=621bb939e2b97a80";
+import { bindStorage } from "./storage.js?v=621bb939e2b97a80";
+import { bindAgent } from "./agent.js?v=621bb939e2b97a80";
+import { prepareWorkspace, bindWorkspace, refreshComposerSummary } from "./workspace.js?v=621bb939e2b97a80";
+import { bindResultSummary } from "./result-summary.js?v=621bb939e2b97a80";
+import { renderReadiness } from "./form-environment.js?v=621bb939e2b97a80";
 
 function disconnectEventStream() {
   window.clearTimeout(state.reconnectTimer);
@@ -103,6 +105,11 @@ function connectEventStream() {
   });
   source.addEventListener("job", (event) => applyJobDetail(JSON.parse(event.data)));
   source.addEventListener("log", (event) => appendLogChunk(JSON.parse(event.data)));
+  source.addEventListener("worker", (event) => {
+    if (state.eventSource !== source || !state.healthPayload) return;
+    state.healthPayload.worker = JSON.parse(event.data);
+    renderReadiness();
+  });
   source.addEventListener("deleted", () => {
     if (state.eventSource !== source) return;
     forgetDeletedJob(query.get("job_id"));
@@ -120,6 +127,7 @@ function connectEventStream() {
 
 function bindUI() {
   bindStorage();
+  bindAgent();
   document.addEventListener("storage-cleaned", async (event) => {
     for (const jobId of event.detail.deleted_jobs) forgetDeletedJob(jobId);
     state.artifactKey = "";
@@ -133,6 +141,9 @@ function bindUI() {
   document.querySelectorAll("[data-workspace-view]").forEach((button) => {
     button.addEventListener("click", () => {
       showWorkspaceView(button.dataset.workspaceView);
+      if (button.hasAttribute("data-manual-compose")) {
+        document.querySelector("#manual-compose-title").scrollIntoView({ block: "start" });
+      }
       if (state.workspaceView === "detail") {
         state.artifactKey = "";
         renderActiveJob();

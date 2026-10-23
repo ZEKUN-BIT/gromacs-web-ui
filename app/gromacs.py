@@ -368,6 +368,7 @@ def default_settings(base_dir: Path) -> dict:
         "gmx_bin": os.environ.get("GMX_BIN", "gmx"),
         "runtime_root": os.environ.get("GROMACS_WEB_ROOT", str((base_dir / "runtime").resolve())),
         "max_parallel": int(os.environ.get("GROMACS_WEB_MAX_PARALLEL", "1")),
+        "analysis_parallel": int(os.environ.get("GROMACS_WEB_ANALYSIS_PARALLEL", "2")),
         "default_ntmpi": int(os.environ.get("GMX_NTMPI", "1")),
         "default_ntomp": int(os.environ.get("GMX_NTOMP", "4")),
     }
@@ -382,10 +383,11 @@ def load_settings(base_dir: Path) -> dict:
 
 def save_settings(base_dir: Path, settings: dict) -> dict:
     current = load_settings(base_dir)
-    for key in ("gmx_bin", "max_parallel", "default_ntmpi", "default_ntomp"):
+    for key in ("gmx_bin", "max_parallel", "analysis_parallel", "default_ntmpi", "default_ntomp"):
         if key in settings:
             current[key] = settings[key]
     current["max_parallel"] = max(1, int(current["max_parallel"]))
+    current["analysis_parallel"] = max(1, min(16, int(current["analysis_parallel"])))
     current["default_ntmpi"] = max(1, int(current["default_ntmpi"]))
     current["default_ntomp"] = max(1, int(current["default_ntomp"]))
     write_json(base_dir / "settings.json", current)

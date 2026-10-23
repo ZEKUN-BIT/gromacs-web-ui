@@ -232,7 +232,8 @@ class ResearchAnalysisTests(unittest.TestCase):
         store.claim_next("fixture")
         store.update(source["id"], status="completed")
         request = self.request.model_copy(update={"begin_ns": 20, "end_ns": 80, "do_energy": True, "edr_file": "input.edr"})
-        job = create_existing_analysis(store, source["id"], request, {"gmx_bin": "gmx"})
+        with patch("app.existing_analysis.inspect_research_inputs", return_value={"valid": True, "message": ""}):
+            job = create_existing_analysis(store, source["id"], request, {"gmx_bin": "gmx"})
         command = next(item for item in job["commands"] if "app.analysis.research" in item["args"])
         self.assertEqual(command["kind"], "command")
         research_position = next(i for i, item in enumerate(job["commands"]) if "app.analysis.research" in item["args"])

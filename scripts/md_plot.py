@@ -13,10 +13,160 @@ import ast
 import json
 import math
 import os
+import re
 import tempfile
 from pathlib import Path
 
-COLORS = ["#67899C", "#B58B72", "#829B8C", "#A18A9E"]
+COLORS = ["#0072B2", "#D55E00", "#009E73", "#CC79A7"]
+_DARK_COLORS = dict(zip(["#67899c", "#b58b72", "#829b8c", "#a18a9e"], COLORS))
+_DARK_COLORS["#35a8d1"] = COLORS[0]
+_TIME_TO_NS = {"ps": 0.001, "ns": 1.0, "us": 1000.0, "µs": 1000.0, "μs": 1000.0,
+               "ms": 1e6, "s": 1e9}
+
+
+def full_resolution_plot_points(workdir: Path, plot: dict, y_column: int | None = None) -> list[list[float]]:
+    """Read original XVG points, before the web preview's extrema subsampling."""
+    path = Path(workdir) / plot["path"]
+    if y_column is None:
+        label = (plot.get("series") or ["Series 1"])[0]
+        legends = {}
+        with path.open(encoding="utf-8", errors="replace") as stream:
+            for line in stream:
+                if match := re.match(r'^@\s+s(\d+)\s+legend\s+"([^"]*)"', line.strip()):
+                    legends[int(match[1]) + 1] = match[2]
+        matches = [column for column, name in legends.items() if name == label]
+        if len(matches) > 1:
+            raise ValueError(f"{path}: ambiguous series label {label!r}; specify y_column explicitly")
+        generic = re.fullmatch(r"Series (\d+)", label)
+        y_column = matches[0] if matches else int(generic[1]) if generic else 1
+    xs, ys = read_xvg(path, y_column=y_column)
+    return [list(point) for point in zip(xs, ys)]
+
+
+def centered_trend(xs, ys, width: float, window_points: int | None = None):
+    """Average complete centered windows; never pad endpoints or bridge gaps."""
+    _, np = plotting_modules()
+    xs, ys = np.asarray(xs, dtype=float), np.asarray(ys, dtype=float)
+    finite = np.isfinite(xs) & np.isfinite(ys)
+    steps = np.diff(xs)
+    positive = steps[np.isfinite(steps) & (steps > 0)]
+    if len(positive) == 0:
+        return [], [], {"reason": "no increasing time samples"}
+    dt = float(np.median(positive))
+    # XVG decimal formatting can perturb adjacent times by ~0.1% of a step.
+    # Estimate the cadence across the full span when there are no actual gaps.
+    if np.all(finite) and np.allclose(steps, dt, rtol=0.002, atol=1e-12):
+        dt = float((xs[-1] - xs[0]) / (len(xs) - 1))
+    ratio = width / (2 * dt)
+    half = int(round(ratio) if np.isclose(ratio, round(ratio), rtol=0.002) else np.floor(ratio))
+    window = 2 * half + 1 if window_points is None else window_points
+    if window < (3 if window_points is None else 2):
+        return [], [], {"reason": "fewer than three samples in the smoothing window"}
+    # Missing observations, reversed axes and unequal sampling start new segments.
+    cuts = [0] + (np.flatnonzero(~np.isclose(steps, dt, rtol=0.002, atol=1e-12)
+                                | ~finite[:-1] | ~finite[1:]) + 1).tolist() + [len(xs)]
+    tx, ty = [], []
+    for start, end in zip(cuts, cuts[1:]):
+        if end - start < window or not np.all(finite[start:end]):
+            continue
+        values = ys[start:end]
+        # Subtract a local origin to reduce cancellation for large energy values.
+        origin = values[0]
+        total = np.concatenate(([0.0], np.cumsum(values - origin)))
+        means = (total[window:] - total[:-window]) / window + origin
+        if tx:
+            tx.append(float("nan"))
+            ty.append(float("nan"))
+        if window % 2:
+            trim = window // 2
+            tx.extend(xs[start + trim:end - trim].tolist())
+        else:
+            count = end - start - window + 1
+            tx.extend(((xs[start:start + count] + xs[start + window - 1:end]) / 2).tolist())
+        ty.extend(means.tolist())
+    details = {"method": "centered moving average", "window_points": window,
+               "window_axis_units": round((window - 1) * dt, 12), "sample_interval_axis_units": dt,
+               "endpoint_policy": "complete windows only; no padding, extrapolation or gap bridging"}
+    if not tx:
+        details["reason"] = "no complete regular window"
+    return tx, ty, details
+
+
+def is_hbond_count_axis(ax, line=None) -> bool:
+    """Identify hydrogen-bond counts without excluding distance or occupancy metrics."""
+    if getattr(ax, "_md_metric_kind", None) == "hbond_count":
+        return True
+    description = ax.get_ylabel() + " " + (line.get_label() if line is not None else "")
+    description = re.sub(r"[‐‑–—−]", "-", description.lower())
+    hbond = re.search(r"\bh\s*-?\s*bonds?\b|\bhydrogen\s*-?\s*bonds?\b|氢键", description)
+    continuous = re.search(r"distance|angle|occupancy|probability|fraction|lifetime|duration|correlation|距离|角度|占有|占据|概率|寿命|%", description)
+    return bool(hbond and not continuous)
+
+
+def apply_raw_trend_style(fig, window_ns: float = 1.0) -> list[dict]:
+    """Apply the project's raw/trend style once, preserving all original observations."""
+    from matplotlib.colors import to_hex, to_rgb
+
+    remove_titles(fig)
+    for legend in list(fig.legends):
+        legend.remove()
+    records = []
+    for axis_index, ax in enumerate(fig.axes):
+        if ax.get_legend() is not None:
+            ax.get_legend().remove()
+        if hasattr(ax, "_md_raw_trend_records"):
+            records.extend(ax._md_raw_trend_records)
+            continue
+        unit = getattr(ax, "_md_time_unit", None)
+        if unit is None:
+            for sibling in ax.get_shared_x_axes().get_siblings(ax):
+                label = sibling.get_xlabel().lower()
+                match = re.search(r"time\s*[\[(]\s*(ps|ns|us|µs|μs|ms|s)\s*[\])]", label)
+                if match:
+                    unit = match[1]
+                    break
+        axis_records = []
+        limits = ax.get_xlim(), ax.get_ylim()
+        for line in list(ax.lines):
+            if line.get_transform() != ax.transData or line.get_linestyle() in ("None", "none", "", " "):
+                continue
+            xs, ys = line.get_xdata(), line.get_ydata()
+            if len(xs) < 3:
+                continue
+            dark = _DARK_COLORS.get(to_hex(line.get_color()).lower(), to_hex(line.get_color()))
+            record = {"axis": axis_index, "series": line.get_label(), "raw_points": len(xs),
+                      "dark_color": dark, "line_style": line.get_linestyle(), "smoothed": False}
+            line.set_color(dark)
+            hbond_count = is_hbond_count_axis(ax, line)
+            if unit in _TIME_TO_NS and not getattr(line, "_md_skip_smoothing", False) and not hbond_count:
+                _, np = plotting_modules()
+                finite_x = np.asarray(xs)[np.isfinite(xs)]
+                span = float(np.ptp(finite_x)) if len(finite_x) else 0
+                factor = _TIME_TO_NS[unit]
+                width = min(window_ns / factor, span * 0.05)
+                width = getattr(ax, "_md_smooth_width", width)
+                tx, ty, details = centered_trend(xs, ys, width, getattr(line, "_md_smooth_points", None))
+                record.update(time_unit=unit, requested_window_ns=window_ns, smoothing=details)
+                if tx:
+                    pale = "#A6CEE3" if dark.lower() == "#0072b2" else to_hex([0.35 * c + 0.65 for c in to_rgb(dark)])
+                    line.set(color=pale, linewidth=0.55, alpha=1.0, zorder=1)
+                    line._md_raw_trend_role = "raw"
+                    trend, = ax.plot(tx, ty, color=dark, linewidth=1.6, alpha=1.0,
+                                     linestyle=line.get_linestyle(), label="_nolegend_", zorder=2)
+                    trend._md_raw_trend_role = "trend"
+                    record.update(smoothed=True, raw_color=pale,
+                                  trend_points=int(np.count_nonzero(np.isfinite(ty))),
+                                  window_ns=round(details["window_axis_units"] * factor, 12))
+            else:
+                record["reason"] = ("hydrogen-bond count; original curve only" if hbond_count else
+                                    "non-time data or pre-aggregated/reference series; no smoothing")
+            axis_records.append(record)
+        ax.set_xlim(limits[0])
+        ax.set_ylim(limits[1])
+        ax._md_raw_trend_records = axis_records
+        records.extend(axis_records)
+    fig._md_raw_trend_records = records
+    return records
 
 
 def read_xvg(path: Path, x_column: int = 0, y_column: int = 1) -> tuple[list[float], list[float]]:
@@ -92,21 +242,21 @@ def apply_theme(plt) -> None:
     plt.rcParams.update(
         {
             "font.family": "Arial",
-            "font.size": 12,
-            "axes.titlesize": 14,
-            "axes.labelsize": 14,
+            "font.size": 15,
+            "axes.titlesize": 18,
+            "axes.labelsize": 18,
             "axes.linewidth": 1.0,
             "axes.spines.top": False,
             "axes.spines.right": False,
-            "xtick.labelsize": 12,
-            "ytick.labelsize": 12,
+            "xtick.labelsize": 15,
+            "ytick.labelsize": 15,
             "xtick.direction": "out",
             "ytick.direction": "out",
             "xtick.major.size": 4,
             "ytick.major.size": 4,
             "xtick.major.width": 1.0,
             "ytick.major.width": 1.0,
-            "legend.fontsize": 13,
+            "legend.fontsize": 15,
             "legend.frameon": False,
             "legend.handlelength": 2.4,
             "lines.linewidth": 1.0,
@@ -118,7 +268,16 @@ def apply_theme(plt) -> None:
     )
 
 
+def remove_titles(fig) -> None:
+    """Omit plot and panel titles while preserving axis labels and legends."""
+    for ax in fig.axes:
+        for location in ("left", "center", "right"):
+            ax.set_title("", loc=location)
+    fig.suptitle("")
+
+
 def save_figure(fig, output: Path, dpi: int) -> None:
+    apply_raw_trend_style(fig)
     output = output.expanduser()
     output.parent.mkdir(parents=True, exist_ok=True)
     stem = output.with_suffix("") if output.suffix.lower() in {".png", ".pdf"} else output
@@ -155,6 +314,14 @@ def generate_directory(
             old_figure.unlink()
     result = xvg_plots(workdir, max_files=100, max_plots=200, max_points=20_000, max_bytes=50_000_000)
     name_counts: dict[str, int] = {}
+    source_columns: dict[str, int] = {}
+    duplicate_labels = set()
+    seen_labels = set()
+    for plot in result["plots"]:
+        key = (plot["path"], tuple(plot.get("series") or []))
+        if key in seen_labels:
+            duplicate_labels.add(key)
+        seen_labels.add(key)
     generated: list[dict] = []
     for plot in result["plots"]:
         category = str(plot.get("category") or "quality")
@@ -166,7 +333,12 @@ def generate_directory(
             base_name = f"{base_name}-{filename_slug(series)}"
         stem = target / category / base_name
         fig, ax = plt.subplots(figsize=(5.15, 3.8))
-        points = plot["points"]
+        if re.search(r"(?:^|[-_])(?:hbonds?|hbnum)$", source_stem.lower()):
+            ax._md_metric_kind = "hbond_count"
+        source_columns[plot["path"]] = source_columns.get(plot["path"], 0) + 1
+        key = (plot["path"], tuple(plot.get("series") or []))
+        column = source_columns[plot["path"]] if key in duplicate_labels else None
+        points = full_resolution_plot_points(workdir, plot, y_column=column)
         # Repeated residue numbering marks separate blocks, not a continuous line.
         breaks = [0]
         if str(plot.get("x_label", "")).lower() == "residue":
@@ -183,17 +355,7 @@ def generate_directory(
                 )
         ax.set_xlabel(str(plot.get("x_label") or "X"))
         ax.set_ylabel(str(plot.get("y_label") or "Value"))
-        show_legend = len(plot.get("series") or []) > 1 or len(breaks) > 2
-        if sample_label:
-            ax.set_title(sample_label, loc="left", pad=34 if show_legend else 8)
         ax.tick_params(top=False, right=False)
-        if show_legend:
-            ax.legend(
-                loc="lower right",
-                bbox_to_anchor=(1, 1.02),
-                borderaxespad=0,
-                ncol=2,
-            )
         save_figure(fig, stem, dpi)
         plt.close(fig)
         generated.append(
@@ -204,11 +366,22 @@ def generate_directory(
                 "png": stem.with_suffix(".png").relative_to(workdir).as_posix(),
                 "pdf": stem.with_suffix(".pdf").relative_to(workdir).as_posix(),
                 "sample_count": int(plot["sample_count"]),
+                "show_legend": False,
+                "raw_trend": getattr(fig, "_md_raw_trend_records", []),
             }
         )
     target.mkdir(parents=True, exist_ok=True)
     manifest = {
-        "style": f"publication-Arial-muted-large-{dpi}dpi",
+        "style": f"publication-Arial-18-15-{dpi}dpi",
+        "typography": {
+            "font_family": "Arial",
+            "axes_label_pt": 18,
+            "tick_label_pt": 15,
+            "legend_pt": 15,
+        },
+        "show_titles": False,
+        "show_legends": False,
+        "time_series_style": "pale full-resolution raw + dark centered moving average; 1 ns or at most 5% of short traces",
         "colors": COLORS,
         "dpi": dpi,
         "sample_label": sample_label,
@@ -224,8 +397,6 @@ def generate_directory(
 def finish_axes(ax, args) -> None:
     ax.set_xlabel(args.x_label)
     ax.set_ylabel(args.y_label)
-    if args.title:
-        ax.set_title(args.title, fontsize=11, pad=8)
     if args.xlim:
         ax.set_xlim(args.xlim)
     if args.ylim:
@@ -234,6 +405,8 @@ def finish_axes(ax, args) -> None:
 
 
 def plot_lines(args) -> None:
+    if args.smooth is not None and args.smooth < 1:
+        raise SystemExit("--smooth must be a positive sample count")
     plt, _ = plotting_modules()
     apply_theme(plt)
     fig, ax = plt.subplots(figsize=args.figsize)
@@ -241,10 +414,10 @@ def plot_lines(args) -> None:
         xs, ys = read_xvg(path, args.x_column, args.y_column)
         xs = [value * args.x_scale for value in xs]
         ys = [value * args.y_scale for value in ys]
-        ax.plot(xs, moving_average(ys, args.smooth), color=COLORS[index % len(COLORS)], label=label)
+        line, = ax.plot(xs, ys, color=COLORS[index % len(COLORS)], label=label)
+        if args.smooth is not None:
+            line._md_smooth_points = args.smooth
     finish_axes(ax, args)
-    if not args.no_legend:
-        ax.legend(loc=args.legend, ncol=min(len(args.datasets), args.legend_columns), handlelength=2.0)
     save_figure(fig, args.output, args.dpi)
     plt.close(fig)
 
@@ -284,7 +457,6 @@ def plot_heatmap(args) -> None:
     for ax, (label, _, values) in zip(axes[0], parsed, strict=True):
         matrix = np.array([[values.get((residue, atom), 0.0) for atom in atoms] for residue in residues])
         image = ax.imshow(matrix, vmin=args.vmin, vmax=args.vmax, cmap=args.cmap, aspect="auto", interpolation="nearest")
-        ax.set_title(label, fontsize=11, pad=8)
         ax.set_xticks(range(len(atoms)), atoms, rotation=90)
         ax.set_yticks(range(len(residues)), residues)
         ax.set_xlabel(args.x_label)
@@ -316,8 +488,6 @@ def plot_fel(args) -> None:
     colorbar.set_label("Free energy (kJ/mol)")
     ax.set_xlabel(args.x_label)
     ax.set_ylabel(args.y_label)
-    if args.title:
-        ax.set_title(args.title, fontsize=11, pad=8)
     save_figure(fig, args.output, args.dpi)
     plt.close(fig)
 
@@ -344,10 +514,10 @@ def build_parser() -> argparse.ArgumentParser:
     line.add_argument("--y-column", type=int, default=1)
     line.add_argument("--x-scale", type=float, default=1.0)
     line.add_argument("--y-scale", type=float, default=1.0)
-    line.add_argument("--smooth", type=int, default=1, metavar="WINDOW")
+    line.add_argument("--smooth", type=int, default=None, metavar="WINDOW", help="optional window in samples; raw curve is always retained")
     line.add_argument("--x-label", default="Time (ns)")
     line.add_argument("--y-label", required=True)
-    line.add_argument("--title")
+    line.add_argument("--title", help="accepted for compatibility; plot titles are omitted")
     line.add_argument("--xlim", type=float, nargs=2, metavar=("MIN", "MAX"))
     line.add_argument("--ylim", type=float, nargs=2, metavar=("MIN", "MAX"))
     line.add_argument("--legend", default="upper center")
@@ -373,7 +543,7 @@ def build_parser() -> argparse.ArgumentParser:
     fel.add_argument("--y-column", type=int, default=1)
     fel.add_argument("--x-label", default="PC1 (nm)")
     fel.add_argument("--y-label", default="PC2 (nm)")
-    fel.add_argument("--title")
+    fel.add_argument("--title", help="accepted for compatibility; plot titles are omitted")
     fel.add_argument("--temperature", type=float, default=300.0)
     fel.add_argument("--bins", type=int, default=80)
     fel.add_argument("--levels", type=int, default=25)
@@ -386,7 +556,7 @@ def build_parser() -> argparse.ArgumentParser:
     auto.add_argument("workdir", type=Path)
     auto.add_argument("--output-dir", default="figures")
     auto.add_argument("--dpi", type=int, default=1600)
-    auto.add_argument("--label", help="sample label shown above every generated plot")
+    auto.add_argument("--label", help="sample label recorded in the manifest, without a plot title")
     auto.set_defaults(function=plot_auto)
     return parser
 

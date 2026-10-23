@@ -72,6 +72,16 @@ def _check_viewport(browser, width: int, height: int, artifact_dir: Path | None)
                 "gromacs": {"available": False, "message": "合成测试，不运行模拟"},
                 "diagnostics": {},
             }
+        elif path == "/api/agent/config":
+            assert route.request.method == "GET", "Automatic AI initialization must be read-only"
+            payload = {
+                "provider": "openai", "model": "gpt-6.1-sol", "has_api_key": False, "key_source": "none",
+                "providers": [{"id": "openai", "label": "OpenAI", "default_model": "gpt-6.1-sol", "endpoint": "https://api.openai.com/v1"}],
+                "profiles": {"openai": {"model": "gpt-6.1-sol", "has_api_key": False, "key_source": "none"}},
+            }
+        elif path == "/api/agent/sessions":
+            assert route.request.method == "GET", "Opening the application must not create a conversation"
+            payload = {"sessions": [], "limit": 200}
         elif path == "/api/product":
             payload = {"templates": [], "projects": [], "defaults": {}}
         elif path == "/api/preview":
@@ -188,6 +198,7 @@ def _check_viewport(browser, width: int, height: int, artifact_dir: Path | None)
         """)
         page.goto(ORIGIN, wait_until="networkidle")
         expect(page.locator(".job-item")).to_have_count(2)
+        page.locator('[data-workspace-view="detail"]').click()
         expect(page.locator("#active-job-title")).to_have_text(MALICIOUS_NAME)
         expect(page.locator('#output-files a[title="下载 nvt.trr"]')).to_have_count(1)
         if width <= 1180:

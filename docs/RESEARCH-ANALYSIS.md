@@ -4,6 +4,8 @@
 
 Open a completed, non-dry-run task, select Research Analysis, then Create Research Analysis. Choose the matching production TPR and full-system trajectory. Set a time window in ns and a frame stride. Protein-only analysis needs no ligand selection; binding analysis requires an NDX containing Protein and a group for one non-protein ligand residue. The dialog lists the actual index-group names and atom counts.
 
+Use the preflight button to inspect the selected frame count, C-alpha count and required disk space before copying inputs. Submission repeats the research size check. If the selection exceeds the limits, the dialog suggests a stride without changing it automatically. The estimate assumes increasing trajectory times; the worker still validates actual sampled times and coordinates. Preparation displays copied bytes and computes input hashes in the same pass. Once a target job exists, preparation can be cancelled from the dialog.
+
 The server copies inputs independently and hashes them before queueing. For binding, it generates an additional index group containing protein plus the selected ligand, then asks GROMACS to cluster this solute and retain the complete system. It extracts a PDB reference from the first selected frame. MDAnalysis reads this reference and the prepared XTC; the heavy calculation runs in a worker subprocess and can be cancelled through the existing task controls. Research runs before figure generation. Derived trajectories are removed only after successful analysis; source copies and reference structure remain.
 
 Completed research tasks provide three views:

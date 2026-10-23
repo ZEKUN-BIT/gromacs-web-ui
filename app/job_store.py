@@ -25,13 +25,14 @@ MAX_LOG_FILE_BYTES = int(os.environ.get("GROMACS_WEB_MAX_LOG_BYTES", str(100 * 1
 class JobStore:
     """Transactional job metadata store shared by the Web and worker processes."""
 
-    def __init__(self, runtime_root: Path, max_parallel: int = 1):
+    def __init__(self, runtime_root: Path, max_parallel: int = 1, analysis_parallel: int = 2):
         self.runtime_root = runtime_root
         self.jobs_root = runtime_root / "jobs"
         self.jobs_root.mkdir(parents=True, exist_ok=True)
         self.db_path = runtime_root / "jobs.sqlite3"
         self._log_lock = threading.Lock()
         self._max_parallel = max(1, int(max_parallel))
+        self._analysis_parallel = max(1, min(16, int(analysis_parallel)))
         self._initialize_database()
         self._migrate_json_jobs()
         self._index_existing_research_reports()
@@ -125,9 +126,11 @@ class JobStore:
                 connection.rollback()
                 raise
 
-    def configure(self, max_parallel: int | None = None) -> None:
+    def configure(self, max_parallel: int | None = None, analysis_parallel: int | None = None) -> None:
         if max_parallel is not None:
             self._max_parallel = max(1, int(max_parallel))
+        if analysis_parallel is not None:
+            self._analysis_parallel = max(1, min(16, int(analysis_parallel)))
 
     def _index_existing_research_reports(self) -> None:
         with self._connect() as connection:
@@ -645,8 +648,8 @@ class JobStore:
             connection.commit()
         return self.get(job_id)
 
-    @staticmethod
-    def _resource_request(meta: dict) -> tuple[int, bool]:
+    def _resource_reservation(self, meta: dict) -> dict:
+        """Freeze the peak CPU demand at claim time, including bounded analysis batches."""
         commands = list(meta.get("commands") or [])
         has_mdrun = any("mdrun" in [str(arg) for arg in command.get("args") or []] for command in commands)
         params = dict(meta.get("params") or {})
@@ -654,6 +657,26 @@ class JobStore:
             cpu_threads = max(1, int(params.get("ntmpi") or 1) * int(params.get("ntomp") or 1)) if has_mdrun else 1
         except (TypeError, ValueError):
             cpu_threads = 1
+        analysis_parallel = min(self._analysis_parallel, os.cpu_count() or 1)
+        group, group_size, largest_group = "", 0, 1
+        for command in commands:
+            current = str(command.get("parallel_group") or "") if command.get("kind", "command") == "command" else ""
+            group_size = group_size + 1 if current and current == group else 1
+            group = current
+            largest_group = max(largest_group, group_size)
+        analysis_parallel = min(analysis_parallel, largest_group)
+        return {"cpu_threads": max(cpu_threads, analysis_parallel), "analysis_parallel": analysis_parallel}
+
+    def _resource_request(self, meta: dict, *, new_reservation: dict | None = None) -> tuple[int, bool]:
+        commands = list(meta.get("commands") or [])
+        params = dict(meta.get("params") or {})
+        reservation = new_reservation if new_reservation is not None else meta.get("resource_reservation")
+        reservation = reservation or self._resource_reservation(meta)
+        cpu_threads = max(1, int(reservation["cpu_threads"]))
+        if new_reservation is None:
+            # Older workers could launch an entire analysis group. Keep its
+            # registered processes reserved until recovery has stopped them.
+            cpu_threads = max(cpu_threads, len(meta.get("process_identities") or []))
         uses_gpu = bool(params.get("gpu")) or any(
             any(str(arg).lower() == "gpu" for arg in command.get("args") or [])
             for command in commands
@@ -684,6 +707,7 @@ class JobStore:
                 # Re-adoption and cancellation control an existing process;
                 # they must not wait behind limits intended for new launches.
                 row = next((item for item in rows if item["desired_action"] == "cancel" or item["id"] in live_reserved), None)
+                reservation = None
                 action = "cancel" if row is not None and row["desired_action"] == "cancel" else "adopt"
                 if row is None:
                     requests = [self._resource_request(self._decode(item)) for item in running_rows]
@@ -698,7 +722,8 @@ class JobStore:
                         candidate_meta = self._decode(candidate)
                         if candidate_meta.get("deletion_pending") or candidate_meta.get("maintenance_pending"):
                             continue
-                        request = self._resource_request(candidate_meta)
+                        candidate_reservation = self._resource_reservation(candidate_meta)
+                        request = self._resource_request(candidate_meta, new_reservation=candidate_reservation)
                         if request[1] and gpu_busy:
                             continue
                         if requests and used_cpu_threads + request[0] > logical_cpus:
@@ -707,12 +732,14 @@ class JobStore:
                             file_locks.enter_context(self.job_files_lock(candidate["id"]))
                         except RuntimeError:
                             continue
-                        row, action = candidate, candidate["desired_action"]
+                        row, action, reservation = candidate, candidate["desired_action"], candidate_reservation
                         break
                 if row is None:
                     connection.commit()
                     return None
                 meta = self._decode(row)
+                if action not in {"adopt", "cancel"}:
+                    meta["resource_reservation"] = reservation
                 if meta["status"] not in {"completed", "failed", "cancelled"}:
                     meta["status"] = "running"
                 meta["worker_id"] = worker_id

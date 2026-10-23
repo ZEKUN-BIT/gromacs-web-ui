@@ -10,23 +10,23 @@ import {
   toast,
   api,
   replaySwapAnimation,
-} from "./core.js?v=58a36b0fc94d0be8";
+} from "./core.js?v=621bb939e2b97a80";
 
 import {
   hasFile, fileNameEndsWith, fileParamEndsWith, uploadedNames, selectedUploadFiles,
-} from "./form-files.js?v=58a36b0fc94d0be8";
+} from "./form-files.js?v=621bb939e2b97a80";
 import {
   ligandCards, addLigandRow, ensureDefaultLigandRow, readLigandPayload, refreshRowMode, setLigandCardField,
   removeLigandRow as removeLigandEditorRow, detectLigandsFromPdb as detectPdbLigands,
-} from "./form-ligands.js?v=58a36b0fc94d0be8";
+} from "./form-ligands.js?v=621bb939e2b97a80";
 import {
   setMdpPanelExpanded, updateMdpPanelState, refreshProtocolPreview, renderMdpPreview,
-} from "./form-parameters.js?v=58a36b0fc94d0be8";
+} from "./form-parameters.js?v=621bb939e2b97a80";
 import {
   renderForceFieldSource, renderWaterModelOptions, refreshHealth, updateResourceAdvice,
   applyHardwareRecommendation as applyHardwareDefaults,
   renderReadiness,
-} from "./form-environment.js?v=58a36b0fc94d0be8";
+} from "./form-environment.js?v=621bb939e2b97a80";
 
 export {
   hasFile, fileNameEndsWith, fileParamEndsWith, uploadedNames, selectedUploadFiles,
@@ -565,10 +565,11 @@ export async function saveSettings() {
   try {
     const gmxBin = els.gmxBin.value.trim() || "gmx";
     const maxParallel = els.maxParallel ? Math.max(1, Math.min(16, parseInt(els.maxParallel.value, 10) || 1)) : undefined;
+    const analysisParallel = Math.max(1, Math.min(16, parseInt(document.querySelector("#analysis-parallel")?.value, 10) || 2));
     const settings = await api("/api/settings", {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ gmx_bin: gmxBin, ...(maxParallel !== undefined ? { max_parallel: maxParallel } : {}) }),
+      body: JSON.stringify({ gmx_bin: gmxBin, analysis_parallel: analysisParallel, ...(maxParallel !== undefined ? { max_parallel: maxParallel } : {}) }),
     });
     toast(`gmx 路径已保存：${settings.gmx_bin}`, "success");
     await refreshHealth();

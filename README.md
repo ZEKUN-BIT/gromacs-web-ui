@@ -13,6 +13,7 @@
 - 通过“空间管理”查看任务占用，预览并清理中间文件，或确认删除旧任务及结果。
 - 使用教学示例熟悉流程；按研究项目和标签整理任务，保存、导入和复用有版本记录的协议模板。
 - 导出可离线打开的结果摘要包，查看协议、输入校验记录、质量检查与图表。
+- 在首页直接与 AI 对话，配置一次 OpenAI 或 DeepSeek 后自动沿用，可查询任务、生成模拟草案，并在确认后执行分析、续跑或重试。
 
 最新 Windows 安装器修复与工作台更新见[版本说明](docs/RELEASE-NOTES.md)。
 
@@ -28,15 +29,16 @@
 
 ### Linux
 
-需要 Python 3.11+ 和可用的 GROMACS。进入项目目录后运行：
+需要 Python 3.11+ 和可用的 GROMACS；CI 验证 Python 3.11、3.12。安装器会按锁文件校验并安装依赖，普通安装不包含测试、检查或浏览器开发工具。进入项目目录后运行：
 
 ```bash
 chmod +x setup.sh run.sh
 ./setup.sh
-./run.sh
 ```
 
-打开 <http://127.0.0.1:8000>。如果 `gmx` 不在 PATH 中，用 `GMX_BIN=/path/to/gmx ./run.sh` 指定位置。以后启动只需运行 `./run.sh`。配体自动参数化需要 ACPYPE/AmberTools，结构格式转换使用 Open Babel；二级结构分析需要支持 `gmx dssp` 的 GROMACS 版本，无需因此单独安装外部 `mkdssp`。具体配置见[环境配置](docs/USAGE.md#linux-启动配置)。
+安装完成后，双击桌面的 **GROMACS Console**，或在应用菜单搜索 **GROMACS 控制台**。启动器在后台启动服务并自动打开浏览器，日常使用无需输入终端命令；重复点击会打开已运行的实例。已有环境可运行一次 `python3 scripts/linux_desktop.py install` 补装快捷方式。
+
+也可继续用 `./run.sh` 在终端启动，然后打开 <http://127.0.0.1:8000>。如果 `gmx` 不在 PATH 中，用 `GMX_BIN=/path/to/gmx ./run.sh` 指定位置；桌面启动的环境设置见[环境配置](docs/USAGE.md#linux-启动配置)。配体自动参数化需要 ACPYPE/AmberTools，结构格式转换使用 Open Babel；二级结构分析需要支持 `gmx dssp` 的 GROMACS 版本，无需因此单独安装外部 `mkdssp`。
 
 ## 第一次使用
 
@@ -50,11 +52,14 @@ chmod +x setup.sh run.sh
 
 需要释放运行盘空间时，从侧栏进入[空间管理](docs/USAGE.md#项目空间管理)。常规清理保留输入、生产轨迹、checkpoint 和分析报告，执行前会列出待清理文件。
 
+首页直接提供 AI 对话区，无需打开聊天弹窗。首次点击“配置模型”选择服务商、填写 API Key 和选择模型，保存后即可发送消息；以后刷新页面或重启同一本机服务都会自动沿用配置，无需重填密钥。右上角“模型与 API”可查看各服务商已保存的配置、获取可用模型、切换模型或测试连接。DeepSeek 内置 Flash 和 V4 Pro 选项，同一服务商切换模型后下一轮对话生效。顶部“新建任务”可直接定位手动表单。对话和工具读取的任务摘要会发送给所选服务商；启动、取消、续跑等操作先展示方案，确认后执行。新模拟仍需在原表单选择文件并提交，详见 [AI 调度指南](docs/AI-AGENT.md)。
+
 配体净电荷、质子化状态、力场和原子分组需要自己确认。质量报告能帮助发现问题，不能代替对体系和采样的判断。服务默认用于本机，请勿直接暴露到公网。
 
 ## 详细文档
 
 - [使用与配置](docs/USAGE.md)：配体输入、MDP、环境变量和 API。
+- [AI 调度](docs/AI-AGENT.md)：模型接入、密钥保存、任务工具、确认执行和数据范围。
 - [轨迹分析](docs/TRAJECTORY-ANALYSIS.md)：PBC、拟合、参考结构和时间窗口。
 - [研究分析](docs/RESEARCH-ANALYSIS.md)：构象、配体接触和跨任务比较。
 - [图表导出](docs/PLOTTING.md)：XVG 绘图与导出选项。
@@ -65,7 +70,7 @@ chmod +x setup.sh run.sh
 ## 开发
 
 ```bash
-./setup.sh
+./setup.sh --dev
 .venv/bin/pytest
 .venv/bin/ruff check app tests
 python scripts/sync_frontend_assets.py --check
@@ -74,6 +79,8 @@ python scripts/sync_frontend_assets.py --check
 修改网页 JS、CSS 或模板后，运行 `python scripts/sync_frontend_assets.py` 更新整个模块图的缓存版本，再执行检查。
 
 Windows 安装包的构建方法见 [安装指南](docs/WINDOWS.md#开发者构建)。
+
+依赖来源、锁文件更新及 CI 的真实模拟触发条件见 [依赖维护](docs/DEPENDENCIES.md)。
 
 ## 许可
 

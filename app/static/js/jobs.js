@@ -18,9 +18,9 @@ import {
   replaySwapAnimation,
   showWorkspaceView,
   showDetailTab,
-} from "./core.js?v=58a36b0fc94d0be8";
-import { renderPlots, resetPlotFilters, updatePlotOptions } from "./plots.js?v=58a36b0fc94d0be8";
-import { renderResearch } from "./research.js?v=58a36b0fc94d0be8";
+} from "./core.js?v=621bb939e2b97a80";
+import { renderPlots, resetPlotFilters, updatePlotOptions } from "./plots.js?v=621bb939e2b97a80";
+import { renderResearch } from "./research.js?v=621bb939e2b97a80";
 import {
   formObject,
   selectedUploadFiles,
@@ -29,7 +29,7 @@ import {
   friendlyPreviewError,
   friendlyJobActionError,
   refreshPreview,
-} from "./form.js?v=58a36b0fc94d0be8";
+} from "./form.js?v=621bb939e2b97a80";
 
 /* ---------- 任务列表（签名对比，按需渲染 + 事件委托） ---------- */
 
@@ -125,11 +125,13 @@ export function applyJobsPayload(payload) {
     state.plotsSignature = "";
   }
   renderJobs();
-  if (!state.viewChosen) showWorkspaceView(state.activeJobId ? "detail" : "compose");
+  if (!state.viewChosen) showWorkspaceView("compose");
   renderActiveJob();
+  window.dispatchEvent(new CustomEvent("jobs-updated"));
 }
 
 export function forgetDeletedJob(jobId) {
+  window.dispatchEvent(new CustomEvent("job-deleted", { detail: jobId }));
   if (state.activeJobId !== jobId) return;
   state.activeJobId = null;
   state.activeJob = null;
@@ -358,12 +360,16 @@ export async function renderActiveJob() {
   await refreshJobArtifacts(job);
 }
 
+let artifactRequestGeneration = 0;
+
 async function refreshJobArtifacts(job) {
   const tab = state.detailTab;
   const filters = state.plotFilters;
   const key = `${job.id}:${job.status}:${job.step_index}:${job.exit_code ?? ""}:${job.storage_revision || 0}:${tab}:${JSON.stringify(filters)}`;
   if (key === state.artifactKey) return;
   state.artifactKey = key;
+  const generation = ++artifactRequestGeneration;
+  const isCurrent = () => generation === artifactRequestGeneration && state.activeJobId === job.id && state.detailTab === tab && state.artifactKey === key;
 
   if (tab === "research") {
     await renderResearch(job);
@@ -379,10 +385,32 @@ async function refreshJobArtifacts(job) {
     api(`/api/jobs/${encoded}/files`),
     tab === "plots" ? api(`/api/jobs/${encoded}/plots?${query}`) : Promise.resolve(null),
   ]);
-  if (state.activeJobId !== job.id || state.artifactKey !== key) return;
+  if (!isCurrent()) return;
   if (filesResult.status === "fulfilled") renderFiles(job.id, filesResult.value.files || [], filesResult.value.truncated);
+  else {
+    state.filesSignature = "";
+    els.outputFiles.dataset.truncated = "false";
+    updateText(els.fileCount, "读取失败");
+    const targets = tab === "quality" ? [els.outputFiles, els.qualityReports] : [els.outputFiles];
+    for (const target of targets) {
+      target.textContent = "";
+      const message = document.createElement("p");
+      message.setAttribute("role", "alert");
+      message.textContent = `文件列表加载失败：${filesResult.reason.message || "连接中断"}`;
+      const retry = document.createElement("button"); retry.type = "button"; retry.className = "tool-button";
+      retry.textContent = "重试加载文件";
+      retry.addEventListener("click", () => {
+        if (state.activeJobId !== job.id || state.detailTab !== tab) return;
+        retry.disabled = true;
+        state.artifactKey = "";
+        renderActiveJob();
+      });
+      target.append(message, retry);
+    }
+  }
   if (filesResult.status === "fulfilled" && tab === "quality") {
-    await renderQualityReports(job.id, filesResult.value.files || [], key);
+    await renderQualityReports(job.id, filesResult.value.files || [], isCurrent);
+    if (!isCurrent()) return;
   }
   if (plotsResult.status === "fulfilled" && plotsResult.value) {
     els.plotFilterError.hidden = true;
@@ -392,11 +420,11 @@ async function refreshJobArtifacts(job) {
     els.plotFilterError.hidden = false;
     els.plotFilterError.textContent = plotsResult.reason.message;
     els.analysisPlots.textContent = "图谱加载失败";
-    state.artifactKey = "";
   }
+  if (filesResult.status === "rejected" || plotsResult.status === "rejected") state.artifactKey = "";
 }
 
-async function renderQualityReports(jobId, files, key) {
+async function renderQualityReports(jobId, files, isCurrent) {
   const reports = files.filter((file) => /^(quality-[^/]+\.(txt|json)|structure-preflight\.txt|sampling-summary\.json|structural-convergence\.json)$/.test(file.path)).slice(0, 12);
   const results = await Promise.allSettled(reports.map(async (file) => {
     if (file.size > 262144) return `<p>${escapeHtml(file.path)} 超过预览大小限制，请在输出文件中下载。</p>`;
@@ -413,7 +441,7 @@ async function renderQualityReports(jobId, files, key) {
     } catch { /* Text reports retain their original contents. */ }
     return `<details class="quality-report" open><summary>${escapeHtml(file.path)}</summary>${body}<a href="/api/jobs/${encodeURIComponent(jobId)}/download?path=${encodeURIComponent(file.path)}" download>下载报告</a></details>`;
   }));
-  if (state.activeJobId !== jobId || state.artifactKey !== key) return;
+  if (!isCurrent()) return;
   els.qualityReports.innerHTML = results.length
     ? results.map((result) => result.status === "fulfilled" ? result.value : "<p>报告暂时无法读取，请重新打开质量检查。</p>").join("")
     : "<p>尚未生成质量报告。</p>";
@@ -814,6 +842,7 @@ export async function deleteJob(jobId) {
   if (!confirmed) return;
   try {
     await api(`/api/jobs/${encodeURIComponent(jobId)}`, { method: "DELETE" });
+    window.dispatchEvent(new CustomEvent("job-deleted", { detail: jobId }));
     if (state.activeJobId === jobId) {
       state.activeJobId = null;
       state.activeJob = null;

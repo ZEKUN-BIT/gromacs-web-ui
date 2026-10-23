@@ -6,8 +6,13 @@ button, a, input, select, textarea, summary { scroll-margin-top: 90px; scroll-ma
 button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-visible, summary:focus-visible { outline: 2px solid var(--blue); outline-offset: 3px; }
 body:has(dialog[open]) { overflow: hidden; }
 .rail-tools { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
-.rail-tools button:last-child { grid-column: 1 / -1; }
+.rail-tools button:last-child:nth-child(odd) { grid-column: 1 / -1; }
 .rail-tools button { margin: 0; min-height: 36px; padding: 6px 8px; font-size: 12px; }
+.workspace-bar { justify-content: space-between; }
+.workspace-nav { flex-wrap: nowrap; min-width: 0; }
+.workspace-nav button { white-space: nowrap; }
+.workspace-nav .agent-entry { width: auto; flex-shrink: 0; background: var(--blue); border-color: var(--blue); color: #fff; font-weight: 600; padding-inline: 18px; margin-right: 8px; box-shadow: var(--shadow-sm); }
+.workspace-nav .agent-entry:hover { color: #fff; background: var(--blue); filter: brightness(0.92); }
 .project-filter-label { color: var(--muted); font-size: 12px; }
 .product-availability { padding: 12px 14px; border: 1px solid var(--line); border-left: 3px solid var(--amber); border-radius: 5px; background: var(--field); color: var(--ink); font-size: 13px; line-height: 1.6; }
 #project-filter { width: 100%; background-color: var(--panel); color: var(--ink); }
@@ -103,6 +108,13 @@ body[data-form-mode="guided"] .parameter-column .dense-grid > .wide-field { grid
   .workspace { padding: 12px; }
   .workspace-bar { margin: -12px -12px 12px; padding: 8px 12px; }
   .workspace-nav button { padding: 6px 10px; min-height: 40px; }
+  .workspace-bar { gap: 6px; }
+  .workspace-nav { gap: 2px; }
+  .workspace-nav button { padding-inline: 7px; font-size: 12px; }
+  .workspace-nav button[data-workspace-view]::before { display: none; }
+  .workspace-nav .agent-entry { padding-inline: 10px; margin-right: 2px; }
+  .workspace-nav .agent-entry::before { width: 14px; height: 14px; margin-right: 5px; }
+  #toggle-sidebar { flex-shrink: 0; min-height: 40px; padding: 6px 7px; font-size: 12px; white-space: nowrap; }
   .run-composer > .section-head h2, .detail-title { font-size: 19px; }
   .start-guide ol { grid-template-columns: 1fr; gap: 10px; }
   .composer-toolbar { align-items: flex-start; }
@@ -136,6 +148,7 @@ body[data-form-mode="guided"] .mdp-section:not(:has([name="mdp_override_enabled"
 .job-name-field:has(.field-help) { position: relative; }
 .job-name-field > .field-help { position: absolute; top: 0; right: 0; }
 @media (prefers-color-scheme: dark) {
+  .workspace-nav .agent-entry, .workspace-nav .agent-entry:hover { color: #17242b; }
   .primary-action { color: #17242b; }
   .rail .primary-action { color: #17242b; }
 }

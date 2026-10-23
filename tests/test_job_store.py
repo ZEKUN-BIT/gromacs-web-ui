@@ -317,7 +317,8 @@ class JobStoreTests(unittest.TestCase):
             Step("b3", ["/bin/true"], parallel_group="g"),
             Step("c", ["/bin/true"]),
         ]
-        self.assertEqual([len(batch) for batch in WorkerEngine._batch_steps(steps)], [1, 3, 1])
+        self.assertEqual([len(batch) for batch in WorkerEngine._batch_steps(steps)], [1, 2, 1, 1])
+        self.assertEqual([len(batch) for batch in WorkerEngine._batch_steps(steps, parallel_limit=3)], [1, 3, 1])
 
     def test_parallel_batch_runs_steps_concurrently(self) -> None:
         with tempfile.TemporaryDirectory() as folder:

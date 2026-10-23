@@ -158,7 +158,7 @@ class ExistingAnalysisTests(unittest.TestCase):
             stream.truncate(4 * 1024**3)  # Sparse fixture: no multi-GB allocation.
         with (
             patch("app.existing_analysis.shutil.disk_usage", return_value=SimpleNamespace(free=6 * 1024**3)),
-            patch("app.existing_analysis.shutil.copy2") as copy,
+            patch("app.existing_analysis._copy_analysis_input") as copy,
         ):
             with self.assertRaisesRegex(ValueError, "磁盘空间不足.*GiB"):
                 create_existing_analysis(self.store, self.source["id"], self.request(), self.settings)
@@ -167,7 +167,10 @@ class ExistingAnalysisTests(unittest.TestCase):
 
     def test_space_consumed_after_preflight_cancels_staging_without_copy(self):
         free = [SimpleNamespace(free=100 * 1024**3), SimpleNamespace(free=0)]
-        with patch("app.existing_analysis.shutil.disk_usage", side_effect=free), patch("app.existing_analysis.shutil.copy2") as copy:
+        with (
+            patch("app.existing_analysis.shutil.disk_usage", side_effect=free),
+            patch("app.existing_analysis._copy_analysis_input") as copy,
+        ):
             with self.assertRaisesRegex(ValueError, "磁盘空间不足"):
                 create_existing_analysis(self.store, self.source["id"], self.request(), self.settings)
             copy.assert_not_called()
@@ -190,7 +193,7 @@ class ExistingAnalysisTests(unittest.TestCase):
         self.assertEqual(dry["copied_input_bytes"], sum(path.stat().st_size for path in selected.values()))
 
     def test_copy_or_manifest_failure_cancels_and_removes_partial_inputs(self):
-        for operation in ("shutil.copy2", "write_experiment_manifest"):
+        for operation in ("_copy_analysis_input", "write_experiment_manifest"):
             with self.subTest(operation=operation):
                 with patch(f"app.existing_analysis.{operation}", side_effect=OSError("disk full")):
                     with self.assertRaises(OSError):
@@ -212,7 +215,7 @@ class ExistingAnalysisTests(unittest.TestCase):
 
     def test_cleanup_failure_still_leaves_task_unrunnable(self):
         with (
-            patch("app.existing_analysis.shutil.copy2", side_effect=OSError("disk full")),
+            patch("app.existing_analysis._copy_analysis_input", side_effect=OSError("disk full")),
             patch("app.existing_analysis.Path.unlink", side_effect=PermissionError("read only")),
         ):
             with self.assertRaises(OSError):

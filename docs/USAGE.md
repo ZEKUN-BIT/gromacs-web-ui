@@ -4,7 +4,11 @@
 
 ## Linux 启动配置
 
-`setup.sh` 创建 Python 虚拟环境并安装项目依赖；日常启动用 `run.sh`，不会重复安装。GROMACS 和所需的科学工具由用户在 Linux 环境中准备，配体参数化需要 Open Babel 与 ACPYPE，DSSP 分析需要 DSSP。
+`setup.sh` 创建 Python 虚拟环境、安装项目依赖并注册 Linux 应用菜单和桌面快捷方式。日常双击 **GROMACS Console** 或在应用菜单搜索 **GROMACS 控制台**，服务在后台启动并自动打开浏览器；重复点击沿用同一项目已运行的实例。没有启用桌面目录时只安装应用菜单入口。也可继续在终端使用 `run.sh`，不会重复安装依赖。GROMACS 和所需的科学工具由用户在 Linux 环境中准备，配体参数化需要 Open Babel 与 ACPYPE，DSSP 分析需要 DSSP。
+
+已有环境可执行一次 `python3 scripts/linux_desktop.py install` 补装快捷方式。安装只写当前用户目录，不需要 sudo，也不会设置开机自启；项目移动后需重新运行此命令。桌面环境若仍要求信任快捷方式，可右键选择“允许启动”。
+
+关闭浏览器不会停止后台服务或模拟任务。启动失败会显示提示，可在应用图标的右键菜单选择“查看启动日志”；日志位于 `${XDG_STATE_HOME:-~/.local/state}/gromacs-console/<项目标识>/launch.log`。启动器不关闭或重启已运行的服务，不会通过快捷方式终止模拟。
 
 如果 `gmx` 不在 PATH 中，可指定位置：
 
@@ -12,7 +16,7 @@
 GMX_BIN=/path/to/gromacs/bin/gmx ./run.sh
 ```
 
-需要启动时激活已有 Conda/Amber 环境，或固定端口时，复制 `.env.example` 为 `.env`，修改后使用 `./start.sh`。不使用 Conda 时将 `CONDA_ENV` 留空。示例中的路径需要换成自己的安装位置。
+桌面快捷方式通过 `start.sh` 启动，读取项目的 `.env`。需要激活已有 Conda/Amber 环境、设置代理或固定端口时，复制 `.env.example` 为 `.env` 后编辑；不使用 Conda 时将 `CONDA_ENV` 留空。启动器会查找 PATH 和用户目录下常见的 Miniforge、Miniconda、Anaconda、Mambaforge 安装位置。示例中的路径需要换成自己的安装位置。桌面启动只使用本机地址，默认端口为 8000。
 
 ## 默认模拟流程
 
@@ -32,13 +36,23 @@ NVT 可在出现异常盒子振荡、极端初始压力或结构仍不稳定时�
 
 已有文件分析使用 `GET /api/jobs/{id}/analysis-inputs` 获取候选文件，`POST /api/jobs/{id}/analysis` 提交选择与指标。后者只接受受限的分析参数，不接受自定义命令或程序路径；输入复制和实验清单准备完成后才入队。来源必须是已完成的正式任务，输入必须是该任务目录内非空的普通文件，拒绝符号链接和目录越界。
 
+“检查轨迹规模与空间”调用 `POST /api/jobs/{id}/analysis-preflight`。研究分析会在复制前检查轨迹原子数、时间范围、取样帧数和 C-alpha 数量；超限时建议取帧间隔，由用户确认后修改。预检按递增轨迹时间估算，worker 仍会检查实际帧数、时间和坐标。Dry run 不解码科学输入。新版本 TPR 若暂不受 MDAnalysis 支持，会用已配置的 GROMACS 在临时目录转换参考结构。
+
+页面通过 `POST /api/jobs/{id}/analysis-stream` 接收 NDJSON 准备进度；原同步接口仍可供脚本使用。输入副本边复制边计算 SHA-256，不再为清单额外完整读取一次。复制开始后可点击“停止准备”；来源和目标锁保留到副本清理结束。关闭页面不主动取消准备，重新打开可在任务列表查看已创建任务；连接中断时先确认任务状态再提交。
+
 `run.sh` 同时启动一个 Web 进程和一个独立执行 worker。Web 进程只负责准备任务、查询 SQLite 状态库和写入取消/接管/续跑指令；worker 通过事务领取任务并启动 GROMACS。`--workers` 和 `WEB_CONCURRENCY` 只能为 `1`，执行 worker 也通过独占锁避免重复启动。
+
+worker 会对临时数据库/文件系统错误退避重试；连续失败或执行线程异常使进程非零退出。Linux 启动器在任一服务退出时停止另一服务，便于服务管理器重启。健康状态同时检查独占锁、同一 worker 的 10 秒内心跳及线程容量，页面通过现有 SSE 定期更新执行服务状态。重启后的计算恢复继续使用已保存的进程身份，不会仅凭 PID 重启或终止模拟。
+
+运行设置中的“每任务分析并发数”默认 2，范围 1–16；也可用 `GROMACS_WEB_ANALYSIS_PARALLEL` 设置默认值。分析组按此上限分批执行，各并行分析进程的数值库限定为 1 线程。任务领取时冻结 CPU 和分析并发预算，设置变化作用于之后领取的任务。CPU 预算取 `mdrun` 所需线程数与分析并发峰值的较大值；并发限制降低内存和磁盘读取压力，但不等于按 GiB 强制限制内存。
 
 任务状态以 `runtime/jobs.sqlite3` 为准，旧的 `runtime/jobs/*/metadata.json` 仅在首次迁移时导入一次。之后不会持续重写 JSON；开发脚本需要人工可读快照时，可调用 `JobStore(runtime_root).export_metadata(job_id)`，导出文件不能替代数据库备份，也不会在重启时覆盖数据库中的状态。运行进程会记录 PID、PGID、启动时间、`/proc` 启动时钟和命令 SHA-256 指纹；重启后的接管和取消只有在这些身份信息全部匹配时才会操作进程组。
 
 每个任务还会记录各步骤的开始/结束时间、耗时、CPU 时间和峰值常驻内存。`mdrun` 输出可解析时，页面会结合模拟 step 与 MDP `nsteps` 展示进度。任务目录中的 `experiment-manifest.json` 包含 GROMACS 版本、命令、参数、输入与 MDP 的 SHA-256、力场来源和主机/GPU 信息，可用于复现实验。
 
 任务详情支持复制任务和结构化参数差异比较。复制只带原始上传、MDP 和任务内力场，不复制 XTC、EDR 等大输出。
+
+实验记录中的项目、标签、备注和置顶状态按任务保存为浏览器本机草稿，切换任务或刷新后可继续编辑，点击保存才写入任务记录。服务器记录变化时会提示核对；浏览器存储不可用时草稿仅保留在当前页面。文件列表读取失败会显示原因和重试按钮。
 
 复制、已有结果分析、清理和删除通过跨进程文件锁协调；忙碌的任务会提示稍后重试。删除失败会保留待删除状态，允许重试，避免残留文件被误当成可运行任务。文件扫描与实际删除在 SQLite 写事务外执行，避免阻塞其他任务更新。
 
@@ -48,7 +62,11 @@ NVT 可在出现异常盒子振荡、极端初始压力或结构仍不稳定时�
 ./run.sh
 ```
 
-`setup.sh` 负责创建虚拟环境和安装依赖；`run.sh` 只启动服务，因此日常重启不会重复升级 pip 或访问软件源。修改 `requirements.txt` 后重新执行一次 `./setup.sh`。
+`setup.sh` 按哈希锁安装运行依赖；开发使用 `./setup.sh --dev`。`run.sh` 只启动服务。修改依赖声明后先按[依赖维护说明](DEPENDENCIES.md)更新锁，再重新执行安装。
+
+## AI 调度
+
+首页内嵌 AI 对话区，直接输入并点击“发送”即可请求模型。首次配置 API 后，页面自动恢复服务商、模型和已保存密钥的可用状态；刷新或重启服务无需重复填写。顶部“AI 对话”定位对话区，“新建任务”定位手动表单。OpenAI / DeepSeek 的配置独立于普通运行设置；密钥也可从服务端 `OPENAI_API_KEY` / `DEEPSEEK_API_KEY` 读取。支持任务查询、模拟草案和经确认的复制、取消、续跑、重试、分析任务，详见 [AI 调度指南](AI-AGENT.md)。
 
 ## 目录结构
 
@@ -75,6 +93,7 @@ run.sh               启动服务
 ```bash
 GMX_BIN=/path/to/gmx
 GROMACS_WEB_MAX_PARALLEL=1
+GROMACS_WEB_ANALYSIS_PARALLEL=2
 GROMACS_WEB_MAX_UPLOAD_FILES=20
 GROMACS_WEB_MAX_UPLOAD_FILE_BYTES=5368709120
 GROMACS_WEB_MAX_UPLOAD_TOTAL_BYTES=21474836480

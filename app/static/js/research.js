@@ -1,5 +1,5 @@
-import { api, debounce, escapeHtml, state } from "./core.js?v=58a36b0fc94d0be8";
-import { drawPlot, plotTheme } from "./plots.js?v=58a36b0fc94d0be8";
+import { api, debounce, escapeHtml, state } from "./core.js?v=621bb939e2b97a80";
+import { drawPlot, plotTheme } from "./plots.js?v=621bb939e2b97a80";
 
 const labels = {
   ca_rmsd_nm: "C-alpha RMSD (nm)", ca_rg_nm: "C-alpha Rg (nm)",

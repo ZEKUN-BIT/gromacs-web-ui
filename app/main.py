@@ -24,10 +24,12 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, ValidationError
 from starlette.concurrency import run_in_threadpool
 
+from .agent_api import agent_router
 from .analysis.comparison import compare_research_jobs, load_research_report
+from .analysis_stream import analysis_preparation_events
 from .api_errors import error_advice
 from .diagnostics import environment_diagnostics, host_information
-from .existing_analysis import analysis_inputs, analysis_source, create_existing_analysis, source_file
+from .existing_analysis import analysis_inputs, analysis_source, create_existing_analysis, preflight_existing_analysis, source_file
 from .files import (
     DEFAULT_LOG_TAIL_BYTES,
     MAX_LOG_TAIL_BYTES,
@@ -66,12 +68,15 @@ from .product_api import product_router
 from .progress import enrich_progress
 from .reproducibility import write_experiment_manifest
 from .storage import CleanupRequest, execute_cleanup, preview_cleanup, storage_overview
+from .worker_health import worker_status as read_worker_status
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 APP_DIR = BASE_DIR / "app"
 SETTINGS = load_settings(BASE_DIR)
 RUNTIME_ROOT = Path(SETTINGS["runtime_root"]).resolve()
-STORE = JobStore(RUNTIME_ROOT, max_parallel=int(SETTINGS.get("max_parallel", 1)))
+STORE = JobStore(
+    RUNTIME_ROOT, max_parallel=int(SETTINGS.get("max_parallel", 1)), analysis_parallel=int(SETTINGS.get("analysis_parallel", 2))
+)
 
 
 FILE_LIST_CACHE: dict[str, tuple[str, list[dict], bool]] = {}
@@ -164,8 +169,10 @@ async def add_security_headers(request: Request, call_next):
             require_storage_origin(request)
         except HTTPException as exc:
             response = await explained_http_error(request, exc)
-    limited = request.url.path == "/api/templates" or request.url.path.endswith("/organization")
-    if response is None and limited and request.method in {"POST", "PATCH"}:
+    limited = (
+        request.url.path == "/api/templates" or request.url.path.endswith("/organization") or request.url.path.startswith("/api/agent/")
+    )
+    if response is None and limited and request.method in {"POST", "PUT", "PATCH"}:
         body = bytearray()
         async for chunk in request.stream():
             body.extend(chunk)
@@ -186,12 +193,15 @@ async def add_security_headers(request: Request, call_next):
     response.headers["X-Content-Type-Options"] = "nosniff"
     response.headers["X-Frame-Options"] = "DENY"
     response.headers["Referrer-Policy"] = "no-referrer"
+    if request.url.path.startswith("/api/agent/"):
+        response.headers["Cache-Control"] = "no-store"
     return response
 
 
 class SettingsPatch(BaseModel):
     gmx_bin: str | None = None
     max_parallel: int | None = None
+    analysis_parallel: int | None = None
     default_ntmpi: int | None = None
     default_ntomp: int | None = None
 
@@ -208,19 +218,12 @@ def current_settings() -> dict:
 
 
 def worker_status() -> dict:
-    lock_path = RUNTIME_ROOT / "worker.lock"
-    handle = lock_path.open("a+", encoding="utf-8")
-    try:
-        handle.seek(0)
-        worker_id = handle.read().strip() or None
-        try:
-            fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except BlockingIOError:
-            return {"available": True, "worker_id": worker_id}
-        fcntl.flock(handle, fcntl.LOCK_UN)
-        return {"available": False, "worker_id": worker_id}
-    finally:
-        handle.close()
+    return read_worker_status(RUNTIME_ROOT)
+
+
+@app.get("/api/worker")
+def get_worker_status() -> dict:
+    return worker_status()
 
 
 def _positive_int(value: object, default: object) -> int:
@@ -262,12 +265,13 @@ def get_settings() -> dict:
 @app.patch("/api/settings")
 def patch_settings(patch: SettingsPatch) -> dict:
     data = patch.model_dump(exclude_none=True)
-    if "max_parallel" in data:
-        data["max_parallel"] = max(1, min(int(data["max_parallel"]), 16))
+    for key in ("max_parallel", "analysis_parallel"):
+        if key in data:
+            data[key] = max(1, min(int(data[key]), 16))
     if "gmx_bin" in data:
         data["gmx_bin"] = data["gmx_bin"].strip() or "gmx"
     settings = save_settings(BASE_DIR, data)
-    STORE.configure(max_parallel=settings.get("max_parallel"))
+    STORE.configure(max_parallel=settings.get("max_parallel"), analysis_parallel=settings.get("analysis_parallel"))
     return settings
 
 
@@ -616,6 +620,27 @@ def analyze_existing_job(job_id: str, request: ExistingAnalysisRequest) -> dict:
         raise HTTPException(status_code=409, detail="无法准备分析输入，请检查文件及可用磁盘空间。")
 
 
+@app.post("/api/jobs/{job_id}/analysis-preflight")
+def analysis_preflight(job_id: str, request: ExistingAnalysisRequest) -> dict:
+    try:
+        return preflight_existing_analysis(STORE, job_id, request, current_settings())
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail="来源任务或分析输入不存在。")
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except (OSError, RuntimeError):
+        raise HTTPException(status_code=409, detail="无法预检分析输入，请确认来源任务已完成且文件可用。")
+
+
+@app.post("/api/jobs/{job_id}/analysis-stream")
+def analyze_existing_job_stream(job_id: str, request: ExistingAnalysisRequest) -> StreamingResponse:
+    return StreamingResponse(
+        analysis_preparation_events(STORE, job_id, request, current_settings()),
+        media_type="application/x-ndjson",
+        headers={"Cache-Control": "no-store", "X-Accel-Buffering": "no"},
+    )
+
+
 @app.post("/api/jobs/{job_id}/clone")
 def clone_job(job_id: str, request: CloneRequest | None = None) -> dict:
     try:
@@ -922,6 +947,7 @@ async def job_events(
             now = asyncio.get_running_loop().time()
             if now >= heartbeat_at:
                 heartbeat_at = now + 15
+                yield _sse_event("worker", await run_in_threadpool(worker_status))
                 yield _sse_event("ping", {"time": utc_now()})
             await asyncio.sleep(0.75)
 
@@ -1025,3 +1051,6 @@ def download_file(job_id: str, path: str) -> FileResponse:
 
 
 app.include_router(product_router(lambda: STORE, current_settings, require_storage_origin, BASE_DIR))
+app.include_router(
+    agent_router(lambda: STORE, current_settings, require_storage_origin, BASE_DIR, lambda: read_worker_status(STORE.runtime_root))
+)

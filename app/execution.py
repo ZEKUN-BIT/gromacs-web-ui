@@ -191,6 +191,9 @@ class WorkerEngine:
         self.store = store
         self.worker_id = worker_id
         self._progress_samples: dict[tuple[str, int], tuple[float, int]] = {}
+        self._pending_recovery = threading.local()
+        self._launch_lock = threading.Lock()
+        self._launch_stopped = False
 
     @staticmethod
     def steps_from_commands(commands: list[dict]) -> list[Step]:
@@ -302,8 +305,9 @@ class WorkerEngine:
             return commands[index:], step_index - 1
         return commands, 0
 
-    def recover_orphaned_jobs(self) -> None:
-        for meta in self.store.list():
+    def recover_orphaned_jobs(self, job_ids: set[str] | None = None) -> None:
+        jobs = self.store.list() if job_ids is None else [self.store.get(job_id) for job_id in job_ids]
+        for meta in jobs:
             if meta.get("status") != "running":
                 continue
             if meta.get("desired_action") == "cancel":
@@ -344,9 +348,16 @@ class WorkerEngine:
                 )
 
     def run_once(self) -> bool:
+        pending = getattr(self._pending_recovery, "job_id", None)
+        if pending is not None:
+            # A storage outage may interrupt a claimed job before its terminal
+            # state is saved. Recover only this thread's job, never its peers.
+            self.recover_orphaned_jobs({pending})
+            self._pending_recovery.job_id = None
         meta = self.store.claim_next(self.worker_id)
         if meta is None:
             return False
+        self._pending_recovery.job_id = meta["id"]
         if meta.get("claimed_action") == "cancel":
             self._cancel_job(meta)
         elif meta.get("claimed_action") == "adopt":
@@ -354,6 +365,7 @@ class WorkerEngine:
         else:
             start_index = int(meta.get("step_index") or 0)
             self._run_job(meta, self.steps_from_commands(meta.get("commands") or []), start_index)
+        self._pending_recovery.job_id = None
         return True
 
     def _cancel_requested(self, job_id: str) -> bool:
@@ -383,21 +395,29 @@ class WorkerEngine:
 
     def _watch_cancel(self, job_id: str, proc: subprocess.Popen, stop: threading.Event) -> None:
         while not stop.wait(0.25) and proc.poll() is None:
-            if not self._cancel_requested(job_id):
-                continue
-            self._refresh_owned_process(job_id, proc)
-            meta = self.store.get(job_id)
             try:
-                self._terminate_leftover(meta)
-            except RuntimeError as error:
-                self.store.update(job_id, error=str(error))
+                if not self._cancel_requested(job_id):
+                    continue
+                self._refresh_owned_process(job_id, proc)
+                meta = self.store.get(job_id)
+                try:
+                    self._terminate_leftover(meta)
+                except RuntimeError as error:
+                    self.store.update(job_id, error=str(error))
+                    continue
+            except (OSError, sqlite3.OperationalError):
+                # A temporary storage outage must not permanently disable
+                # cancellation for a long-running, otherwise quiet process.
                 continue
             if proc.poll() is not None:
                 return
 
     def _watch_resources(self, job_id: str, proc: subprocess.Popen, stop: threading.Event, usage: dict) -> None:
         while not stop.wait(0.25) and proc.poll() is None:
-            self._refresh_owned_process(job_id, proc)
+            try:
+                self._refresh_owned_process(job_id, proc)
+            except (OSError, sqlite3.OperationalError):
+                pass
             peak_rss, cpu_seconds = _process_resources(proc.pid)
             usage["peak_rss_bytes"] = max(int(usage.get("peak_rss_bytes") or 0), peak_rss)
             usage["cpu_seconds"] = max(float(usage.get("cpu_seconds") or 0), cpu_seconds)
@@ -551,7 +571,7 @@ class WorkerEngine:
             )
 
     @staticmethod
-    def _batch_steps(steps: list[Step]) -> list[list[Step]]:
+    def _batch_steps(steps: list[Step], parallel_limit: int = 2) -> list[list[Step]]:
         """Group consecutive command steps sharing a parallel_group into batches."""
         batches: list[list[Step]] = []
         index = 0
@@ -561,7 +581,12 @@ class WorkerEngine:
             if group:
                 batch = [step]
                 cursor = index + 1
-                while cursor < len(steps) and steps[cursor].kind == "command" and steps[cursor].parallel_group == group:
+                while (
+                    cursor < len(steps)
+                    and len(batch) < parallel_limit
+                    and steps[cursor].kind == "command"
+                    and steps[cursor].parallel_group == group
+                ):
                     batch.append(steps[cursor])
                     cursor += 1
                 batches.append(batch)
@@ -570,6 +595,68 @@ class WorkerEngine:
                 batches.append([step])
                 index += 1
         return batches
+
+    @staticmethod
+    def _command_environment(step: Step) -> dict | None:
+        if not step.parallel_group or "mdrun" in step.args:
+            return None
+        # Analysis slots reserve one CPU each. Numerical libraries otherwise
+        # inherit host-wide thread pools and bypass the scheduler's budget.
+        return {
+            **os.environ,
+            **dict.fromkeys(
+                ("OMP_NUM_THREADS", "OPENBLAS_NUM_THREADS", "MKL_NUM_THREADS", "NUMEXPR_NUM_THREADS", "VECLIB_MAXIMUM_THREADS"), "1"
+            ),
+        }
+
+    def prevent_new_launches(self) -> None:
+        # A fatal supervisor exit must not interrupt another slot between Popen
+        # and durable identity registration. Existing registered jobs can be
+        # recovered by the next worker using the usual identity checks.
+        self._launch_stopped = True
+        with self._launch_lock:
+            pass
+
+    def _spawn_command(self, job_id: str, workdir: Path, step: Step, identities: list[dict]) -> tuple[subprocess.Popen, dict]:
+        with self._launch_lock:
+            if self._launch_stopped:
+                raise SystemExit("Execution worker is stopping")
+            proc = subprocess.Popen(
+                step.args,
+                cwd=workdir,
+                env=self._command_environment(step),
+                text=True,
+                stdin=subprocess.PIPE if step.stdin_text else subprocess.DEVNULL,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                bufsize=1,
+                start_new_session=True,
+            )
+            identity = wait_process_identity(proc.pid)
+            if identity is None:
+                identity = {
+                    "process_pid": proc.pid,
+                    "process_pgid": proc.pid,
+                    "process_started_ticks": None,
+                    "process_command_fingerprint": command_fingerprint(step.args),
+                    "process_args": step.args,
+                    "process_cwd": str(workdir),
+                }
+            identities.append(identity)
+            try:
+                self.store.update(job_id, process_started_at=utc_now(), process_identities=list(identities), **identity)
+            except BaseException:
+                try:
+                    self._terminate_leftover({"id": job_id, "process_identities": list(identities)})
+                finally:
+                    try:
+                        proc.wait(timeout=2)
+                    finally:
+                        for stream in (proc.stdin, proc.stdout):
+                            if stream is not None and not stream.closed:
+                                stream.close()
+                raise
+            return proc, identity
 
     def _run_sequential_step(self, job_id: str, workdir: Path, meta: dict, step: Step, index: int, step_count: int, dry_run: bool) -> bool:
         """Run a single step (command or internal). Returns True to continue, False to stop."""
@@ -601,34 +688,7 @@ class WorkerEngine:
             self.store.update(job_id, step_runs=step_runs)
             return True
         self._check_disk_space(workdir)
-        proc = subprocess.Popen(
-            step.args,
-            cwd=workdir,
-            text=True,
-            stdin=subprocess.PIPE if step.stdin_text else subprocess.DEVNULL,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            bufsize=1,
-            start_new_session=True,
-        )
-        identity = wait_process_identity(proc.pid)
-        if identity is None:
-            identity = {
-                "process_pid": proc.pid,
-                "process_pgid": proc.pid,
-                "process_started_ticks": None,
-                "process_command_fingerprint": command_fingerprint(step.args),
-                "process_args": step.args,
-                "process_cwd": str(workdir),
-            }
-        try:
-            self.store.update(job_id, process_started_at=utc_now(), process_identities=[identity], **identity)
-        except BaseException:
-            try:
-                self._terminate_leftover({"id": job_id, "process_identities": [identity]})
-            finally:
-                proc.wait(timeout=2)
-            raise
+        proc, identity = self._spawn_command(job_id, workdir, step, [])
         stop = threading.Event()
         usage = {"peak_rss_bytes": 0, "cpu_seconds": 0.0}
         watcher = threading.Thread(target=self._watch_cancel, args=(job_id, proc, stop), daemon=True)
@@ -756,34 +816,24 @@ class WorkerEngine:
 
         def watch_cancel() -> None:
             while not stop.wait(0.25) and any(reader.is_alive() for reader in readers):
-                if self._cancel_requested(job_id):
-                    for proc in procs:
-                        self._refresh_owned_process(job_id, proc)
-                    try:
-                        self._terminate_leftover(self.store.get(job_id))
-                    except RuntimeError as error:
-                        self.store.update(job_id, error=str(error))
-                        continue
-                    if all(proc.poll() is not None for proc in procs):
-                        return
+                try:
+                    if self._cancel_requested(job_id):
+                        for proc in procs:
+                            self._refresh_owned_process(job_id, proc)
+                        try:
+                            self._terminate_leftover(self.store.get(job_id))
+                        except RuntimeError as error:
+                            self.store.update(job_id, error=str(error))
+                            continue
+                        if all(proc.poll() is not None for proc in procs):
+                            return
+                except (OSError, sqlite3.OperationalError):
+                    continue
 
         try:
             for offset, step in enumerate(steps):
-                proc = subprocess.Popen(
-                    step.args,
-                    cwd=workdir,
-                    text=True,
-                    stdin=subprocess.PIPE if step.stdin_text else subprocess.DEVNULL,
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.STDOUT,
-                    bufsize=1,
-                    start_new_session=True,
-                )
+                proc, _ = self._spawn_command(job_id, workdir, step, identities)
                 procs.append(proc)
-                identity = wait_process_identity(proc.pid)
-                if identity:
-                    identities.append(identity)
-                self.store.update(job_id, process_started_at=utc_now(), process_identities=list(identities), **(identity or {}))
                 reader = threading.Thread(target=drain, args=(proc, offset), daemon=True)
                 readers.append(reader)
                 reader.start()
@@ -886,7 +936,8 @@ class WorkerEngine:
             flat = list(steps)
             step_count = int(meta.get("step_count") or len(flat) or 1)
             index = start_index + 1
-            for batch in self._batch_steps(flat):
+            reservation = meta.get("resource_reservation") or self.store._resource_reservation(meta)
+            for batch in self._batch_steps(flat, parallel_limit=int(reservation["analysis_parallel"])):
                 if self._cancel_requested(job_id):
                     self.store.update(
                         job_id, status="cancelled", desired_action=None, worker_id=None, current_step=None, cancelled_at=utc_now()

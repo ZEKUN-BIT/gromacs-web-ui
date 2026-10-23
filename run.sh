@@ -41,10 +41,27 @@ fi
 
 python -m app.worker &
 execution_worker_pid=$!
-cleanup_worker() {
+web_pid=
+cleanup_services() {
   kill "$execution_worker_pid" 2>/dev/null || true
+  if [ -n "$web_pid" ]; then
+    kill "$web_pid" 2>/dev/null || true
+    wait "$web_pid" 2>/dev/null || true
+  fi
   wait "$execution_worker_pid" 2>/dev/null || true
 }
-trap cleanup_worker EXIT INT TERM
+trap cleanup_services EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
 
-uvicorn app.main:app --host "${HOST:-127.0.0.1}" --port "${PORT:-8000}" --timeout-graceful-shutdown 5 "$@"
+uvicorn app.main:app --host "${HOST:-127.0.0.1}" --port "${PORT:-8000}" --timeout-graceful-shutdown 5 "$@" &
+web_pid=$!
+# A failed worker must reach the service manager; otherwise the Web process
+# keeps accepting jobs while no execution capacity remains.
+exit_status=0
+wait -n "$execution_worker_pid" "$web_pid" || exit_status=$?
+if [ "$exit_status" -eq 0 ] && ! kill -0 "$execution_worker_pid" 2>/dev/null; then
+  echo "Execution worker stopped unexpectedly." >&2
+  exit_status=1
+fi
+exit "$exit_status"

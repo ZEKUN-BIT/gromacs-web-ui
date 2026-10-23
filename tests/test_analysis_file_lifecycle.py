@@ -56,7 +56,7 @@ def test_source_is_reserved_before_validation_until_inputs_finish_copying(source
     owner, attribute = {
         "validation": (existing_analysis, "analysis_source"),
         "selection": (existing_analysis, "source_file"),
-        "copy": (existing_analysis.shutil, "copy2"),
+        "copy": (existing_analysis, "_copy_analysis_input"),
     }[phase]
     original = getattr(owner, attribute)
 
@@ -100,7 +100,7 @@ def test_cancelled_target_is_reserved_through_copy_and_manifest(source, monkeypa
     store, job_id = source
     entered, release = threading.Event(), threading.Event()
     owner, attribute = {
-        "copy": (existing_analysis.shutil, "copy2"),
+        "copy": (existing_analysis, "_copy_analysis_input"),
         "manifest": (existing_analysis, "write_experiment_manifest"),
     }[phase]
     original = getattr(owner, attribute)
@@ -148,7 +148,7 @@ def test_failed_staging_keeps_target_reserved_until_partial_files_are_removed(so
         assert release.wait(5)
         return original_unlink(path, *args, **kwargs)
 
-    monkeypatch.setattr(existing_analysis.shutil, "copy2", fail_copy)
+    monkeypatch.setattr(existing_analysis, "_copy_analysis_input", fail_copy)
     monkeypatch.setattr(existing_analysis.Path, "unlink", slow_unlink)
     thread, outcome = start_thread(lambda: create_analysis(store, job_id))
     try:
@@ -185,7 +185,7 @@ def test_target_cancelled_or_deleted_before_reservation_receives_no_files(source
         pytest.fail("Files must not be staged after cancellation or deletion")
 
     monkeypatch.setattr(store, "create", cancel_immediately)
-    monkeypatch.setattr(existing_analysis.shutil, "copy2", unexpected_copy)
+    monkeypatch.setattr(existing_analysis, "_copy_analysis_input", unexpected_copy)
     expected_error = FileNotFoundError if delete_before_lock else RuntimeError
     with pytest.raises(expected_error):
         create_analysis(store, job_id)

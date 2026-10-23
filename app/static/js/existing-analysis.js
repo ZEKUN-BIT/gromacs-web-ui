@@ -1,5 +1,43 @@
-import { api, state, toast } from "./core.js?v=58a36b0fc94d0be8";
-import { refreshJobs, selectJob } from "./jobs.js?v=58a36b0fc94d0be8";
+import { api, state, toast } from "./core.js?v=621bb939e2b97a80";
+import { refreshJobs, selectJob } from "./jobs.js?v=621bb939e2b97a80";
+
+export async function readAnalysisPreparation(response, onProgress) {
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({}));
+    throw new Error(typeof error.detail === "string" ? error.detail : "无法创建分析任务，请检查输入。");
+  }
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let pending = "", created = null;
+  function consume(line) {
+    if (!line.trim()) return;
+    const event = JSON.parse(line);
+    if (event.type === "error") throw new Error(event.message);
+    if (event.type === "result") created = event.job;
+    if (event.type === "progress") onProgress(event);
+  }
+  try {
+    while (true) {
+      let chunk;
+      try { chunk = await reader.read(); }
+      catch { throw new Error("准备进度连接已断开，请先查看任务列表确认是否已创建，避免重复提交。"); }
+      const { done, value } = chunk;
+      pending += decoder.decode(value, { stream: !done });
+      const lines = pending.split("\n");
+      pending = lines.pop();
+      for (const line of lines) {
+        consume(line);
+        if (created) return created;
+      }
+      if (done) { consume(pending); break; }
+    }
+  } finally {
+    await reader.cancel().catch(() => {});
+    reader.releaseLock();
+  }
+  if (!created) throw new Error("准备进度连接已断开，请先查看任务列表确认是否已创建，避免重复提交。");
+  return created;
+}
 
 export function bindExistingAnalysis() {
   const dialog = document.querySelector("#existing-analysis-dialog");
@@ -9,12 +47,15 @@ export function bindExistingAnalysis() {
   const cancel = document.querySelector("#existing-analysis-cancel");
   const error = document.querySelector("#existing-analysis-error");
   const status = document.querySelector("#existing-analysis-status");
+  const preflightButton = document.querySelector("#analysis-preflight");
+  const preflightResult = document.querySelector("#analysis-preflight-result");
   const fileKeys = ["trajectory_file", "tpr_file", "index_file", "edr_file"];
   const metrics = ["do_rmsd", "do_rg", "do_energy", "do_dssp", "do_hbond", "do_pca", "do_research"];
   let sourceId = null;
   let inputs = {};
   let busy = false;
   let indexKey = "", indexLoading = false;
+  let preparingJobId = null;
 
   async function updateIndexGroups() {
     const select = form.elements.research_ligand_group;
@@ -63,6 +104,7 @@ export function bindExistingAnalysis() {
   }
 
   function updateSelection() {
+    preflightResult.hidden = true;
     document.querySelector("#research-settings").hidden = !form.elements.do_research.checked;
     updateIndexGroups();
     const energy = form.elements.do_energy;
@@ -87,6 +129,8 @@ export function bindExistingAnalysis() {
     form.reset();
     updateSelection();
     inputs = {};
+    preparingJobId = null;
+    cancel.textContent = "取消";
     showError("");
     document.querySelector("#existing-analysis-source").textContent = "";
     document.querySelector("#existing-analysis-size").textContent = "";
@@ -129,9 +173,48 @@ export function bindExistingAnalysis() {
   });
 
   form.elements.trajectory_file.addEventListener("change", matchTrajectory);
+  // Invalidate while typing so dismissing an old estimate cannot move the
+  // submit button between pointerdown and click when an input loses focus.
+  form.addEventListener("input", () => { preflightResult.hidden = true; });
   form.addEventListener("change", updateSelection);
-  cancel.addEventListener("click", () => dialog.close());
+  cancel.addEventListener("click", async () => {
+    if (!busy) { dialog.close(); return; }
+    if (!preparingJobId) return;
+    cancel.disabled = true;
+    try {
+      await api(`/api/jobs/${encodeURIComponent(preparingJobId)}/cancel`, { method: "POST" });
+      status.textContent = "已请求停止准备，正在清理未完成的副本…";
+    } catch (failure) { showError(failure.message); cancel.disabled = false; }
+  });
   dialog.addEventListener("cancel", (event) => { if (busy) event.preventDefault(); });
+  function requestFromForm() {
+    const request = Object.fromEntries(new FormData(form));
+    [...metrics, "dry_run"].forEach((key) => { request[key] = form.elements[key].checked; });
+    for (const key of ["research_stride", "contact_cutoff_nm", "begin_ns"]) request[key] = Number(request[key]);
+    request.end_ns = request.end_ns === "" ? null : Number(request.end_ns);
+    if (request.end_ns !== null && request.end_ns <= request.begin_ns) throw new Error("分析结束时间必须大于开始时间。");
+    if (!request.do_research) request.research_ligand_group = "";
+    return request;
+  }
+  preflightButton.addEventListener("click", async () => {
+    if (busy || !form.reportValidity()) return;
+    showError("");
+    try {
+      const request = requestFromForm();
+      setBusy(true, "正在检查轨迹规模与磁盘空间…");
+      const result = await api(`/api/jobs/${encodeURIComponent(sourceId)}/analysis-preflight`, {
+        method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(request),
+      });
+      const research = result.research;
+      preflightResult.textContent = [
+        `预计需预留 ${(result.storage.required_free_bytes / 1024 ** 3).toFixed(2)} GiB。`,
+        research ? `所选范围 ${research.selected_frames} 帧，按当前间隔取样 ${research.sampled_frames} 帧、${research.residues} 个 C-alpha。` : "",
+        research?.message || (research ? "轨迹规模检查通过。" : ""),
+      ].filter(Boolean).join(" ");
+      preflightResult.hidden = false;
+    } catch (failure) { showError(failure.message); }
+    finally { setBusy(false); }
+  });
   form.addEventListener("submit", async (event) => {
     event.preventDefault();
     if (busy || !form.reportValidity()) return;
@@ -140,26 +223,31 @@ export function bindExistingAnalysis() {
       showError("请至少选择一项分析指标。");
       return;
     }
-    const request = Object.fromEntries(new FormData(form));
-    [...metrics, "dry_run"].forEach((key) => { request[key] = form.elements[key].checked; });
-    for (const key of ["research_stride", "contact_cutoff_nm", "begin_ns"]) request[key] = Number(request[key]);
-    request.end_ns = request.end_ns === "" ? null : Number(request.end_ns);
-    if (request.end_ns !== null && request.end_ns <= request.begin_ns) {
-      showError("分析结束时间必须大于开始时间。");
-      return;
-    }
-    if (!request.do_research) request.research_ligand_group = "";
+    let request;
+    try { request = requestFromForm(); } catch (failure) { showError(failure.message); return; }
     showError("");
-    setBusy(true, "正在复制输入并计算校验值，大轨迹可能需要较长时间…");
+    preparingJobId = null;
+    setBusy(true, "正在检查输入…");
     let created;
     try {
-      created = await api(`/api/jobs/${encodeURIComponent(sourceId)}/analysis`, {
+      const response = await fetch(`/api/jobs/${encodeURIComponent(sourceId)}/analysis-stream`, {
         method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(request),
+      }).catch(() => {
+        throw new Error("连接中断，请先查看任务列表确认是否已创建，避免重复提交。");
+      });
+      created = await readAnalysisPreparation(response, (event) => {
+        if (event.job_id) { preparingJobId = event.job_id; cancel.disabled = false; cancel.textContent = "停止准备"; }
+        if (event.phase === "copy") {
+          const percent = event.total_bytes ? Math.min(100, 100 * event.copied_bytes / event.total_bytes) : 0;
+          status.textContent = `正在复制并校验输入：${percent.toFixed(1)}%（${(event.copied_bytes / 1024 ** 2).toFixed(1)} / ${(event.total_bytes / 1024 ** 2).toFixed(1)} MiB）`;
+        } else if (event.message) status.textContent = event.message;
       });
     } catch (failure) {
       showError(failure.message);
       return;
     } finally {
+      preparingJobId = null;
+      cancel.textContent = "取消";
       setBusy(false);
     }
     dialog.close();

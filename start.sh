@@ -2,6 +2,7 @@
 set -euo pipefail
 
 PROJECT_DIR="$(cd "$(dirname "$0")" && pwd)"
+cd "$PROJECT_DIR"
 ENV_FILE="${ENV_FILE:-$PROJECT_DIR/.env}"
 if [ -f "$ENV_FILE" ]; then
   set -a
@@ -9,10 +10,22 @@ if [ -f "$ENV_FILE" ]; then
   set +a
 fi
 
+if [ "${1:-}" = "--desktop-info" ]; then
+  exec python3 "$PROJECT_DIR/scripts/linux_desktop.py" info
+fi
+
 if [ -n "${CONDA_ENV:-}" ]; then
   if ! command -v conda >/dev/null 2>&1; then
-    echo "Conda is not available in PATH; unset CONDA_ENV or initialize Conda first." >&2
-    exit 1
+    for conda_root in "$HOME/miniforge3" "$HOME/miniconda3" "$HOME/anaconda3" "$HOME/mambaforge"; do
+      if [ -x "$conda_root/bin/conda" ]; then
+        export PATH="$conda_root/bin:$PATH"
+        break
+      fi
+    done
+    if ! command -v conda >/dev/null 2>&1; then
+      echo "Conda is not available in PATH; unset CONDA_ENV or initialize Conda first." >&2
+      exit 1
+    fi
   fi
   eval "$(conda shell.bash hook)"
   conda activate "$CONDA_ENV"

@@ -32,7 +32,7 @@ def check_viewport(browser, width: int, height: int, scheme: str, artifact_dir: 
     templates: list[dict] = []
     errors: list[str] = []
     pending: dict = {}
-    control = {"hold_product": False, "hold_patch": False, "hold_help": False, "hold_diagnostics": False, "hold_summary": False}
+    control = {"hold_product": False, "hold_patch": False, "hold_help": False, "hold_diagnostics": False, "hold_summary": False, "fail_files": False}
 
     def catalog():
         projects = sorted({job["project"] for job in jobs if job["project"]})
@@ -48,6 +48,16 @@ def check_viewport(browser, width: int, height: int, scheme: str, artifact_dir: 
         payload = None
         if path == "/api/health":
             payload = {"settings": {"gmx_bin": "gmx", "runtime_root": "isolated-browser-fixture", "max_parallel": 1}, "gromacs": {"available": False, "message": "浏览器回归不运行模拟"}, "diagnostics": {}}
+        elif path == "/api/agent/config":
+            assert route.request.method == "GET", "Automatic AI initialization must be read-only"
+            payload = {
+                "provider": "openai", "model": "gpt-6.1-sol", "has_api_key": False, "key_source": "none",
+                "providers": [{"id": "openai", "label": "OpenAI", "default_model": "gpt-6.1-sol", "endpoint": "https://api.openai.com/v1"}],
+                "profiles": {"openai": {"model": "gpt-6.1-sol", "has_api_key": False, "key_source": "none"}},
+            }
+        elif path == "/api/agent/sessions":
+            assert route.request.method == "GET", "Opening the application must not create a conversation"
+            payload = {"sessions": [], "limit": 200}
         elif path == "/api/product":
             if legacy:
                 route.fulfill(status=404, content_type="application/json", body='{"detail":"Not Found"}')
@@ -97,6 +107,10 @@ def check_viewport(browser, width: int, height: int, scheme: str, artifact_dir: 
                     pending["patch"] = (route, payload)
                     return
             elif parts[4] == "files":
+                if control["fail_files"]:
+                    control["fail_files"] = False
+                    route.fulfill(status=503, content_type="application/json", body=json.dumps({"detail": "文件服务暂时不可用"}))
+                    return
                 payload = {"files": [], "truncated": False}
             elif parts[4] == "summary":
                 payload = {"quality": [{"file": "quality_report.json", "status": "passed", "notes": ["核对采样充分性"]}], "input_count": 2 if job["id"] == "product-1" else 99, "manifest": True}
@@ -297,6 +311,27 @@ def check_viewport(browser, width: int, height: int, scheme: str, artifact_dir: 
         page.locator("#job-tags").fill("WT，300K")
         page.locator("#job-notes").fill("第一次提交")
         page.locator("#job-pinned").check()
+        expect(page.locator("#organization-summary")).to_contain_text("未保存")
+        expect(page.locator("#organization-draft-status")).to_contain_text("本机草稿已保留")
+        open_rail()
+        page.locator('[data-job-id="product-2"] .job-select').click()
+        expect(page.locator("#job-notes")).to_have_value("原始备注")
+        open_rail()
+        page.locator('[data-job-id="product-1"] .job-select').click()
+        expect(page.locator("#job-project")).to_have_value("新研究项目")
+        expect(page.locator("#job-tags")).to_have_value("WT，300K")
+        expect(page.locator("#job-notes")).to_have_value("第一次提交")
+        expect(page.locator("#job-pinned")).to_be_checked()
+        page.once("dialog", lambda dialog: dialog.accept())
+        page.reload(wait_until="networkidle")
+        page.locator('[data-workspace-view="detail"]').click()
+        page.locator(".organization-panel > summary").click()
+        expect(page.locator("#job-project")).to_have_value("新研究项目")
+        expect(page.locator("#job-tags")).to_have_value("WT，300K")
+        expect(page.locator("#job-notes")).to_have_value("第一次提交")
+        expect(page.locator("#job-pinned")).to_be_checked()
+        expect(page.locator("#organization-draft-status")).to_contain_text("未保存")
+        screenshot("draft")
         control["hold_patch"] = True
         page.locator('#organization-form button[type="submit"]').click()
         page.locator("#job-notes").fill("请求期间继续编辑")
@@ -307,12 +342,25 @@ def check_viewport(browser, width: int, height: int, scheme: str, artifact_dir: 
         expect(page.locator("#organization-summary")).to_contain_text("新研究项目")
         expect(page.locator('#organization-form button[type="submit"]')).to_be_enabled()
         assert jobs[0]["notes"] == "请求期间继续编辑" and jobs[0]["tags"] == ["WT", "300K"] and jobs[0]["pinned"]
+        expect(page.locator("#organization-draft-status")).not_to_contain_text("未保存")
+        assert page.evaluate("localStorage.getItem('gromacs-organization-draft-v1:product-1')") is None
         expect(page.locator("#result-summary-content")).to_contain_text("科学结论分别判断")
         # Chromium's native HTTP downloads bypass request interception. Verify the
         # selected-job link here; backend bundle tests validate its ZIP contents.
         expect(page.locator("#download-result-bundle")).to_have_attribute("href", "/api/jobs/product-1/result-bundle")
         expect(page.locator("#download-result-bundle")).to_be_visible()
         screenshot("result")
+
+        # A transient file failure is actionable and retrying the same task works.
+        control["fail_files"] = True
+        page.locator('[data-detail-tab="files"]').click()
+        expect(page.locator("#output-files")).to_contain_text("文件列表加载失败")
+        expect(page.locator("#file-count")).to_have_text("读取失败")
+        screenshot("files-error")
+        page.locator("#output-files").get_by_role("button", name="重试加载文件").click()
+        expect(page.locator("#output-files")).to_contain_text("暂无输出文件")
+        expect(page.locator("#file-count")).to_have_text("0 个")
+        page.locator('[data-detail-tab="overview"]').click()
 
         # Late metadata and summary responses from another job cannot replace the
         # selected job's form, quality summary or export target.

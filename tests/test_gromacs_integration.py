@@ -174,6 +174,19 @@ def test_real_tpr_job_and_rmsd_plot_api(argon_tpr, real_gmx, job_api) -> None:
     assert plots[0]["last"] > 0
     assert plots[0]["time_unit"] == "ps"
 
+    # Preflight decodes a real TPR/XTC before any analysis copy is created.
+    request = {"tpr_file": "argon.tpr", "trajectory_file": "argon.xtc", "do_research": True, "research_stride": 1}
+    preflight = client.post(f"/api/jobs/{job['id']}/analysis-preflight", json=request)
+    assert preflight.status_code == 200, preflight.text
+    size = preflight.json()["research"]
+    assert size["available_frames"] == size["sampled_frames"] == 9
+    assert size["atoms"] == 64
+    assert size["residues"] == 0 and not size["valid"]  # Argon has no protein C-alpha atoms.
+    previous = len(store.list())
+    rejected = client.post(f"/api/jobs/{job['id']}/analysis", json=request)
+    assert rejected.status_code == 400, rejected.text
+    assert len(store.list()) == previous
+
 
 def test_resume_real_checkpoint_via_api(argon_tpr, real_gmx, job_api) -> None:
     client, store = job_api

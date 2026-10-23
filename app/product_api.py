@@ -150,7 +150,16 @@ def product_router(get_store: Callable, get_settings: Callable, check_origin: Ca
 
     @router.get("/help/document")
     def help_document(name: Annotated[str, Query(max_length=80)] = "QUICKSTART"):
-        allowed = {"QUICKSTART", "USAGE", "WINDOWS", "TRAJECTORY-ANALYSIS", "RESEARCH-ANALYSIS", "PLOTTING", "RELEASE-CHECKLIST"}
+        allowed = {
+            "QUICKSTART",
+            "USAGE",
+            "WINDOWS",
+            "TRAJECTORY-ANALYSIS",
+            "RESEARCH-ANALYSIS",
+            "PLOTTING",
+            "RELEASE-CHECKLIST",
+            "AI-AGENT",
+        }
         if name not in allowed:
             raise HTTPException(404, detail="文档不存在。")
         path = base_dir / "docs" / f"{name}.md"
