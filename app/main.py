@@ -84,7 +84,7 @@ WEB_PROCESS_LOCK = None
 MAX_FILE_LIST_ITEMS = 1000
 SSE_LOG_CHUNK_BYTES = 64 * 1024
 
-app = FastAPI(title="GROMACS Web UI", version="0.2.8")
+app = FastAPI(title="GROMACS Web UI", version="0.2.9")
 # Capture the running process identity once; files may be replaced by an update.
 # These public identifiers distinguish desktop instances, not authentication.
 RUNTIME_IDENTITY = {

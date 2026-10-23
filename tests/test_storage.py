@@ -264,3 +264,21 @@ def test_two_previews_cannot_both_clean_the_same_revision(store):
     assert sum(result["deleted_files"] for result in results) == 1
     assert sum(bool(result["skipped_jobs"]) for result in results) == 1
     assert store.get(job["id"])["storage_revision"] == 1
+
+
+def test_stale_preview_preserves_successful_cleanup_record(store):
+    job = terminal_job(store)
+    write_files(store, job, ["nvt.trr"])
+    request = CleanupRequest(job_ids=[job["id"]])
+    first, stale = preview_cleanup(store, request), preview_cleanup(store, request)
+    result = execute_cleanup(store, request.model_copy(update={"preview_token": first["preview_token"]}))
+    assert result["deleted_files"] == 1
+    completed = store.get(job["id"])
+
+    rejected = execute_cleanup(store, request.model_copy(update={"preview_token": stale["preview_token"]}))
+    assert rejected["skipped_jobs"]
+    assert rejected["deleted_files"] == 0
+    current = store.get(job["id"])
+    assert current["storage_revision"] == completed["storage_revision"] == 1
+    assert current["last_cleanup"] == completed["last_cleanup"]
+    assert not current.get("last_cleanup_error")

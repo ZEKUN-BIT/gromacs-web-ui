@@ -204,6 +204,13 @@ def test_payload_omits_private_data_and_includes_runtime_plotting(tmp_path):
         assert {
             "app/main.py",
             "app/worker.py",
+            "app/agent_api.py",
+            "app/agent_provider.py",
+            "app/agent_service.py",
+            "app/agent_tools.py",
+            "app/static/agent.css",
+            "app/static/js/agent.js",
+            "app/static/js/agent-content.js",
             "app/templates/index.html",
             "scripts/md_plot.py",
             "scripts/__init__.py",
@@ -221,6 +228,7 @@ def test_payload_omits_private_data_and_includes_runtime_plotting(tmp_path):
             "docs/QUICKSTART.md",
             "docs/RELEASE-CHECKLIST.md",
             "docs/USAGE.md",
+            "docs/AI-AGENT.md",
             "app/static/examples/index.html",
             "app/static/examples/summary.json",
         } <= names

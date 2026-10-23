@@ -364,11 +364,11 @@ def execute_cleanup(store, request: CleanupRequest) -> dict:
     result = {"deleted_bytes": 0, "deleted_files": 0, "deleted_jobs": [], "cleaned_jobs": [], "skipped_jobs": []}
     for job_id, snapshot in saved["jobs"].items():
         try:
+
+            def validate(meta, workdir, expected=snapshot):
+                _validate_snapshot(meta, _scan_job(store, meta["id"]), request, expected)
+
             if request.mode == "delete_jobs":
-
-                def validate(meta, workdir, expected=snapshot):
-                    _validate_snapshot(meta, _scan_job(store, meta["id"]), request, expected)
-
                 store.delete(job_id, allowed_states=_TERMINAL, validate=validate)
                 result["deleted_jobs"].append(job_id)
                 result["deleted_files"] += sum(stat.S_ISREG(item[2]) for item in snapshot["files"].values())
@@ -392,7 +392,7 @@ def execute_cleanup(store, request: CleanupRequest) -> dict:
                     finally:
                         os.close(directory_fd)
 
-                cleaned = store.maintain_job(job_id, clean)
+                cleaned = store.maintain_job(job_id, clean, validate=validate)
                 result["cleaned_jobs"].append(job_id)
                 result["deleted_bytes"] += cleaned["deleted_bytes"]
                 result["deleted_files"] += cleaned["deleted_files"]

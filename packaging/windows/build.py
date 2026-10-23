@@ -28,6 +28,7 @@ HELP_NAMES = (
     "RESEARCH-ANALYSIS",
     "PLOTTING",
     "RELEASE-CHECKLIST",
+    "AI-AGENT",
 )
 EXAMPLE_SUFFIXES = {".html", ".css", ".json", ".xvg", ".png", ".md", ".mdp", ".txt"}
 FONT_SOURCES = ("app/static/fonts/ibm-plex-sans-var-latin.woff2", "app/static/fonts/jetbrains-mono-var-latin.woff2")

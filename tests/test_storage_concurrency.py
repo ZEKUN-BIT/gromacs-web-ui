@@ -170,6 +170,23 @@ def test_slow_maintenance_allows_unrelated_updates_and_blocks_task_actions(store
     assert current["storage_revision"] == 1
 
 
+def test_maintenance_rejects_metadata_changed_during_preview_validation(store):
+    source = source_job(store)
+    operations = []
+
+    def validate(meta, workdir):
+        assert_unrelated_update_proceeds(store)
+        store.update(source["id"], note="changed while validating")
+
+    with pytest.raises(RuntimeError, match="changed"):
+        store.maintain_job(source["id"], lambda *_: operations.append("cleaned"), validate=validate)
+    assert not operations
+    current = store.get(source["id"])
+    assert current["storage_revision"] == 0
+    assert not current.get("maintenance_pending")
+    assert not current.get("last_cleanup_error")
+
+
 def test_slow_deletion_releases_database_lock_and_keeps_durable_pending_marker(store, monkeypatch):
     source = source_job(store)
     workdir = store.job_dir(source["id"])

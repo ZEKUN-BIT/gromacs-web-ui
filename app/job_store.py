@@ -771,7 +771,9 @@ class JobStore:
             self._persist(connection, meta)
             connection.commit()
 
-    def maintain_job(self, job_id: str, operation: Callable[[dict, Path], dict]) -> dict:
+    def maintain_job(
+        self, job_id: str, operation: Callable[[dict, Path], dict], *, validate: Callable[[dict, Path], None] | None = None
+    ) -> dict:
         """Reserve task files while allowing unrelated database writers to proceed."""
         from .execution import live_process_identities
 
@@ -779,6 +781,11 @@ class JobStore:
             workdir = self.job_dir(job_id)
             if (self.jobs_root / job_id).is_symlink():
                 raise RuntimeError("Cannot maintain a task directory that is a symbolic link.")
+            initial = self.get(job_id)
+            # Reject stale previews before recording an operation that might
+            # modify files, and keep directory scans outside the writer lock.
+            if validate:
+                validate(initial, workdir)
             with self._connect() as connection:
                 connection.execute("BEGIN IMMEDIATE")
                 row = connection.execute("SELECT * FROM jobs WHERE id=?", (job_id,)).fetchone()
@@ -792,6 +799,8 @@ class JobStore:
                     or live_process_identities(meta, workdir)
                 ):
                     raise RuntimeError("Only completed or cancelled tasks without active processes can be cleaned.")
+                if row["version"] != initial["version"]:
+                    raise RuntimeError("Task changed since the cleanup preview; preview again.")
                 meta["maintenance_pending"] = True
                 self._persist(connection, meta)
                 connection.commit()
