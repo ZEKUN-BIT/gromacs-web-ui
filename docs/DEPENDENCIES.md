@@ -36,4 +36,4 @@ python3 scripts/lock_dependencies.py --check
 
 普通 PR 修改后端 Python、工作流、分析脚本、测试/fixture、力场、教学模拟输入、依赖或 CI 配置时，会自动运行已有的小型真实模拟、checkpoint 恢复和轨迹分析。文档和纯前端改动无需运行真实模拟。触发范围由 `scripts/check_gromacs_changes.py` 定义；新增重要输入目录时也应更新这里。
 
-每周定时、手动触发和标签触发继续运行真实模拟。测试固定使用单线程 CPU，设置 15 分钟上限；失败时保留诊断文件 3 天。Python 测试矩阵每次检查锁的源摘要，验证运行锁的完整解析，并从开发锁实际安装后执行 `pip check`。
+每周定时、手动触发和标签触发继续运行真实模拟。真实模拟的 runner 固定为 Ubuntu 24.04，与 Windows 的 WSL 环境一致，避免 `ubuntu-latest` 升级期间的软件源变化。测试固定使用单线程 CPU，设置 15 分钟上限；失败时保留诊断文件 3 天。Python 测试矩阵每次检查锁的源摘要，验证运行锁的完整解析，并从开发锁实际安装后执行 `pip check`。

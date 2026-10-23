@@ -75,7 +75,8 @@ jobs:
       always() && !cancelled() &&
       (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' ||
        startsWith(github.ref, 'refs/tags/') || needs.changes.outputs.gromacs == 'true')
-    runs-on: ubuntu-latest
+    # Match the WSL distribution and avoid ubuntu-latest repository transitions.
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
     env:
       GROMACS_INTEGRATION: "1"
