@@ -98,6 +98,9 @@ def run(artifact_dir: Path, update: bool, visual: bool = True) -> None:
         for view in ("compose", "agent", "detail"):
             if view == "agent":
                 page.locator("#open-agent").click()
+                expect(page.locator("#agent-connection-status")).to_have_text("尚未配置 API")
+                expect(page.locator("#agent-message")).to_be_editable()
+                page.locator("#agent-message").focus()
             else:
                 page.locator(f'[data-workspace-view="{view}"]').click()
             if view == "detail":
@@ -118,6 +121,9 @@ def run(artifact_dir: Path, update: bool, visual: bool = True) -> None:
             item = {"name": name, "wcag_violations": len(results)}
             if visual:
                 path = artifact_dir / f"{name}.png"
+                # Native smooth scrolling is not a Web Animation. Cancel it at
+                # sampling time so slower CI hosts capture the same location.
+                page.evaluate("window.scrollTo({top:0, left:0, behavior:'instant'})")
                 # Last-update timestamps are tested separately; exclude locale formatting.
                 page.screenshot(path=str(path), animations="disabled", caret="hide", mask=[page.locator("#task-sync-time")])
                 baseline = BASELINES / path.name
