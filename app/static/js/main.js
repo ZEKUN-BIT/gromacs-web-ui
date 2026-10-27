@@ -2,7 +2,6 @@
 
 import {
   FILE_FIELD_NAMES,
-  MAX_LOG_CHARS,
   els,
   state,
   cacheElements,
@@ -11,7 +10,8 @@ import {
   closeConfirmDialog,
   showWorkspaceView,
   showDetailTab,
-} from "./core.js?v=621bb939e2b97a80";
+  setSidebarOpen,
+} from "./core.js?v=ed99335f08f47fd8";
 import {
   saveSettings,
   setMdpPanelExpanded,
@@ -33,7 +33,7 @@ import {
   refreshRowMode,
   applyHardwareRecommendation,
   updateResourceAdvice,
-} from "./form.js?v=621bb939e2b97a80";
+} from "./form.js?v=ed99335f08f47fd8";
 import {
   submitJob,
   cancelActiveJob,
@@ -50,82 +50,26 @@ import {
   renderJobs,
   refreshJobs,
   applyFileFilter,
-  applyJobsPayload,
-  applyJobDetail,
-  appendLogChunk,
   renderActiveJob,
   changeJobsPage,
   forgetDeletedJob,
-} from "./jobs.js?v=621bb939e2b97a80";
-import { bindDraftSaving, restoreDraft } from "./drafts.js?v=621bb939e2b97a80";
-import { bindPlotControls } from "./plots.js?v=621bb939e2b97a80";
-import { bindExistingAnalysis } from "./existing-analysis.js?v=621bb939e2b97a80";
-import { bindResearch } from "./research.js?v=621bb939e2b97a80";
-import { bindStorage } from "./storage.js?v=621bb939e2b97a80";
-import { bindAgent } from "./agent.js?v=621bb939e2b97a80";
-import { prepareWorkspace, bindWorkspace, refreshComposerSummary } from "./workspace.js?v=621bb939e2b97a80";
-import { bindResultSummary } from "./result-summary.js?v=621bb939e2b97a80";
-import { renderReadiness } from "./form-environment.js?v=621bb939e2b97a80";
+} from "./jobs.js?v=ed99335f08f47fd8";
+import { bindDraftSaving, restoreDraft } from "./drafts.js?v=ed99335f08f47fd8";
+import { bindPlotControls } from "./plots.js?v=ed99335f08f47fd8";
+import { bindExistingAnalysis } from "./existing-analysis.js?v=ed99335f08f47fd8";
+import { bindResearch } from "./research.js?v=ed99335f08f47fd8";
+import { bindStorage } from "./storage.js?v=ed99335f08f47fd8";
+import { bindAgent } from "./agent.js?v=ed99335f08f47fd8";
+import { prepareWorkspace, bindWorkspace, refreshComposerSummary } from "./workspace.js?v=ed99335f08f47fd8";
+import { bindResultSummary } from "./result-summary.js?v=ed99335f08f47fd8";
 
-function disconnectEventStream() {
-  window.clearTimeout(state.reconnectTimer);
-  state.reconnectTimer = null;
-  state.eventSource?.close();
-  state.eventSource = null;
-}
-
-function connectEventStream() {
-  disconnectEventStream();
-  if (document.hidden) return;
-  const query = new URLSearchParams();
-  query.set("jobs_offset", String(state.jobsOffset));
-  query.set("jobs_search", state.jobFilter.trim());
-  query.set("jobs_project", state.jobProject || "");
-  if (state.activeJobId) query.set("job_id", state.activeJobId);
-  if (state.logOffset > 0) {
-    // Resume where we left off after a reconnect.
-    query.set("log_offset", String(state.logOffset));
-  } else {
-    // Fresh panel open: jump straight to the tail instead of streaming the
-    // whole run.log from byte 0 (a multi-MB log used to take minutes to load).
-    query.set("log_tail", String(MAX_LOG_CHARS));
-  }
-  const source = new EventSource(`/api/events?${query}`);
-  state.eventSource = source;
-  source.addEventListener("jobs", (event) => {
-    if (state.eventSource !== source) return;
-    const payload = JSON.parse(event.data);
-    if (state.jobsOffset > 0 && state.jobsOffset >= payload.total) {
-      refreshJobs().catch((error) => toast(error.message, "error")).finally(connectEventStream);
-      return;
-    }
-    const previousActive = state.activeJobId;
-    applyJobsPayload(payload);
-    if (state.activeJobId !== previousActive) connectEventStream();
-  });
-  source.addEventListener("job", (event) => applyJobDetail(JSON.parse(event.data)));
-  source.addEventListener("log", (event) => appendLogChunk(JSON.parse(event.data)));
-  source.addEventListener("worker", (event) => {
-    if (state.eventSource !== source || !state.healthPayload) return;
-    state.healthPayload.worker = JSON.parse(event.data);
-    renderReadiness();
-  });
-  source.addEventListener("deleted", () => {
-    if (state.eventSource !== source) return;
-    forgetDeletedJob(query.get("job_id"));
-    refreshJobs().catch((error) => toast(error.message, "error")).finally(connectEventStream);
-  });
-  source.onerror = () => {
-    source.close();
-    if (state.eventSource === source) state.eventSource = null;
-    window.clearTimeout(state.reconnectTimer);
-    state.reconnectTimer = window.setTimeout(connectEventStream, 1500);
-  };
-}
+import { connectEventStream, disconnectEventStream, bindConnectionStatus } from "./event-stream.js?v=ed99335f08f47fd8";
+import { bindNavigation } from "./navigation.js?v=ed99335f08f47fd8";
 
 /* ---------- 事件绑定 ---------- */
 
 function bindUI() {
+  bindConnectionStatus();
   bindStorage();
   bindAgent();
   document.addEventListener("storage-cleaned", async (event) => {
@@ -157,10 +101,16 @@ function bindUI() {
     });
   });
   els.toggleSidebar.addEventListener("click", () => {
-    const open = document.body.classList.toggle("sidebar-open");
-    els.toggleSidebar.setAttribute("aria-expanded", String(open));
+    setSidebarOpen(!document.body.classList.contains("sidebar-open"), true);
+  });
+  els.sidebarBackdrop?.addEventListener("click", () => setSidebarOpen(false, true));
+  window.matchMedia("(max-width: 1180px)").addEventListener("change", (event) => {
+    if (!event.matches) setSidebarOpen(false);
   });
   els.saveSettings.addEventListener("click", saveSettings);
+  for (const field of [els.gmxBin, els.maxParallel, document.querySelector("#analysis-parallel")]) {
+    field?.addEventListener("input", () => { field.dataset.userEdited = "true"; });
+  }
   els.applyHardwareRecommendation?.addEventListener("click", applyHardwareRecommendation);
   els.maxParallel?.addEventListener("input", updateResourceAdvice);
   els.submitJob.addEventListener("click", submitJob);
@@ -215,9 +165,7 @@ function bindUI() {
   });
   document.addEventListener("keydown", (event) => {
     if (event.key === "Escape" && !document.querySelector("dialog[open]") && document.body.classList.contains("sidebar-open")) {
-      document.body.classList.remove("sidebar-open");
-      els.toggleSidebar.setAttribute("aria-expanded", "false");
-      els.toggleSidebar.focus();
+      setSidebarOpen(false, true);
     }
   });
 
@@ -229,7 +177,7 @@ function bindUI() {
     }
     try {
       await navigator.clipboard.writeText(text);
-      toast("日志已复制到剪贴板", "success");
+      toast(state.logTailOmittedBytes || state.logTrimmedChars ? "当前显示的末尾日志已复制；可下载已保留日志，服务端轮转可能省略更早内容。" : "日志已复制到剪贴板", "success");
     } catch {
       toast("复制失败，请检查浏览器权限", "error");
     }
@@ -315,6 +263,7 @@ function bindUI() {
 
   // 输入时防抖刷新预览，避免每次击键都发请求
   els.jobForm.addEventListener("input", (event) => {
+    if (event.target?.name) event.target.dataset.userEdited = "true";
     if (event.target?.name?.startsWith("mdp_") && event.target.name !== "mdp_override_enabled") {
       els.jobForm.querySelector("[name='mdp_override_enabled']").checked = true;
     }
@@ -337,7 +286,8 @@ function bindUI() {
     renderWorkflowGuide();
     debouncedPreview();
   });
-  els.jobForm.addEventListener("change", () => {
+  els.jobForm.addEventListener("change", (event) => {
+    if (event.target?.name) event.target.dataset.userEdited = "true";
     toggleSections();
     syncFileFieldsFromUploads();
     renderWaterModelOptions();
@@ -393,10 +343,12 @@ function bindUI() {
 
 async function boot() {
   cacheElements();
-  await prepareWorkspace();
+  showWorkspaceView("compose", false);
+  const workspaceReady = prepareWorkspace();
   bindUI();
   bindWorkspace();
   bindResultSummary();
+  const navigationReady = bindNavigation();
   window.addEventListener("open-source-job", event => selectJob(event.detail));
   bindPlotControls(renderActiveJob);
   ensureDefaultLigandRow();
@@ -406,12 +358,29 @@ async function boot() {
   setMdpPanelExpanded(false);
   updateMdpPanelState();
   renderWorkflowGuide();
-  await refreshHealth().catch((error) => toast(error.message, "error"));
-  await refreshPreview();
-  await refreshJobs().catch((error) => toast(error.message, "error"));
-  if (state.jobsTotal > 0) document.querySelector("#start-guide").open = false;
   refreshComposerSummary();
   connectEventStream();
+  void refreshJobs().catch((error) => toast(error.message, "error")).finally(() => {
+    if (state.jobsTotal > 0) document.querySelector("#start-guide").open = false;
+    connectEventStream();
+    navigationReady();
+  });
+  void refreshPreview();
+  // Revisit a selected task once capability discovery completes, even if an
+  // idle task has no further SSE updates to trigger its result summary.
+  void workspaceReady.then(() => renderActiveJob());
+  // Diagnostics and product defaults load independently of history and SSE.
+  void Promise.allSettled([workspaceReady, refreshHealth().catch((error) => toast(error.message, "error"))]).then(() => {
+    toggleSections();
+    renderWorkflowGuide();
+    refreshComposerSummary();
+    return refreshPreview();
+  });
+  window.setInterval(() => {
+    if (!document.hidden && state.workspaceView === "detail" && ["files", "plots", "quality"].includes(state.detailTab)) {
+      void renderActiveJob();
+    }
+  }, 5000);
 }
 
 boot();

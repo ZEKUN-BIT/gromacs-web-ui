@@ -4,6 +4,7 @@ import asyncio
 import hashlib
 import json
 import threading
+from pathlib import Path
 
 import MDAnalysis as mda
 import numpy as np
@@ -177,3 +178,131 @@ def test_preflight_api_rejects_paths_and_returns_size_advice(source, monkeypatch
     result = main.analysis_preflight(job_id, request.model_copy(update={"trajectory_file": "md.xtc"}))
     assert not result["research"]["valid"]
     assert result["research"]["suggested_stride"] == 5
+
+
+def test_cancellable_preflight_runs_real_reader_in_isolated_process(tmp_path, molecular_inputs):
+    from app.operations import OperationContext
+
+    topology, trajectory = tmp_path / "input.pdb", tmp_path / "input.xtc"
+    molecular_inputs.atoms.write(str(topology))
+    with mda.Writer(str(trajectory), n_atoms=6) as writer:
+        for value in range(4):
+            molecular_inputs.trajectory.ts.time = value * 1000
+            writer.write(molecular_inputs.atoms)
+    operation = OperationContext(10, lambda _: None)
+    with operation.local():
+        result = preflight.inspect_research_inputs_cancellable(
+            {"tpr_file": topology, "trajectory_file": trajectory},
+            ExistingAnalysisRequest(tpr_file="input.pdb", trajectory_file="input.xtc", do_research=True, research_stride=1),
+            "gmx",
+            operation,
+        )
+    assert result["available_frames"] == 4 and result["atoms"] == 6
+    assert not list(tmp_path.glob(".*offsets*"))
+
+
+@pytest.mark.parametrize("cancel", [False, True])
+def test_stalled_preflight_process_is_killed_and_reaped(tmp_path, monkeypatch, cancel):
+    import subprocess
+    import sys
+    import time
+    from concurrent.futures import ThreadPoolExecutor
+
+    from app.operations import OperationCancelled, OperationContext, OperationTimeout
+
+    spawned, entered = [], threading.Event()
+    real_popen = subprocess.Popen
+
+    def blocked_popen(_command, **kwargs):
+        child = real_popen([sys.executable, "-c", "import ctypes; ctypes.CDLL(None).sleep(60)"], **kwargs)
+        spawned.append(child)
+        entered.set()
+        return child
+
+    monkeypatch.setattr(preflight.subprocess, "Popen", blocked_popen)
+    operation = OperationContext(10 if cancel else 0.1, lambda _: None)
+
+    def inspect():
+        with operation.local():
+            return preflight.inspect_research_inputs_cancellable(
+                {"tpr_file": tmp_path / "input.tpr", "trajectory_file": tmp_path / "input.xtc"},
+                ExistingAnalysisRequest(tpr_file="input.tpr", trajectory_file="input.xtc"),
+                "gmx",
+                operation,
+            )
+
+    started = time.monotonic()
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        future = executor.submit(inspect)
+        assert entered.wait(5)
+        if cancel:
+            operation.cancel()
+        with pytest.raises(OperationCancelled if cancel else OperationTimeout):
+            future.result(timeout=5)
+    assert time.monotonic() - started < 5
+    assert len(spawned) == 1 and spawned[0].returncode is not None and spawned[0].returncode != 0
+    assert spawned[0].stdin.closed and spawned[0].stdout.closed
+
+
+def test_analysis_cancel_during_copy_cleans_inputs_and_never_queues(source):
+    from app.operations import OperationCancelled, OperationContext
+
+    store, job_id = source
+
+    def progress(event):
+        if event.get("copied_bytes", 0):
+            operation.cancel()
+
+    operation = OperationContext(10, progress)
+    with operation.activate(), operation.local(), pytest.raises(OperationCancelled):
+        create_existing_analysis(
+            store,
+            job_id,
+            ExistingAnalysisRequest(tpr_file="md.tpr", trajectory_file="md.xtc", dry_run=True),
+            {"gmx_bin": "gmx"},
+            operation=operation,
+        )
+    created = next(job for job in store.list() if job["id"] != job_id)
+    assert created["status"] == "cancelled"
+    assert not list(store.job_dir(created["id"]).glob("input.*"))
+
+
+def test_isolated_preflight_cannot_outlive_its_parent(tmp_path):
+    import os
+    import subprocess
+    import sys
+    import time
+
+    pid_file = tmp_path / "preflight.pid"
+    # The parent starts a scanner-like C call then exits without supervising it.
+    # Linux parent-death handling must still terminate the child promptly.
+    parent_program = """
+import os, subprocess, sys
+from pathlib import Path
+child_program = '''
+import ctypes, os, sys
+from pathlib import Path
+from app.analysis.preflight import _bound_process
+_bound_process(int(sys.argv[1]))
+Path(sys.argv[2]).write_text(str(os.getpid()))
+ctypes.CDLL(None).sleep(60)
+'''
+subprocess.Popen([sys.executable, '-c', child_program, str(os.getpid()), sys.argv[1]],
+                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+import time
+while not Path(sys.argv[1]).exists():
+    time.sleep(0.01)
+"""
+    subprocess.run([sys.executable, "-c", parent_program, str(pid_file)], check=True, timeout=10)
+    child_pid = int(pid_file.read_text())
+    deadline = time.monotonic() + 3
+    while time.monotonic() < deadline:
+        try:
+            stat = (Path("/proc") / str(child_pid) / "stat").read_text()
+        except FileNotFoundError:
+            return
+        if stat.split(")", 1)[1].strip().split()[0] == "Z":
+            return
+        time.sleep(0.01)
+    os.kill(child_pid, 9)
+    pytest.fail("Preflight worker survived its parent")

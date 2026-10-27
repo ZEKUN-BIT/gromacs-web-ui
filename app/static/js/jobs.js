@@ -18,18 +18,19 @@ import {
   replaySwapAnimation,
   showWorkspaceView,
   showDetailTab,
-} from "./core.js?v=621bb939e2b97a80";
-import { renderPlots, resetPlotFilters, updatePlotOptions } from "./plots.js?v=621bb939e2b97a80";
-import { renderResearch } from "./research.js?v=621bb939e2b97a80";
+} from "./core.js?v=ed99335f08f47fd8";
+import { renderPlots, resetPlotFilters, updatePlotOptions } from "./plots.js?v=ed99335f08f47fd8";
+import { renderResearch } from "./research.js?v=ed99335f08f47fd8";
 import {
-  formObject,
-  selectedUploadFiles,
+  captureSubmissionSnapshot,
+  isSubmissionSnapshotReady,
   requiredSubmitIssues,
   submitWarnings,
   friendlyPreviewError,
   friendlyJobActionError,
   refreshPreview,
-} from "./form.js?v=621bb939e2b97a80";
+} from "./form.js?v=ed99335f08f47fd8";
+import { apiSubmissionIssues, clearSubmissionIssues, showSubmissionIssues } from "./submission-validation.js?v=ed99335f08f47fd8";
 
 /* ---------- 任务列表（签名对比，按需渲染 + 事件委托） ---------- */
 
@@ -120,6 +121,8 @@ export function applyJobsPayload(payload) {
     state.logKey = "";
     state.logText = "";
     state.logOffset = 0;
+    state.logTailOmittedBytes = 0;
+    state.logTrimmedChars = 0;
     state.artifactKey = "";
     state.filesSignature = "";
     state.plotsSignature = "";
@@ -226,6 +229,9 @@ function resetActiveJobPanel() {
   updateText(els.jobDirectory, "-");
   updateText(document.querySelector("#progress-observation"), "");
   els.progress.dataset.state = "idle";
+  els.progress.dataset.unknown = "false";
+  els.progress.setAttribute("aria-valuenow", "0");
+  els.progress.setAttribute("aria-valuetext", "未选择任务");
   els.progressFill.style.transform = "scaleX(0)";
   els.cancelJob.disabled = true;
   els.benchmarkJob.disabled = true;
@@ -242,6 +248,8 @@ function resetActiveJobPanel() {
   state.logSignature = "";
   state.logText = "";
   state.logOffset = 0;
+  state.logTailOmittedBytes = 0;
+  state.logTrimmedChars = 0;
   window.clearTimeout(logHighlightTimer);
   els.jobLog.textContent = "";
   els.logNotice.hidden = true;
@@ -259,6 +267,7 @@ function resetActiveJobPanel() {
     els.downloadPlots.hidden = true;
     els.downloadPlots.href = "#";
   }
+  if (els.downloadLog) els.downloadLog.hidden = true;
 }
 
 export async function renderActiveJob() {
@@ -277,6 +286,10 @@ export async function renderActiveJob() {
   sourceButton.textContent = job.analysis_source ? `来源：${job.analysis_source.name}` : "";
   sourceButton.dataset.jobId = job.analysis_source?.job_id || "";
   updateText(els.terminalTitle, `${job.name} · run.log`);
+  if (els.downloadLog) {
+    els.downloadLog.href = `/api/jobs/${encodeURIComponent(job.id)}/download?path=run.log`;
+    els.downloadLog.hidden = false;
+  }
   updateText(els.jobStatus, STATUS_LABELS[job.status] || job.status);
   els.jobStatus.dataset.state = job.status;
   updateText(
@@ -287,9 +300,13 @@ export async function renderActiveJob() {
   updateText(els.jobDirectory, job.workdir || job.directory_name || job.id);
   els.progress.dataset.state = job.status;
   const fallbackPercent = job.step_count ? Math.min(100, ((job.step_index || 0) / job.step_count) * 100) : 0;
-  const unknown = job.status === "running" && (job.progress_percent == null || job.progress_observation?.state === "waiting");
-  const percent = job.progress_percent != null && Number.isFinite(Number(job.progress_percent)) ? Number(job.progress_percent) : fallbackPercent;
+  const hasPercent = job.progress_percent != null && Number.isFinite(Number(job.progress_percent));
+  const unknown = job.status === "running" && (!hasPercent || job.progress_observation?.state === "waiting");
+  const percent = Math.max(0, Math.min(100, hasPercent ? Number(job.progress_percent) : Number.isFinite(fallbackPercent) ? fallbackPercent : 0));
   els.progress.dataset.unknown = String(unknown);
+  if (unknown) els.progress.removeAttribute("aria-valuenow");
+  else els.progress.setAttribute("aria-valuenow", String(percent));
+  els.progress.setAttribute("aria-valuetext", unknown ? "运行中，暂无法估算进度" : `${STATUS_LABELS[job.status] || job.status}，进度 ${percent.toFixed(1)}%`);
   els.progressFill.style.transform = `scaleX(${unknown ? 0 : percent / 100})`;
   const simulation = job.simulation_progress || {};
   const simulationLabel = simulation.step != null ? ` · step ${simulation.step}${simulation.total_steps ? `/${simulation.total_steps}` : ""}` : "";
@@ -361,18 +378,31 @@ export async function renderActiveJob() {
 }
 
 let artifactRequestGeneration = 0;
+let artifactController = null;
+let artifactRequestedAt = 0;
+let artifactPendingKey = "";
+const ARTIFACT_REFRESH_MS = 5000;
 
 async function refreshJobArtifacts(job) {
+  if (document.hidden || state.workspaceView !== "detail") return;
   const tab = state.detailTab;
+  if (!["files", "plots", "quality", "research"].includes(tab)) return;
   const filters = state.plotFilters;
-  const key = `${job.id}:${job.status}:${job.step_index}:${job.exit_code ?? ""}:${job.storage_revision || 0}:${tab}:${JSON.stringify(filters)}`;
-  if (key === state.artifactKey) return;
+  const fileView = fileViews.get(job.id) || { search: "", offset: 0 };
+  const key = `${job.id}:${job.status}:${job.step_index}:${job.exit_code ?? ""}:${job.storage_revision || 0}:${tab}:${JSON.stringify(filters)}:${tab === "files" ? JSON.stringify([fileView.search, fileView.offset]) : ""}`;
+  if (key === state.artifactKey && (artifactPendingKey === key || !ACTIVE_STATES.has(job.status) || Date.now() - artifactRequestedAt < ARTIFACT_REFRESH_MS)) return;
   state.artifactKey = key;
+  artifactPendingKey = key;
+  artifactRequestedAt = Date.now();
   const generation = ++artifactRequestGeneration;
+  artifactController?.abort();
+  artifactController = new AbortController();
+  const signal = artifactController.signal;
   const isCurrent = () => generation === artifactRequestGeneration && state.activeJobId === job.id && state.detailTab === tab && state.artifactKey === key;
 
   if (tab === "research") {
     await renderResearch(job);
+    if (isCurrent()) artifactPendingKey = "";
     return;
   }
 
@@ -382,12 +412,18 @@ async function refreshJobArtifacts(job) {
     if (value !== "") query.set(key, value);
   }
   const [filesResult, plotsResult] = await Promise.allSettled([
-    api(`/api/jobs/${encoded}/files`),
-    tab === "plots" ? api(`/api/jobs/${encoded}/plots?${query}`) : Promise.resolve(null),
+    api(`/api/jobs/${encoded}/files${tab === "files" ? `?${new URLSearchParams({limit: "100", offset: String(fileView.offset), search: fileView.search})}` : ""}`, { signal }),
+    tab === "plots" ? api(`/api/jobs/${encoded}/plots?${query}`, { signal }) : Promise.resolve(null),
   ]);
   if (!isCurrent()) return;
-  if (filesResult.status === "fulfilled") renderFiles(job.id, filesResult.value.files || [], filesResult.value.truncated);
+  if (filesResult.status === "fulfilled") {
+    filePage = tab === "files" && Number.isFinite(filesResult.value.total) ? { ...filesResult.value, jobId: job.id, search: fileView.search } : null;
+    renderFiles(job.id, filesResult.value.files || [], filesResult.value.truncated);
+    renderFilePager();
+  }
   else {
+    filePage = null;
+    renderFilePager();
     state.filesSignature = "";
     els.outputFiles.dataset.truncated = "false";
     updateText(els.fileCount, "读取失败");
@@ -422,15 +458,14 @@ async function refreshJobArtifacts(job) {
     els.analysisPlots.textContent = "图谱加载失败";
   }
   if (filesResult.status === "rejected" || plotsResult.status === "rejected") state.artifactKey = "";
+  artifactPendingKey = "";
 }
 
 async function renderQualityReports(jobId, files, isCurrent) {
   const reports = files.filter((file) => /^(quality-[^/]+\.(txt|json)|structure-preflight\.txt|sampling-summary\.json|structural-convergence\.json)$/.test(file.path)).slice(0, 12);
   const results = await Promise.allSettled(reports.map(async (file) => {
     if (file.size > 262144) return `<p>${escapeHtml(file.path)} 超过预览大小限制，请在输出文件中下载。</p>`;
-    const response = await fetch(`/api/jobs/${encodeURIComponent(jobId)}/download?path=${encodeURIComponent(file.path)}`);
-    if (!response.ok) throw new Error("报告读取失败");
-    const raw = await response.text();
+    const raw = await api(`/api/jobs/${encodeURIComponent(jobId)}/download?path=${encodeURIComponent(file.path)}`, { responseType: "text" });
     let body = `<pre>${escapeHtml(raw)}</pre>`;
     try {
       const report = JSON.parse(raw);
@@ -451,11 +486,18 @@ let logHighlightTimer = null;
 
 export function appendLogChunk(chunk) {
   if (!chunk) return;
-  if (chunk.reset) state.logText = "";
+  if (chunk.reset) {
+    state.logText = "";
+    state.logOffset = 0;
+    state.logTailOmittedBytes = 0;
+    state.logTrimmedChars = 0;
+  }
   if (Number(chunk.start) < state.logOffset && !chunk.reset) return;
+  if (!state.logOffset && !state.logText) state.logTailOmittedBytes = Math.max(0, Number(chunk.start) || 0);
   state.logText += chunk.text || "";
-  state.logOffset = Number(chunk.offset) || state.logOffset;
+  if (Number.isFinite(Number(chunk.offset))) state.logOffset = Number(chunk.offset);
   if (state.logText.length > MAX_LOG_CHARS) {
+    state.logTrimmedChars += state.logText.length - MAX_LOG_CHARS;
     state.logText = state.logText.slice(-MAX_LOG_CHARS);
     state.logSignature = "";
   }
@@ -468,9 +510,9 @@ export function appendLogChunk(chunk) {
 }
 
 function renderLog(log, highlight = true) {
-  const truncated = Math.max(0, log.length - MAX_LOG_CHARS);
-  const text = truncated ? log.slice(truncated) : log;
-  const signature = `${state.logKey}:${highlight ? "hl" : "plain"}:${text.length}:${text.slice(-512)}`;
+  const text = log;
+  const truncated = state.logTailOmittedBytes > 0 || state.logTrimmedChars > 0;
+  const signature = `${state.activeJobId}:${highlight ? "hl" : "plain"}:${state.logOffset}:${state.logTailOmittedBytes}:${state.logTrimmedChars}:${text.length}:${text.slice(-512)}`;
   if (signature === state.logSignature) return;
   state.logSignature = signature;
 
@@ -488,7 +530,8 @@ function renderLog(log, highlight = true) {
   }
   if (truncated) {
     els.logNotice.hidden = false;
-    updateText(els.logNotice, `日志过长，仅显示末尾（已折叠约 ${(truncated / 1024).toFixed(0)} KB）`);
+    const omitted = [state.logTailOmittedBytes ? `打开时省略 ${(state.logTailOmittedBytes / 1024).toFixed(1)} KB` : "", state.logTrimmedChars ? `后续裁剪 ${state.logTrimmedChars.toLocaleString()} 个字符` : ""].filter(Boolean).join("；");
+    updateText(els.logNotice, `仅显示末尾日志（${omitted}）。复制仅包含当前显示内容，可下载已保留日志；服务端轮转可能省略更早内容。`);
   } else {
     els.logNotice.hidden = true;
   }
@@ -508,7 +551,45 @@ function fileExt(path) {
   return dot > 0 ? base.slice(dot + 1).toLowerCase() : "";
 }
 
+const fileViews = new Map();
+let filePage = null, fileSearchTimer = null;
+for (const type of ["workspace-view-change", "detail-tab-change", "active-job-change"]) window.addEventListener(type, () => {
+  artifactController?.abort();
+  artifactRequestGeneration += 1;
+  artifactPendingKey = "";
+  state.artifactKey = "";
+});
+
+function renderFilePager() {
+  const nav = document.querySelector("#file-pagination");
+  if (!nav) return;
+  nav.hidden = !filePage || state.detailTab !== "files";
+  if (!filePage) return;
+  updateText(els.fileCount, `${filePage.total} 个`);
+  updateText(document.querySelector("#files-page-status"), `${filePage.total ? filePage.offset + 1 : 0}–${Math.min(filePage.offset + filePage.files.length, filePage.total)} / ${filePage.total}`);
+  document.querySelector("#files-previous").disabled = filePage.offset === 0;
+  document.querySelector("#files-next").disabled = !filePage.has_more;
+  for (const [id, direction] of [["files-previous", -1], ["files-next", 1]]) {
+    document.getElementById(id).onclick = () => {
+      if (filePage?.jobId !== state.activeJobId) return;
+      fileViews.set(state.activeJobId, { search: state.fileFilter, offset: Math.max(0, filePage.offset + direction * filePage.limit) });
+      state.artifactKey = "";
+      renderActiveJob();
+    };
+  }
+}
+
 export function applyFileFilter() {
+  if (filePage?.jobId === state.activeJobId && filePage.search !== state.fileFilter) {
+    clearTimeout(fileSearchTimer);
+    fileViews.set(state.activeJobId, { search: state.fileFilter, offset: 0 });
+    const jobId = state.activeJobId;
+    fileSearchTimer = setTimeout(() => {
+      if (state.activeJobId !== jobId || state.detailTab !== "files") return;
+      state.artifactKey = ""; renderActiveJob();
+    }, 250);
+    return;
+  }
   const query = state.fileFilter.trim().toLowerCase();
   const rows = els.outputFiles.querySelectorAll(".file-row:not(.empty)");
   if (!rows.length) return;
@@ -526,6 +607,7 @@ export function applyFileFilter() {
   });
   const truncated = els.outputFiles.dataset.truncated === "true";
   updateText(els.fileCount, query ? `${visible}/${rows.length} 个` : `${rows.length}${truncated ? "+" : ""} 个`);
+  if (filePage?.jobId === state.activeJobId) renderFilePager();
 }
 
 function renderFiles(jobId, files, truncated = false) {
@@ -556,14 +638,19 @@ function renderFiles(jobId, files, truncated = false) {
       const ext = fileExt(file.path) || "file";
       return `<div class="file-row"><i class="file-ext" data-ext="${escapeHtml(ext)}">${escapeHtml(ext)}</i><a href="${href}" title="下载 ${escapeHtml(file.path)}">${escapeHtml(file.path)}</a><span>${formatSize(file.size)}</span></div>`;
   };
+  const opened = new Map([...els.outputFiles.querySelectorAll(".file-group")].map(group => [group.dataset.group, group.open]));
+  const sameJob = els.outputFiles.dataset.jobId === jobId;
+  const scrollTop = els.outputFiles.scrollTop;
+  els.outputFiles.dataset.jobId = jobId;
   els.outputFiles.innerHTML = groups
     .filter((group) => grouped.get(group.key).length)
-    .map((group) => `<details class="file-group" data-group="${group.key}" ${group.key === "structure" ? "open" : ""}>
+    .map((group) => `<details class="file-group" data-group="${group.key}" ${(sameJob && opened.has(group.key) ? opened.get(group.key) : group.key === "structure") ? "open" : ""}>
       <summary><span>${group.label}</span><small>${grouped.get(group.key).length} 个</small></summary>
       <div class="file-group-list">${grouped.get(group.key).map(renderFile).join("")}</div>
     </details>`)
     .join("");
   applyFileFilter();
+  els.outputFiles.scrollTop = scrollTop;
 }
 
 /* ---------- 任务操作 ---------- */
@@ -587,6 +674,8 @@ function uploadJob(data, button) {
           : request.response?.detail || request.statusText || "任务提交失败";
         const error = new Error(formatApiError(detail));
         error.status = request.status;
+        error.detail = request.response?.detail;
+        error.problem = problem;
         reject(error);
       }
     });
@@ -596,50 +685,49 @@ function uploadJob(data, button) {
   });
 }
 
+let submissionPending = false;
+
 export async function submitJob() {
   const button = els.submitJob;
-  if (button.disabled) return;
-  const nameInput = els.jobForm.querySelector("input[name='name']");
-  if (nameInput && !nameInput.value.trim()) {
-    toast("请先填写任务名", "error");
-    nameInput.classList.add("input-error");
-    nameInput.addEventListener("input", () => nameInput.classList.remove("input-error"), { once: true });
-    nameInput.focus();
-    return;
-  }
-  const dataObject = formObject();
+  if (submissionPending || button.dataset.busy === "true") return;
+  const snapshot = captureSubmissionSnapshot();
+  const dataObject = snapshot.params;
   const requiredIssues = requiredSubmitIssues(dataObject);
+  if (!String(dataObject.name || "").trim()) requiredIssues.unshift({ field: "name", message: "请先填写任务名" });
   if (requiredIssues.length) {
-    await confirmDialog({
-      title: "需要确认配体电荷",
-      subtitle: "真实运行 ACPYPE 前必须先确认关键参数",
-      items: requiredIssues,
-      confirmText: "返回设置",
-      cancelText: "关闭",
-      mark: "!",
-      tone: "warn",
-    });
-    els.jobForm.querySelector("[data-ligand-field='charge_confirmed']")?.focus();
+    showSubmissionIssues(requiredIssues);
     return;
   }
-  const warnings = submitWarnings(dataObject);
-  const confirmed = await confirmSubmitWarnings(warnings);
-  if (!confirmed) return;
-  const data = new FormData();
-  data.set("params", JSON.stringify(dataObject));
-  selectedUploadFiles().forEach((file) => data.append("files", file));
-
-  button.disabled = true;
-  button.dataset.busy = "true";
-  button.setAttribute("aria-busy", "true");
-  updateText(button.querySelector(".button-label"), "正在上传…");
+  if (!isSubmissionSnapshotReady(snapshot)) {
+    showSubmissionIssues([{ message: "参数或文件已变化，请等待本次预览更新后重新提交。" }]);
+    void refreshPreview();
+    return;
+  }
+  submissionPending = true;
   try {
+    clearSubmissionIssues();
+    const warnings = submitWarnings(dataObject);
+    const confirmed = await confirmSubmitWarnings(warnings);
+    if (!confirmed) return;
+    if (!isSubmissionSnapshotReady(snapshot)) {
+      showSubmissionIssues([{ message: "确认期间参数或文件已变化。本次尚未提交，请查看更新后的预览并重新确认。" }]);
+      return;
+    }
+    const data = new FormData();
+    data.set("params", JSON.stringify(dataObject));
+    snapshot.files.forEach((file) => data.append("files", file));
+    button.disabled = true;
+    button.dataset.busy = "true";
+    button.setAttribute("aria-busy", "true");
+    updateText(button.querySelector(".button-label"), "正在上传…");
     const job = await uploadJob(data, button);
     state.activeJobId = job.id;
     state.activeJob = job;
     state.logKey = "";
     state.logText = "";
     state.logOffset = 0;
+    state.logTailOmittedBytes = 0;
+    state.logTrimmedChars = 0;
     state.artifactKey = "";
     state.filesSignature = "";
     toast(`任务已提交：${job.name}`, "success");
@@ -648,12 +736,11 @@ export async function submitJob() {
     await refreshJobs();
     window.dispatchEvent(new CustomEvent("active-job-change"));
   } catch (error) {
-    toast(friendlyPreviewError(error.message), "error");
+    showSubmissionIssues(apiSubmissionIssues(error, friendlyPreviewError(error.message)));
   } finally {
+    submissionPending = false;
     button.dataset.busy = "false";
     button.removeAttribute("aria-busy");
-    button.disabled = false;
-    updateText(button.querySelector(".button-label"), "启动模拟");
     refreshPreview().catch(() => {});
   }
 }
@@ -776,11 +863,19 @@ export function selectJob(jobId) {
     return;
   }
   state.activeJobId = jobId;
+  if (fileViews.size >= 64 && !fileViews.has(jobId)) fileViews.delete(fileViews.keys().next().value);
+  const fileView = fileViews.get(jobId) || { search: "", offset: 0 };
+  state.fileFilter = fileView.search;
+  if (els.fileFilter) els.fileFilter.value = fileView.search;
+  filePage = null;
+  renderFilePager();
   resetPlotFilters();
   state.activeJob = null;
   state.logKey = "";
   state.logText = "";
   state.logOffset = 0;
+  state.logTailOmittedBytes = 0;
+  state.logTrimmedChars = 0;
   state.artifactKey = "";
   state.filesSignature = "";
   state.plotsSignature = "";
@@ -789,6 +884,7 @@ export function selectJob(jobId) {
   els.outputFiles.textContent = "正在加载文件…";
   renderJobs();
   els.jobLog.textContent = "";
+  els.logNotice.hidden = true;
   api(`/api/jobs/${encodeURIComponent(jobId)}`).then(applyJobDetail).catch((error) => toast(error.message, "error"));
   window.dispatchEvent(new CustomEvent("active-job-change"));
   replaySwapAnimation(".job-panel, .command-panel, .files-panel, .plots-panel");
@@ -849,6 +945,8 @@ export async function deleteJob(jobId) {
       state.logKey = "";
       state.logText = "";
       state.logOffset = 0;
+      state.logTailOmittedBytes = 0;
+      state.logTrimmedChars = 0;
       state.artifactKey = "";
       state.filesSignature = "";
     }

@@ -312,3 +312,15 @@ def test_failed_research_preflight_never_creates_job(agent):
                 {"job_id": meta["id"], "analysis": {"tpr_file": "input.tpr", "trajectory_file": "md.xtc", "do_research": True}},
             )
         create.assert_not_called()
+
+
+def test_simulation_replica_schema_matches_workflow_limit():
+    from pydantic import ValidationError
+
+    from app.agent_tools import SimulationParameters
+    from app.workflows.common import MAX_REPLICAS
+
+    assert SimulationParameters.model_json_schema()["properties"]["replicas"]["maximum"] == MAX_REPLICAS
+    assert SimulationParameters(workflow="protein_md", replicas=MAX_REPLICAS).replicas == MAX_REPLICAS
+    with pytest.raises(ValidationError):
+        SimulationParameters(workflow="protein_md", replicas=MAX_REPLICAS + 1)

@@ -2,16 +2,20 @@
 
 from __future__ import annotations
 
+import hashlib
 import ipaddress
+import json
 import logging
 import sqlite3
 import threading
+from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Literal
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from pydantic import BaseModel, ConfigDict, Field, field_validator
+from starlette.concurrency import run_in_threadpool
 
 from .agent_provider import AgentError, ProviderPatch
 from .agent_service import AgentService
@@ -47,9 +51,19 @@ def agent_router(get_store, get_settings, check_origin, base_dir: Path, worker_s
         if not local:
             raise HTTPException(403, detail="AI 调度仅允许本机连接，请在本机控制台使用。")
 
-    router = APIRouter(prefix="/api/agent", dependencies=[Depends(require_local)])
     services: dict[Path, AgentService] = {}
     lock = threading.Lock()
+
+    @asynccontextmanager
+    async def lifespan(_app):
+        yield
+        # Cancel staging before waiting for the bounded executor. Active model
+        # requests retain their existing 60-second transport deadline.
+        for agent in services.values():
+            await run_in_threadpool(agent.close)
+        services.clear()
+
+    router = APIRouter(prefix="/api/agent", dependencies=[Depends(require_local)], lifespan=lifespan)
 
     def service(response: Response) -> AgentService:
         response.headers["Cache-Control"] = "no-store"
@@ -67,9 +81,9 @@ def agent_router(get_store, get_settings, check_origin, base_dir: Path, worker_s
     def tools():
         return AgentTools(get_store(), get_settings(), base_dir, worker_status)
 
-    def invoke(function, *args):
+    def invoke(function, *args, **kwargs):
         try:
-            return function(*args)
+            return function(*args, **kwargs)
         except AgentError as exc:
             raise HTTPException(exc.status_code, detail=str(exc)) from exc
         except (OSError, sqlite3.Error) as exc:
@@ -103,19 +117,52 @@ def agent_router(get_store, get_settings, check_origin, base_dir: Path, worker_s
         return invoke(agent.list_sessions)
 
     @router.get("/sessions/{session_id}")
-    def get_session(session_id: UUID, agent: AgentService = Depends(service)):
-        return invoke(agent.get, str(session_id))
+    def get_session(session_id: UUID, request: Request, agent: AgentService = Depends(service)):
+        payload = invoke(agent.get, str(session_id))
+        encoded = json.dumps(payload, sort_keys=True, ensure_ascii=False).encode()
+        etag = '"' + hashlib.sha256(encoded).hexdigest() + '"'
+        if etag in [item.strip() for item in request.headers.get("if-none-match", "").split(",")]:
+            return Response(status_code=304, headers={"ETag": etag})
+        return Response(encoded, media_type="application/json", headers={"ETag": etag})
 
     @router.delete("/sessions/{session_id}")
     def delete_session(session_id: UUID, agent: AgentService = Depends(service)):
         return invoke(agent.delete, str(session_id))
 
     @router.post("/sessions/{session_id}/messages")
-    def send_message(session_id: UUID, message: ChatMessage, agent: AgentService = Depends(service)):
-        return invoke(agent.send, str(session_id), message.message, str(message.request_id), message.context_job_id, tools())
+    def send_message(
+        session_id: UUID, message: ChatMessage, request: Request, background: bool = False, agent: AgentService = Depends(service)
+    ):
+        return invoke(
+            agent.send,
+            str(session_id),
+            message.message,
+            str(message.request_id),
+            message.context_job_id,
+            tools(),
+            background=background or request.headers.get("prefer") == "respond-async",
+        )
 
     @router.post("/sessions/{session_id}/actions/{action_id}")
-    def decide_action(session_id: UUID, action_id: UUID, decision: ActionDecision, agent: AgentService = Depends(service)):
-        return invoke(agent.decide, str(session_id), str(action_id), decision.decision, tools())
+    def decide_action(
+        session_id: UUID,
+        action_id: UUID,
+        decision: ActionDecision,
+        request: Request,
+        background: bool = False,
+        agent: AgentService = Depends(service),
+    ):
+        return invoke(
+            agent.decide,
+            str(session_id),
+            str(action_id),
+            decision.decision,
+            tools(),
+            background=background or request.headers.get("prefer") == "respond-async",
+        )
+
+    @router.post("/sessions/{session_id}/cancel")
+    def cancel_operation(session_id: UUID, agent: AgentService = Depends(service)):
+        return invoke(agent.cancel, str(session_id))
 
     return router

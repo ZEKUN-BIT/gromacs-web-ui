@@ -2,6 +2,8 @@ import asyncio
 import hashlib
 import io
 import json
+import subprocess
+import sys
 import threading
 from unittest.mock import patch
 
@@ -12,6 +14,57 @@ import app.main as main
 from app.job_store import JobStore
 from app.models import BenchmarkRequest
 from app.reproducibility import write_experiment_manifest
+
+
+def test_web_restart_recovers_preparation_after_process_death(tmp_path, monkeypatch):
+    script = """
+import os, sys
+from pathlib import Path
+import app.main as main
+from app.job_store import JobStore
+root = Path(sys.argv[1])
+main.RUNTIME_ROOT = root
+main.STORE = JobStore(root)
+main.enforce_single_web_process()
+job = main.STORE.create('interrupted upload', {}, [], [])
+(root / 'job-id').write_text(job['id'])
+staging = root / 'incoming' / 'pending-interrupted'
+staging.mkdir(parents=True)
+(staging / 'input.xtc').write_bytes(b'incomplete upload')
+os._exit(0)
+"""
+    subprocess.run([sys.executable, "-c", script, str(tmp_path)], check=True, timeout=20)
+    store = JobStore(tmp_path)
+    job_id = (tmp_path / "job-id").read_text()
+    outside = tmp_path / "keep"
+    outside.mkdir()
+    (outside / "research.dat").write_bytes(b"keep")
+    incoming = tmp_path / "incoming"
+    (incoming / "pending-symlink").symlink_to(outside, target_is_directory=True)
+    (incoming / "user-directory").mkdir()
+    monkeypatch.setattr(main, "STORE", store)
+    monkeypatch.setattr(main, "RUNTIME_ROOT", tmp_path)
+
+    async def restart():
+        async with main.app_lifespan(main.app):
+            assert store.get(job_id)["status"] == "failed"
+            assert store.get(job_id)["preparation_interrupted_at"]
+            assert not (incoming / "pending-interrupted").exists()
+            assert (incoming / "user-directory").is_dir()
+            assert (outside / "research.dat").read_bytes() == b"keep"
+
+    asyncio.run(restart())
+
+
+def test_web_recovery_does_not_follow_incoming_symlink(tmp_path, monkeypatch):
+    store = JobStore(tmp_path / "runtime")
+    outside = tmp_path / "outside"
+    (outside / "pending-important").mkdir(parents=True)
+    (store.runtime_root / "incoming").symlink_to(outside, target_is_directory=True)
+    monkeypatch.setattr(main, "STORE", store)
+    monkeypatch.setattr(main, "RUNTIME_ROOT", store.runtime_root)
+    main.recover_web_preparations()
+    assert (outside / "pending-important").is_dir()
 
 
 def settings(root):

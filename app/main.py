@@ -4,11 +4,15 @@ import asyncio
 import fcntl
 import io
 import json
+import logging
 import math
 import os
 import shutil
 import sqlite3
+import stat
 import tempfile
+import threading
+import time
 import zipfile
 from contextlib import ExitStack, asynccontextmanager
 from pathlib import Path
@@ -37,6 +41,7 @@ from .files import (
     _rewrite_uploaded_file_references,
     ensure_under_root,
     read_log_chunk,
+    relative_file_page,
     relative_files,
     stage_uploads,
     validate_uploaded_file_references,
@@ -79,12 +84,16 @@ STORE = JobStore(
 )
 
 
-FILE_LIST_CACHE: dict[str, tuple[str, list[dict], bool]] = {}
+FILE_LIST_CACHE: dict[tuple[int, str], tuple[str, list[dict], bool, float]] = {}
+FILE_LIST_CACHE_LOCK = threading.Lock()
+FILE_PAGE_CACHE: dict[tuple, tuple[str, dict, float]] = {}
+ACTIVE_FILE_CACHE_SECONDS = 5.0
+MAX_FILE_CACHE_ENTRIES = 256
 WEB_PROCESS_LOCK = None
 MAX_FILE_LIST_ITEMS = 1000
 SSE_LOG_CHUNK_BYTES = 64 * 1024
 
-app = FastAPI(title="GROMACS Web UI", version="0.2.9")
+app = FastAPI(title="GROMACS Web UI", version="0.2.10")
 # Capture the running process identity once; files may be replaced by an update.
 # These public identifiers distinguish desktop instances, not authentication.
 RUNTIME_IDENTITY = {
@@ -123,10 +132,41 @@ def release_web_process_lock() -> None:
         WEB_PROCESS_LOCK = None
 
 
+def recover_web_preparations() -> None:
+    """Called only after acquiring the single Web owner lock, before serving requests."""
+    STORE.recover_preparing_jobs()
+    # Only Web uploads use pending-* directories. Never follow a replaced
+    # incoming directory or remove unrelated user files from the runtime.
+    runtime_fd = os.open(RUNTIME_ROOT, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    try:
+        try:
+            incoming_fd = os.open("incoming", os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=runtime_fd)
+        except FileNotFoundError:
+            return
+        except OSError:
+            logging.getLogger(__name__).warning("Skipped unsafe or inaccessible upload staging directory")
+            return
+    finally:
+        os.close(runtime_fd)
+    try:
+        for name in os.listdir(incoming_fd):
+            if not name.startswith("pending-"):
+                continue
+            try:
+                info = os.stat(name, dir_fd=incoming_fd, follow_symlinks=False)
+                if stat.S_ISDIR(info.st_mode):
+                    shutil.rmtree(name, dir_fd=incoming_fd)
+            except OSError:
+                logging.getLogger(__name__).warning("Could not remove an interrupted upload staging directory")
+    finally:
+        os.close(incoming_fd)
+
+
 @asynccontextmanager
 async def app_lifespan(_app: FastAPI):
     enforce_single_web_process()
     try:
+        await run_in_threadpool(recover_web_preparations)
         yield
     finally:
         release_web_process_lock()
@@ -304,8 +344,9 @@ def storage_cleanup(request: CleanupRequest, http_request: Request) -> dict:
         result = execute_cleanup(STORE, request)
     except (OSError, RuntimeError, ValueError) as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
-    for job_id in [*result["deleted_jobs"], *result["cleaned_jobs"]]:
-        FILE_LIST_CACHE.pop(job_id, None)
+    with FILE_LIST_CACHE_LOCK:
+        for job_id in [*result["deleted_jobs"], *result["cleaned_jobs"]]:
+            FILE_LIST_CACHE.pop((id(STORE), job_id), None)
     return result
 
 
@@ -370,6 +411,12 @@ def list_jobs(
 
 
 def _job_page(limit: int, offset: int, search: str, project: str = "") -> dict:
+    options = _job_page_options(limit, offset, search, project)
+    page = STORE.list_page(**options)
+    return {**page, "search": options["search"]} if options.get("search") else page
+
+
+def _job_page_options(limit: int, offset: int, search: str, project: str = "") -> dict:
     search = search.strip()
     if search:
         labels = {
@@ -391,9 +438,8 @@ def _job_page(limit: int, offset: int, search: str, project: str = "") -> dict:
             "custom": "自定义",
         }
         aliases = tuple(key for key, label in labels.items() if search.casefold() in label.casefold())
-        page = STORE.list_page(limit=limit, offset=offset, search=search, search_aliases=aliases, project=project)
-        return {**page, "search": search}
-    return STORE.list_page(limit=limit, offset=offset, project=project)
+        return {"limit": limit, "offset": offset, "search": search, "search_aliases": aliases, "project": project}
+    return {"limit": limit, "offset": offset, "project": project}
 
 
 @app.get("/api/jobs/{job_id}")
@@ -856,7 +902,8 @@ def delete_job(job_id: str) -> dict:
         raise HTTPException(status_code=404, detail="Job not found")
     except RuntimeError as exc:
         raise HTTPException(status_code=409, detail=str(exc))
-    FILE_LIST_CACHE.pop(job_id, None)
+    with FILE_LIST_CACHE_LOCK:
+        FILE_LIST_CACHE.pop((id(STORE), job_id), None)
     return {"deleted": True, "job": meta}
 
 
@@ -903,12 +950,12 @@ async def job_events(
         current_offset = log_offset
         first_log_read = True
         heartbeat_at = 0.0
+        page_options = _job_page_options(50, jobs_offset, jobs_search, jobs_project)
         while not await request.is_disconnected():
-            page = await run_in_threadpool(_job_page, 50, jobs_offset, jobs_search, jobs_project)
-            signature = json.dumps(page, ensure_ascii=False, sort_keys=True)
+            payload, signature = await run_in_threadpool(STORE.list_page_snapshot, **page_options)
             if signature != jobs_signature:
                 jobs_signature = signature
-                yield _sse_event("jobs", page)
+                yield f"event: jobs\ndata: {payload}\n\n"
             if job_id:
                 try:
                     detail = await run_in_threadpool(get_job, job_id)
@@ -959,19 +1006,43 @@ async def job_events(
 
 
 @app.get("/api/jobs/{job_id}/files")
-def job_files(job_id: str) -> dict:
+def job_files(
+    job_id: str,
+    limit: Annotated[int | None, Query(ge=1, le=500)] = None,
+    offset: Annotated[int, Query(ge=0, le=1_000_000)] = 0,
+    search: Annotated[str, Query(max_length=256)] = "",
+) -> dict:
     try:
         meta = STORE.get(job_id)
     except FileNotFoundError:
         raise HTTPException(status_code=404, detail="Job not found")
-    cache_key = f"{meta.get('status')}:{meta.get('step_index')}:{meta.get('storage_revision', 0)}"
-    cached = FILE_LIST_CACHE.get(job_id)
-    if cached and cached[0] == cache_key:
-        return {"files": cached[1], "truncated": cached[2]}
+    cache_key = f"{meta['workdir']}:{meta.get('status')}:{meta.get('step_index')}:{meta.get('storage_revision', 0)}"
+    entry_key = (id(STORE), job_id)
+    active = meta.get("status") in {"preparing", "queued", "running", "interrupted"}
+    now = time.monotonic()
+    if limit is not None:
+        page_key = (id(STORE), job_id, search, offset, limit)
+        with FILE_LIST_CACHE_LOCK:
+            cached_page = FILE_PAGE_CACHE.get(page_key)
+            if cached_page and cached_page[0] == cache_key and (not active or now - cached_page[2] < ACTIVE_FILE_CACHE_SECONDS):
+                return cached_page[1]
+        page = relative_file_page(Path(meta["workdir"]), search=search, offset=offset, limit=limit)
+        with FILE_LIST_CACHE_LOCK:
+            if len(FILE_PAGE_CACHE) >= MAX_FILE_CACHE_ENTRIES:
+                FILE_PAGE_CACHE.pop(next(iter(FILE_PAGE_CACHE)))
+            FILE_PAGE_CACHE[page_key] = (cache_key, page, now)
+        return page
+    with FILE_LIST_CACHE_LOCK:
+        cached = FILE_LIST_CACHE.get(entry_key)
+        if cached and cached[0] == cache_key and (not active or now - cached[3] < ACTIVE_FILE_CACHE_SECONDS):
+            return {"files": cached[1], "truncated": cached[2]}
     scanned = relative_files(Path(meta["workdir"]), max_files=MAX_FILE_LIST_ITEMS + 1)
     truncated = len(scanned) > MAX_FILE_LIST_ITEMS
     files = scanned[:MAX_FILE_LIST_ITEMS]
-    FILE_LIST_CACHE[job_id] = (cache_key, files, truncated)
+    with FILE_LIST_CACHE_LOCK:
+        if len(FILE_LIST_CACHE) >= MAX_FILE_CACHE_ENTRIES:
+            FILE_LIST_CACHE.pop(next(iter(FILE_LIST_CACHE)))
+        FILE_LIST_CACHE[entry_key] = (cache_key, files, truncated, now)
     return {"files": files, "truncated": truncated}
 
 

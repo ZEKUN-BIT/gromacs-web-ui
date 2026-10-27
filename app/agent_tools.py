@@ -12,6 +12,7 @@ import math
 import re
 import sys
 from collections.abc import Callable
+from contextlib import nullcontext
 from pathlib import Path
 from typing import Annotated, Literal
 
@@ -22,7 +23,9 @@ from .existing_analysis import INPUT_SUFFIXES, analysis_inputs, create_existing_
 from .gromacs import WORKFLOWS
 from .job_store import JobStore
 from .models import ExistingAnalysisRequest
+from .operations import current_operation
 from .result_bundle import quality_summary
+from .workflows.common import MAX_REPLICAS
 
 JobId = Annotated[str, Field(min_length=1, max_length=255, pattern=r"^[A-Za-z0-9][A-Za-z0-9_.-]*$")]
 ShortText = Annotated[str, Field(max_length=160, pattern=r"^[^\x00-\x1f\x7f]*$")]
@@ -185,7 +188,7 @@ class SimulationParameters(Arguments):
     neutral: bool = True
     ion_concentration: float | None = Field(default=None, ge=0, le=5)
     pre_nvt: bool = False
-    replicas: int = Field(default=3, ge=1, le=20)
+    replicas: int = Field(default=3, ge=1, le=MAX_REPLICAS)
     release_restraints: bool = True
     dry_run: bool = False
     mdp_dt_ps: float | None = Field(default=None, ge=0.0001, le=0.004)
@@ -450,7 +453,9 @@ class AgentTools:
         }
         if name == "create_analysis":
             options = AnalysisOptions.model_validate(args["analysis"])
-            preview["preflight"] = preflight_existing_analysis(self.store, meta["id"], options, self.settings)
+            preview["preflight"] = preflight_existing_analysis(
+                self.store, meta["id"], options, self.settings, operation=current_operation()
+            )
             research = preview["preflight"].get("research")
             if research and not research.get("valid"):
                 raise ValueError(research.get("message") or "分析输入未通过预检。")
@@ -484,10 +489,14 @@ class AgentTools:
 
     def execute_action(self, name: str, args: dict, precondition: dict) -> dict:
         args = self._arguments(name, args, mutating=True)
+        operation = current_operation()
+        if operation:
+            operation.checkpoint()
         if name == "prepare_simulation":
             if precondition != {"kind": "simulation_draft"}:
                 raise ValueError("模拟草稿审批无效，请重新生成。")
-            return {"kind": "simulation_draft", "params": self._simulation_params(args)}
+            with operation.commit() if operation else nullcontext():
+                return {"kind": "simulation_draft", "params": self._simulation_params(args)}
         # JobStore lifecycle methods each own their transaction. Progress writes
         # may continue; a different process/step or task definition needs approval
         # again. The caller must claim an approval once and must not auto-retry.
@@ -500,13 +509,17 @@ class AgentTools:
         if name == "create_analysis":
             if precondition.get("inputs") != self._analysis_snapshot(meta["id"], args["analysis"]):
                 raise ValueError("分析输入已变化，请重新预检并确认。")
-            result = create_existing_analysis(self.store, meta["id"], AnalysisOptions.model_validate(args["analysis"]), self.settings)
+            result = create_existing_analysis(
+                self.store, meta["id"], AnalysisOptions.model_validate(args["analysis"]), self.settings, operation=operation
+            )
         elif name == "clone_job":
-            result = self.store.clone(meta["id"], args["name"] or None)
-        elif name == "cancel_job":
-            result = self.store.cancel(meta["id"])
-        elif name == "resume_job":
-            result = self.store.resume_from_checkpoint(meta["id"])
+            result = self.store.clone(meta["id"], args["name"] or None, operation=operation)
         else:
-            result = self.store.retry_failed_step(meta["id"])
+            with operation.commit() if operation else nullcontext():
+                if name == "cancel_job":
+                    result = self.store.cancel(meta["id"])
+                elif name == "resume_job":
+                    result = self.store.resume_from_checkpoint(meta["id"])
+                else:
+                    result = self.store.retry_failed_step(meta["id"])
         return {"kind": "job", "job": _summary(result)}

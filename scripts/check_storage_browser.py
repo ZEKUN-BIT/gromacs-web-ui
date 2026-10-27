@@ -200,6 +200,7 @@ def _check_viewport(browser, width: int, height: int, artifact_dir: Path | None)
         expect(page.locator(".job-item")).to_have_count(2)
         page.locator('[data-workspace-view="detail"]').click()
         expect(page.locator("#active-job-title")).to_have_text(MALICIOUS_NAME)
+        page.locator('[data-detail-tab="files"]').click()
         expect(page.locator('#output-files a[title="下载 nvt.trr"]')).to_have_count(1)
         if width <= 1180:
             page.locator("#toggle-sidebar").click()

@@ -192,10 +192,30 @@ def storage_overview(store) -> dict:
     if runtime.is_symlink() or (runtime / "jobs").is_symlink():
         raise ValueError("空间管理不支持符号链接运行目录。")
     disk = shutil.disk_usage(runtime)
+    metadata = store.list()
+    # Scan the runtime once, then partition its files by task. Cleanup itself
+    # still takes a fresh strict scan under the task lock and checks fingerprints.
+    root_fd = os.open(runtime, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    try:
+        runtime_scan = _scan_fd(root_fd, tolerate_changes=True)
+    finally:
+        os.close(root_fd)
+    scans = {meta["id"]: {"files": {}, "unsafe": []} for meta in metadata}
+    for relative, record in runtime_scan["files"].items():
+        parts = relative.split("/", 2)
+        if len(parts) == 3 and parts[0] == "jobs" and parts[1] in scans:
+            scans[parts[1]]["files"][parts[2]] = record
+    for relative in runtime_scan["unsafe"]:
+        parts = relative.split("/", 2)
+        if len(parts) >= 2 and parts[0] == "jobs" and parts[1] in scans:
+            scans[parts[1]]["unsafe"].append(relative)
     jobs, categories = [], {}
-    for meta in store.list():
+    for meta in metadata:
         try:
-            scan = _scan_job(store, meta["id"])
+            directory = runtime_scan["entries"].get(f"jobs/{meta['id']}")
+            if directory is None or not stat.S_ISDIR(directory[2]):
+                raise OSError("Task directory is unavailable")
+            scan = scans[meta["id"]]
             inputs = _input_paths(meta)
             total = sum(record["size"] for record in scan["files"].values())
             for relative, record in scan["files"].items():
@@ -229,12 +249,7 @@ def storage_overview(store) -> dict:
                     "protected_reason": "任务目录无法安全读取。",
                 }
             )
-    # Account for the database, exports and unregistered runtime files, without following links.
-    root_fd = os.open(runtime, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
-    try:
-        runtime_scan = _scan_fd(root_fd, tolerate_changes=True)
-    finally:
-        os.close(root_fd)
+    # The same scan includes database, exports and unregistered runtime files.
     runtime_bytes = sum(record["size"] for record in runtime_scan["files"].values())
     task_bytes = sum(job["bytes"] for job in jobs)
     return {

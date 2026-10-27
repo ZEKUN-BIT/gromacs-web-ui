@@ -10,23 +10,24 @@ import {
   toast,
   api,
   replaySwapAnimation,
-} from "./core.js?v=621bb939e2b97a80";
+} from "./core.js?v=ed99335f08f47fd8";
 
 import {
   hasFile, fileNameEndsWith, fileParamEndsWith, uploadedNames, selectedUploadFiles,
-} from "./form-files.js?v=621bb939e2b97a80";
+} from "./form-files.js?v=ed99335f08f47fd8";
 import {
   ligandCards, addLigandRow, ensureDefaultLigandRow, readLigandPayload, refreshRowMode, setLigandCardField,
   removeLigandRow as removeLigandEditorRow, detectLigandsFromPdb as detectPdbLigands,
-} from "./form-ligands.js?v=621bb939e2b97a80";
+} from "./form-ligands.js?v=ed99335f08f47fd8";
 import {
   setMdpPanelExpanded, updateMdpPanelState, refreshProtocolPreview, renderMdpPreview,
-} from "./form-parameters.js?v=621bb939e2b97a80";
+} from "./form-parameters.js?v=ed99335f08f47fd8";
 import {
   renderForceFieldSource, renderWaterModelOptions, refreshHealth, updateResourceAdvice,
   applyHardwareRecommendation as applyHardwareDefaults,
   renderReadiness,
-} from "./form-environment.js?v=621bb939e2b97a80";
+} from "./form-environment.js?v=ed99335f08f47fd8";
+import { apiSubmissionIssues, clearSubmissionIssues, showSubmissionIssues } from "./submission-validation.js?v=ed99335f08f47fd8";
 
 export {
   hasFile, fileNameEndsWith, fileParamEndsWith, uploadedNames, selectedUploadFiles,
@@ -40,7 +41,13 @@ export function removeLigandRow(index) {
 }
 
 export async function detectLigandsFromPdb() {
-  if (await detectPdbLigands()) refreshPreview();
+  pendingFormUpdates += 1;
+  invalidatePreview();
+  try { await detectPdbLigands(); }
+  finally {
+    pendingFormUpdates -= 1;
+    await refreshPreview();
+  }
 }
 
 export function applyHardwareRecommendation() {
@@ -172,13 +179,16 @@ export const WORKFLOW_GUIDES = {
   },
 };
 
-export function formObject() {
+export function formObject({ forDraft = false } = {}) {
   const workflow = $("input[name='workflow']:checked")?.value || "protein_md";
   const payload = { workflow, gmx_bin: els.gmxBin.value.trim() || "gmx" };
   els.jobForm
     .querySelectorAll("input[name], select[name], textarea[name]")
     .forEach((field) => {
       if (field.type === "file" || field.type === "radio") return;
+      // Until settings arrive, let the server choose its runtime defaults.
+      // HTML fallback values must not silently override the saved machine setup.
+      if (["ntmpi", "ntomp"].includes(field.name) && !field.dataset.userEdited && field.dataset.runtimeDefaultApplied !== "true") return;
       if (field.type === "checkbox") {
         payload[field.name] = field.checked;
         return;
@@ -193,7 +203,7 @@ export function formObject() {
     });
   payload.files = selectedUploadFiles().map((file) => file.name);
   payload.tags = String(payload.tags || "").split(/[,，]/).map(tag => tag.trim()).filter(Boolean);
-  if (!state.productAvailable) {
+  if (!forDraft && state.productStatus === "unsupported") {
     for (const name of ["project", "tags", "notes"]) delete payload[name];
   }
   payload.ligands = readLigandPayload();
@@ -294,40 +304,40 @@ function staleUploadedFileIssues(data) {
   const issues = [];
   if (data.workflow === "protein_md" || data.workflow === "em_only") {
     const issue = uploadedFileIssue(data, "structure_file", "结构文件");
-    if (issue) issues.push(issue);
+    if (issue) issues.push({ field: "structure_file", message: issue });
   }
   if (data.workflow === "protein_ligand_md") {
     const proteinIssue = uploadedFileIssue(data, "protein_file", "蛋白文件");
-    if (proteinIssue) issues.push(proteinIssue);
+    if (proteinIssue) issues.push({ field: "protein_file", message: proteinIssue });
     (data.ligands || []).forEach((ligand, index) => {
       const label = `配体 ${index + 1}${ligand.key ? `（${ligand.key}）` : ""}`;
       const mode = ligand.mode || "prepared";
       if (mode === "prepared" || ligand.gro_file || ligand.itp_file) {
         const groIssue = uploadedFileIssueValue(ligand.gro_file, data, `${label} .gro`);
-        if (groIssue) issues.push(groIssue);
+        if (groIssue) issues.push({ field: "gro_file", ligandIndex: index, message: groIssue });
         const itpIssue = uploadedFileIssueValue(ligand.itp_file, data, `${label} .itp`);
-        if (itpIssue) issues.push(itpIssue);
+        if (itpIssue) issues.push({ field: "itp_file", ligandIndex: index, message: itpIssue });
       }
       const structureIssue = uploadedFileIssueValue(ligand.structure_file, data, `${label} 结构文件`);
-      if (structureIssue) issues.push(structureIssue);
+      if (structureIssue) issues.push({ field: "structure_file", ligandIndex: index, message: structureIssue });
       const chemistryIssue = uploadedFileIssueValue(ligand.chemistry_file, data, `${label} 化学文件`);
-      if (chemistryIssue) issues.push(chemistryIssue);
+      if (chemistryIssue) issues.push({ field: "chemistry_file", ligandIndex: index, message: chemistryIssue });
     });
   }
   if (data.workflow === "run_tpr" || data.workflow === "analysis_rmsd" || data.workflow === "postprocess" || data.workflow === "analysis_suite") {
     const issue = uploadedFileIssue(data, "tpr_file", "TPR 文件");
-    if (issue) issues.push(issue);
+    if (issue) issues.push({ field: "tpr_file", message: issue });
   }
   if (data.workflow === "analysis_rmsd" || data.workflow === "postprocess" || data.workflow === "analysis_suite") {
     ["trajectory_file", "index_file"].forEach((field) => {
       const labels = { trajectory_file: "轨迹文件", index_file: "index 文件" };
       const issue = uploadedFileIssue(data, field, labels[field]);
-      if (issue) issues.push(issue);
+      if (issue) issues.push({ field, message: issue });
     });
   }
   if (data.workflow === "analysis_suite" && data.do_energy) {
     const issue = uploadedFileIssue(data, "edr_file", "EDR 文件");
-    if (issue) issues.push(issue);
+    if (issue) issues.push({ field: "edr_file", message: issue });
   }
   return issues;
 }
@@ -355,35 +365,31 @@ function willUseAcpype(data) {
 export function requiredSubmitIssues(data) {
   const issues = staleUploadedFileIssues(data);
   if (!data.dry_run && Number(data.maxwarn || 0) > 0) {
-    issues.push("真实模拟要求 maxwarn = 0。请解决 grompp 警告，不要直接跳过。");
+    issues.push({ field: "maxwarn", message: "真实模拟要求 maxwarn = 0。请解决 grompp 警告，不要直接跳过。" });
   }
   if (data.workflow === "protein_ligand_md") {
     const ligands = data.ligands || [];
-    const keys = ligands.map((ligand) => String(ligand.key || "").trim()).filter(Boolean);
-    if (new Set(keys).size !== keys.length) {
-      issues.push("配体标识（key）重复；每个配体需要唯一的 key，否则工作文件、index 组和 POSRES 宏会冲突。");
-    }
+    const keys = new Set();
+    ligands.forEach((ligand, index) => {
+      const key = String(ligand.key || "").trim();
+      if (key && keys.has(key)) issues.push({ field: "key", ligandIndex: index, message: `配体 ${index + 1} 的标识 ${key} 重复；每个配体需要唯一的 key。` });
+      if (key) keys.add(key);
+    });
     if (ligands.length > 1 && data.auto_split_complex_pdb && hasPdbProtein(data)) {
       const missingResidues = ligands
         .map((ligand, index) => ({ ligand, index }))
-        .filter(({ ligand }) => !String(ligand.residue || "").trim())
-        .map(({ ligand, index }) => ligand.key || `配体 ${index + 1}`);
-      if (missingResidues.length) {
-        issues.push(`多配体自动拆分要求每个配体都有 PDB 残基名；缺少：${missingResidues.join("、")}。可点「从复合物 PDB 识别配体」自动填写。`);
-      }
+        .filter(({ ligand }) => !String(ligand.residue || "").trim());
+      missingResidues.forEach(({ ligand, index }) => issues.push({ field: "residue", ligandIndex: index,
+        message: `配体 ${index + 1}（${ligand.key || "未命名"}）缺少 PDB 残基名；多配体自动拆分要求逐行填写，也可点「从复合物 PDB 识别配体」。`,
+      }));
     }
     if (!data.dry_run) {
       const unconfirmed = ligands
         .map((ligand, index) => ({ ligand, index }))
         .filter(({ ligand }) => ligandWillUseAcpype(data, ligand) && !ligand.charge_confirmed);
-      if (unconfirmed.length) {
-        const detail = unconfirmed
-          .map(({ ligand, index }) => `${ligand.key || `配体 ${index + 1}`}（当前电荷 ${ligand.charge ?? 0}）`)
-          .join("、");
-        issues.push(
-          `以下配体会执行 ACPYPE/Antechamber，但还没有确认净电荷：${detail}。请逐行检查电荷并勾选「已确认总电荷」；电荷不对时常见报错是电子数奇偶不匹配，并在 sqm/antechamber 阶段失败。`,
-        );
-      }
+      unconfirmed.forEach(({ ligand, index }) => issues.push({ field: "charge_confirmed", ligandIndex: index,
+        message: `配体 ${index + 1}（${ligand.key || "未命名"}，当前电荷 ${ligand.charge ?? 0}）会执行 ACPYPE/Antechamber。请检查净电荷并勾选「已确认总电荷」。`,
+      }));
     }
   }
   return issues;
@@ -517,11 +523,14 @@ export function renderWorkflowGuide() {
   }
 }
 
-export function setSubmitReady(isReady) {
+export function setSubmitReady(isReady, { pending = false } = {}) {
+  if (els.submitJob) els.submitJob.dataset.previewState = pending ? "pending" : isReady ? "ready" : "error";
   if (!els.submitJob || els.submitJob.dataset.busy === "true") return;
   els.submitJob.disabled = !isReady;
-  updateText(els.submitJob.querySelector(".button-label"), isReady ? "启动模拟" : "补全输入");
-  els.submitJob.title = isReady ? "提交这个流程" : "先补齐这个流程需要的文件或参数";
+  // Keep the transient label within the normal label's width. A longer label
+  // can wrap the mobile header during blur and move the next click target.
+  updateText(els.submitJob.querySelector(".button-label"), pending ? "预览中…" : isReady ? "启动模拟" : "补全输入");
+  els.submitJob.title = pending ? "正在校验本次参数与文件，请稍候" : isReady ? "提交这个流程" : "先补齐这个流程需要的文件或参数";
 }
 
 export function friendlyPreviewError(message) {
@@ -562,6 +571,8 @@ export function friendlyJobActionError(message) {
 export async function saveSettings() {
   const button = els.saveSettings;
   button.disabled = true;
+  const fields = [els.gmxBin, els.maxParallel, document.querySelector("#analysis-parallel")].filter(Boolean);
+  const submittedValues = new Map(fields.map(field => [field, field.value]));
   try {
     const gmxBin = els.gmxBin.value.trim() || "gmx";
     const maxParallel = els.maxParallel ? Math.max(1, Math.min(16, parseInt(els.maxParallel.value, 10) || 1)) : undefined;
@@ -571,6 +582,9 @@ export async function saveSettings() {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ gmx_bin: gmxBin, analysis_parallel: analysisParallel, ...(maxParallel !== undefined ? { max_parallel: maxParallel } : {}) }),
     });
+    for (const field of fields) {
+      if (field.value === submittedValues.get(field)) delete field.dataset.userEdited;
+    }
     toast(`gmx 路径已保存：${settings.gmx_bin}`, "success");
     await refreshHealth();
     await refreshPreview();
@@ -584,20 +598,77 @@ export async function saveSettings() {
 /* ---------- 命令预览（防抖 + 取消过期请求） ---------- */
 
 let previewAbort = null;
+let previewRevision = 0;
+let validatedSnapshot = null;
+let pendingFormUpdates = 0;
+let validationBound = false;
+let lastEditedSignature = "";
+const uploadIdentities = new WeakMap();
+let nextUploadIdentity = 0;
+
+export function captureSubmissionSnapshot() {
+  const params = formObject();
+  const files = selectedUploadFiles();
+  const identities = files.map(file => {
+    if (!uploadIdentities.has(file)) uploadIdentities.set(file, ++nextUploadIdentity);
+    return uploadIdentities.get(file);
+  });
+  return { params, files, revision: previewRevision, signature: JSON.stringify([params, identities]) };
+}
+
+function snapshotIsCurrent(snapshot) {
+  return !pendingFormUpdates && snapshot.revision === previewRevision
+    && snapshot.signature === captureSubmissionSnapshot().signature;
+}
+
+export function isSubmissionSnapshotReady(snapshot) {
+  return Boolean(validatedSnapshot && snapshotIsCurrent(snapshot)
+    && validatedSnapshot.revision === snapshot.revision && validatedSnapshot.signature === snapshot.signature);
+}
+
+function invalidatePreview() {
+  previewRevision += 1;
+  validatedSnapshot = null;
+  previewAbort?.abort();
+  setSubmitReady(false, { pending: true });
+}
+
+function bindValidation() {
+  if (validationBound) return;
+  validationBound = true;
+  const edited = () => {
+    const signature = captureSubmissionSnapshot().signature;
+    // A text input fires change again on blur after its input preview. Keep
+    // error links mounted so that clicking one can finish its click/focus.
+    if (signature === lastEditedSignature) return;
+    lastEditedSignature = signature;
+    invalidatePreview();
+    clearSubmissionIssues();
+  };
+  els.jobForm.addEventListener("input", edited, true);
+  els.jobForm.addEventListener("change", edited, true);
+  els.gmxBin?.addEventListener("input", () => { edited(); debouncedPreview(); });
+}
 
 export async function refreshPreview() {
-  if (previewAbort) previewAbort.abort();
+  bindValidation();
+  invalidatePreview();
+  if (pendingFormUpdates) return;
   const controller = new AbortController();
   previewAbort = controller;
-  const params = formObject();
-  void refreshProtocolPreview(params, controller.signal);
+  const snapshot = captureSubmissionSnapshot();
+  lastEditedSignature = snapshot.signature;
+  const params = snapshot.params;
   try {
-    const payload = await api("/api/preview", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(params),
-      signal: controller.signal,
-    });
+    const [payload] = await Promise.all([
+      api("/api/preview", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(params), signal: controller.signal, timeoutMs: 30_000,
+      }),
+      refreshProtocolPreview(params, controller.signal, { files: snapshot.files, isCurrent: () => snapshotIsCurrent(snapshot) }),
+    ]);
+    if (previewAbort !== controller) return;
+    if (!snapshotIsCurrent(snapshot)) { debouncedPreview(); return; }
     state.previewCommands = payload.commands || [];
     renderMdpPreview(payload.mdp_overrides || []);
     updateText(els.previewCount, `${payload.commands.length} 步`);
@@ -616,17 +687,28 @@ export async function refreshPreview() {
       state.previewSignature = html;
       els.commandPreview.innerHTML = html;
     }
-    setSubmitReady(true);
+    const issues = requiredSubmitIssues(params);
+    if (issues.length) showSubmissionIssues(issues, { focus: false, source: "preview" });
+    else {
+      clearSubmissionIssues({ source: "preview" });
+      validatedSnapshot = snapshot;
+    }
+    setSubmitReady(!issues.length);
   } catch (error) {
-    if (error.name === "AbortError") return;
+    if (previewAbort !== controller || error.name === "AbortError") return;
+    if (!snapshotIsCurrent(snapshot)) { debouncedPreview(); return; }
+    // A failed command preview also retires a still-pending protocol preview.
+    controller.abort();
     state.previewCommands = [];
     renderMdpPreview([]);
     updateText(els.previewCount, "待完善");
-    const html = `<li class="preview-blocked"><strong>还缺输入</strong><code>${escapeHtml(friendlyPreviewError(error.message))}</code></li>`;
+    const html = `<li class="preview-blocked"><strong>${error.name === "TimeoutError" ? "预览暂时不可用" : "还缺输入"}</strong><code>${escapeHtml(friendlyPreviewError(error.message))}</code></li>`;
     if (state.previewSignature !== html) {
       state.previewSignature = html;
       els.commandPreview.innerHTML = html;
     }
+    const issues = requiredSubmitIssues(params);
+    showSubmissionIssues(issues.length ? issues : apiSubmissionIssues(error, friendlyPreviewError(error.message)), { focus: false, source: "preview" });
     setSubmitReady(false);
   }
 }
@@ -650,7 +732,11 @@ export function fillStdinOverridesFromPreview() {
   debouncedPreview();
 }
 
-export const debouncedPreview = debounce(refreshPreview, 280);
+const schedulePreview = debounce(refreshPreview, 280);
+export function debouncedPreview() {
+  invalidatePreview();
+  schedulePreview();
+}
 
 /* ---------- 工作流分区显示 ---------- */
 

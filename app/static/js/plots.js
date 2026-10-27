@@ -1,24 +1,78 @@
 // 图谱绘制模块：canvas 折线图与渲染。
 
-import { els, state, escapeHtml, updateText } from "./core.js?v=621bb939e2b97a80";
+import { els, state, escapeHtml, updateText } from "./core.js?v=ed99335f08f47fd8";
 
 export const PLOT_COLORS = ["#087f8c", "#e07a1f", "#7259b5", "#2f855a", "#d14d72", "#3578c4", "#b18b16", "#9b4dca"];
 let plotObserver = null;
 let plotResizeObserver = null;
 let displayedPlots = [];
 let skippedPlotFiles = [];
+const plotSizes = new Map();
+const visiblePlots = new Set();
+const pendingPlots = new Set();
+let plotFrame = 0;
+let plotThemeRevision = 0;
 
-function redrawVisiblePlots() {
-  els.analysisPlots?.querySelectorAll("canvas").forEach((canvas) => {
-    if (canvas.getClientRects().length && canvas.clientWidth > 0) {
-      drawPlot(canvas, displayedPlots[Number(canvas.dataset.plotIndex)]);
+function queuePlot(canvas) {
+  if (!plotSizes.has(canvas)) return;
+  pendingPlots.add(canvas);
+  if (plotFrame) return;
+  plotFrame = requestAnimationFrame(() => {
+    plotFrame = 0;
+    for (const target of pendingPlots) {
+      if (!target.isConnected || document.hidden || (plotObserver && !visiblePlots.has(target))) continue;
+      const bounds = target.getBoundingClientRect();
+      if (!bounds.width || !bounds.height || bounds.bottom <= 0 || bounds.right <= 0 ||
+          bounds.top >= window.innerHeight || bounds.left >= window.innerWidth) continue;
+      const size = `${target.clientWidth}:${target.clientHeight}:${Math.min(window.devicePixelRatio || 1, 2)}:${plotThemeRevision}`;
+      if (plotSizes.get(target) === size) continue;
+      drawPlot(target, displayedPlots[Number(target.dataset.plotIndex)]);
+      plotSizes.set(target, size);
     }
+    pendingPlots.clear();
   });
 }
 
-window.matchMedia("(prefers-color-scheme: dark)").addEventListener("change", redrawVisiblePlots);
+function redrawVisiblePlots() {
+  for (const canvas of plotObserver ? visiblePlots : plotSizes.keys()) queuePlot(canvas);
+}
+
+function disconnectPlots() {
+  plotObserver?.disconnect();
+  plotResizeObserver?.disconnect();
+  plotObserver = null;
+  plotResizeObserver = null;
+  cancelAnimationFrame(plotFrame);
+  plotFrame = 0;
+  plotSizes.clear();
+  visiblePlots.clear();
+  pendingPlots.clear();
+  displayedPlots = [];
+}
+
+window.matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => {
+  plotThemeRevision += 1;
+  redrawVisiblePlots();
+});
+window.addEventListener("resize", redrawVisiblePlots);
+document.addEventListener("visibilitychange", redrawVisiblePlots);
+// Without IntersectionObserver, scroll events also cover nested scrolling panels.
+document.addEventListener("scroll", () => {
+  if (!plotObserver) redrawVisiblePlots();
+}, { capture: true, passive: true });
+
+let plotResolutionQuery = null;
+function watchPlotResolution() {
+  plotResolutionQuery?.removeEventListener("change", watchPlotResolution);
+  plotResolutionQuery = window.matchMedia(`(resolution: ${window.devicePixelRatio || 1}dppx)`);
+  plotResolutionQuery.addEventListener("change", watchPlotResolution);
+  redrawVisiblePlots();
+}
+watchPlotResolution();
 
 export function resetPlotFilters() {
+  disconnectPlots();
+  state.plotsSignature = "";
   state.plotFilters = { metric: "", replica: "", begin: "", end: "", mode: "separate" };
   skippedPlotFiles = [];
   els.plotControls?.reset();
@@ -217,9 +271,8 @@ export function renderPlots(jobId, plots, truncated = false, total = null) {
   if (signature === state.plotsSignature) return;
   state.plotsSignature = signature;
   if (state.plotFilters.mode === "overlay") plots = overlayReplicas(plots);
+  disconnectPlots();
   displayedPlots = plots;
-  plotResizeObserver?.disconnect();
-  plotObserver?.disconnect();
   const totalShown = `${plots.length} 张${truncated ? "（部分省略）" : ""}`;
   updateText(els.plotCount, totalShown);
   if (els.downloadPlots) {
@@ -258,21 +311,28 @@ export function renderPlots(jobId, plots, truncated = false, total = null) {
     </article>`).join("")}</div></section>`;
   }).join("");
   const canvases = els.analysisPlots.querySelectorAll("canvas");
+  canvases.forEach((canvas) => plotSizes.set(canvas, ""));
   if ("ResizeObserver" in window) {
-    plotResizeObserver = new ResizeObserver(redrawVisiblePlots);
+    plotResizeObserver = new ResizeObserver((entries) => {
+      entries.forEach(({ target }) => queuePlot(target));
+    });
     canvases.forEach((canvas) => plotResizeObserver.observe(canvas));
   }
   if (!("IntersectionObserver" in window)) {
-    canvases.forEach((canvas) => drawPlot(canvas, plots[Number(canvas.dataset.plotIndex)]));
+    redrawVisiblePlots();
     return;
   }
-  plotObserver = new IntersectionObserver((entries, observer) => {
+  plotObserver = new IntersectionObserver((entries) => {
     entries.forEach((entry) => {
-      if (!entry.isIntersecting) return;
       const canvas = entry.target;
-      drawPlot(canvas, plots[Number(canvas.dataset.plotIndex)]);
-      observer.unobserve(canvas);
+      if (!plotSizes.has(canvas)) return;
+      if (entry.isIntersecting && entry.intersectionRect.width > 0 && entry.intersectionRect.height > 0) {
+        visiblePlots.add(canvas);
+        queuePlot(canvas);
+      } else {
+        visiblePlots.delete(canvas);
+      }
     });
-  }, { rootMargin: "240px 0px" });
+  }, { threshold: [0, 0.001] });
   canvases.forEach((canvas) => plotObserver.observe(canvas));
 }

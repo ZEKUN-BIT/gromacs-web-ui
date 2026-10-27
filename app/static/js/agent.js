@@ -1,12 +1,13 @@
-import { api, state, toast, showWorkspaceView, confirmDialog } from "./core.js?v=621bb939e2b97a80";
-import { refreshJobs, selectJob } from "./jobs.js?v=621bb939e2b97a80";
-import { applyProtocol } from "./library.js?v=621bb939e2b97a80";
-import { renderMessage } from "./agent-content.js?v=621bb939e2b97a80";
+import { api, state, toast, showWorkspaceView, confirmDialog } from "./core.js?v=ed99335f08f47fd8";
+import { refreshJobs, selectJob } from "./jobs.js?v=ed99335f08f47fd8";
+import { applyProtocol } from "./library.js?v=ed99335f08f47fd8";
+import { renderMessage } from "./agent-content.js?v=ed99335f08f47fd8";
 
 const SESSION_KEY = "gromacs.agent-session";
-const ACTION_STATUS = { pending: "等待确认", running: "执行中", succeeded: "已完成", failed: "执行失败", rejected: "已拒绝", expired: "预览已过期", uncertain: "结果待核实" };
+const ACTION_STATUS = { pending: "等待确认", running: "执行中", succeeded: "已完成", failed: "执行失败", cancelled: "已取消", rejected: "已拒绝", expired: "预览已过期", uncertain: "结果待核实" };
 const DRAFT_KEY = "new";
 const jsonRequest = (body, method = "POST") => ({ method, headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+const backgroundRequest = body => ({ ...jsonRequest(body), headers: { "Content-Type": "application/json", Prefer: "respond-async" } });
 
 function element(tag, text, className) {
   const node = document.createElement(tag);
@@ -29,7 +30,6 @@ export function bindAgent() {
   panel.dataset.bound = "true";
   const find = id => document.getElementById(`agent-${id}`);
   const settingsDialog = find("settings");
-  const composeView = document.getElementById("compose-view");
   let config = null, session = null, busy = false, uncertain = false, configLoadFailed = false;
   let pendingSend = null, contextJobId = null, pollTimer = null, pollFailures = 0;
   let savedSessionId = null;
@@ -38,6 +38,8 @@ export function bindAgent() {
   const modelLists = new Map();
   let draftKey = savedSessionId || DRAFT_KEY, renderedSessionId = null;
   let composing = false, unseenUpdates = false;
+  let initialized = false;
+  const sessionEtags = new Map();
   const scroll = find("scroll");
 
   function updateComposer() {
@@ -142,7 +144,17 @@ export function bindAgent() {
     const progress = find("progress");
     if (progress) {
       progress.hidden = !blocked;
-      progress.textContent = uncertain ? pollFailures >= 6 ? "自动同步已暂停，请点击“刷新状态”。" : "正在核实上次请求的结果…" : session?.status === "running" ? "助手正在处理请求…" : "正在同步对话…";
+      const operation = session?.operation;
+      const copied = operation?.phase === "copy" && Number.isFinite(operation.total_bytes)
+        ? `正在复制${operation.file ? ` ${operation.file}` : "输入"}：${(operation.copied_bytes / 1024 ** 2).toFixed(1)} / ${(operation.total_bytes / 1024 ** 2).toFixed(1)} MiB`
+        : operation?.message;
+      progress.textContent = uncertain ? pollFailures >= 6 ? "自动同步已暂停，请点击“刷新状态”。" : "正在核实上次请求的结果…"
+        : session?.status === "running" ? operation?.cancel_requested ? operation.phase === "model" ? "正在取消，等待当前模型请求结束…" : "正在停止尚未提交的操作…" : copied || "助手正在处理请求…" : "正在同步对话…";
+    }
+    if (find("cancel")) {
+      find("cancel").hidden = session?.status !== "running";
+      find("cancel").disabled = busy || uncertain || !session?.operation?.cancellable || session.operation.cancel_requested;
+      find("cancel").textContent = session?.operation?.cancel_requested ? "正在取消…" : "取消当前操作";
     }
     const configured = Boolean(config?.has_api_key);
     if (find("connection-status")) {
@@ -367,7 +379,7 @@ export function bindAgent() {
       renderedSessionId = session?.id || savedSessionId;
     }
     const messagesChanged = reconcile(find("messages"), session?.messages || [], renderMessage, (message, index) => String(message.id || index));
-    const pastStatuses = new Set(["succeeded", "rejected", "expired"]);
+    const pastStatuses = new Set(["succeeded", "cancelled", "rejected", "expired"]);
     const activeActions = [], pastActions = [];
     for (const action of session?.actions || []) (pastStatuses.has(action.status) ? pastActions : activeActions).push(action);
     const existingActions = new Map([...find("actions").querySelectorAll(".agent-action")].map(node => [node.dataset.renderKey, node]));
@@ -412,7 +424,7 @@ export function bindAgent() {
     schedulePoll();
   }
 
-  function panelVisible() { return !document.hidden && !composeView?.hidden; }
+  function panelVisible() { return !document.hidden && !panel.hidden; }
 
   function schedulePoll() {
     window.clearTimeout(pollTimer);
@@ -426,7 +438,18 @@ export function bindAgent() {
     const targetId = savedSessionId;
     busy = true; updateControls();
     try {
-      const value = await api(`/api/agent/sessions/${encodeURIComponent(targetId)}`);
+      const response = await fetch(`/api/agent/sessions/${encodeURIComponent(targetId)}`, {
+        headers: sessionEtags.has(targetId) && session?.id === targetId && !uncertain
+          ? { "If-None-Match": sessionEtags.get(targetId) } : {},
+        signal: AbortSignal.timeout(30_000),
+      });
+      if (response.status === 304) { pollFailures = 0; return; }
+      if (!response.ok) {
+        const payload = await response.json().catch(() => ({}));
+        throw Object.assign(new Error(typeof payload.detail === "string" ? payload.detail : "暂时无法同步对话"), { status: response.status });
+      }
+      const value = await response.json();
+      if (response.headers.get("etag")) sessionEtags.set(targetId, response.headers.get("etag"));
       if (targetId !== savedSessionId) return;
       const changedAction = value.actions.some(action => action.status === "succeeded"
         && !session?.actions.some(previous => previous.id === action.id && previous.status === "succeeded"));
@@ -467,7 +490,7 @@ export function bindAgent() {
         pendingSend = { message, context_job_id: context, request_id: requestId(), previousCount: session.messages.length, session_id: session.id };
       }
       const { previousCount: _previousCount, session_id: _sessionId, ...body } = pendingSend;
-      acceptSession(await api(`/api/agent/sessions/${encodeURIComponent(session.id)}/messages`, jsonRequest(body)));
+      acceptSession(await api(`/api/agent/sessions/${encodeURIComponent(session.id)}/messages`, backgroundRequest(body)));
     } catch (error) {
       errorMessage(error.message);
       uncertain = Boolean(savedSessionId);
@@ -483,7 +506,7 @@ export function bindAgent() {
     find("action-history").open = true;
     busy = true; updateControls(); errorMessage(); status(decision === "approve" ? "正在执行已确认的操作…" : "正在拒绝操作…");
     try {
-      acceptSession(await api(`/api/agent/sessions/${encodeURIComponent(session.id)}/actions/${encodeURIComponent(id)}`, jsonRequest({ decision })));
+      acceptSession(await api(`/api/agent/sessions/${encodeURIComponent(session.id)}/actions/${encodeURIComponent(id)}`, backgroundRequest({ decision })));
       await refreshJobs().catch(error => toast(`操作状态已更新；任务列表刷新失败：${error.message}`, "error"));
     } catch (error) {
       errorMessage(error.message); uncertain = true;
@@ -491,6 +514,18 @@ export function bindAgent() {
     } finally {
       busy = false; updateControls();
       if (uncertain) await syncSession(true); else schedulePoll();
+    }
+  }
+
+  async function cancelOperation() {
+    if (find("cancel").disabled || !session) return;
+    busy = true; updateControls(); errorMessage();
+    try {
+      acceptSession(await api(`/api/agent/sessions/${encodeURIComponent(session.id)}/cancel`, jsonRequest({})));
+    } catch (error) {
+      errorMessage(error.message); uncertain = true;
+    } finally {
+      busy = false; updateControls(); schedulePoll();
     }
   }
 
@@ -551,6 +586,8 @@ export function bindAgent() {
 
   async function initialize() {
     if (busy) return;
+    const restoreFocus = document.activeElement === find("message");
+    initialized = true;
     configLoadFailed = false;
     busy = true; updateControls(); errorMessage(); status("正在读取已保存的模型设置…");
     let loaded = false;
@@ -565,12 +602,12 @@ export function bindAgent() {
       status("模型配置读取失败，请点击“刷新状态”重试。");
     } finally { busy = false; updateControls(); }
     if (loaded && savedSessionId) await syncSession(true);
+    if (restoreFocus && panelVisible() && !settingsDialog.open && !find("message").disabled
+      && [document.body, find("message")].includes(document.activeElement)) find("message").focus({ preventScroll: true });
   }
 
   function openAgent() {
-    document.body.classList.remove("sidebar-open");
-    document.querySelector("#toggle-sidebar")?.setAttribute("aria-expanded", "false");
-    showWorkspaceView("compose");
+    showWorkspaceView("agent");
     updateComposer(); updateContext();
     panel.scrollIntoView({ block: "start", behavior: "smooth" });
     if (!find("message").disabled) find("message").focus({ preventScroll: true });
@@ -583,10 +620,10 @@ export function bindAgent() {
     busy = true; updateControls(); errorMessage(); status("正在读取已保存的模型设置…");
     try {
       setConfig(await api("/api/agent/config"));
-      status(config.has_api_key ? "已保存的密钥会自动沿用；仅更换密钥时需要填写。" : "填写 API Key 并保存，以后可直接在首页对话。");
+      status(config.has_api_key ? "已保存的密钥会自动沿用；仅更换密钥时需要填写。" : "填写 API Key 并保存，之后可在对话区继续。");
     } catch (error) { errorMessage(error.message); status("配置读取失败，请关闭设置后点击“刷新状态”重试。"); }
     finally { busy = false; updateControls(); }
-    if (settingsDialog.open && !find("provider").disabled) {
+    if (settingsDialog.open && config && !find("config-fields").disabled) {
       settingsDialog.scrollTop = 0;
       if (Object.values(config.profiles).some(profile => profile.is_saved || profile.has_api_key)) find("settings-title").focus({ preventScroll: true });
       else find("provider").focus();
@@ -610,6 +647,7 @@ export function bindAgent() {
   function visibilityChanged() {
     window.clearTimeout(pollTimer);
     if (!panelVisible()) return;
+    if (!initialized) { initialize(); return; }
     updateComposer(); updateLatest();
     if (uncertain || session?.status === "running") {
       pollFailures = 0;
@@ -617,7 +655,7 @@ export function bindAgent() {
     }
   }
   document.addEventListener("visibilitychange", visibilityChanged);
-  if (composeView) new MutationObserver(visibilityChanged).observe(composeView, { attributes: true, attributeFilter: ["hidden"] });
+  new MutationObserver(visibilityChanged).observe(panel, { attributes: true, attributeFilter: ["hidden"] });
   find("provider").addEventListener("change", showProfile);
   find("model-choice").addEventListener("change", () => {
     selectModel();
@@ -629,6 +667,7 @@ export function bindAgent() {
   find("clear-key").addEventListener("click", event => saveConfig(event, { clear: true }));
   find("test").addEventListener("click", event => saveConfig(event, { test: true }));
   find("message-form").addEventListener("submit", send);
+  find("cancel")?.addEventListener("click", cancelOperation);
   find("message").addEventListener("input", () => { saveDraft(); updateComposer(); updateControls(); });
   find("message").addEventListener("compositionstart", () => { composing = true; });
   find("message").addEventListener("compositionend", () => { composing = false; });
@@ -674,5 +713,5 @@ export function bindAgent() {
   window.addEventListener("jobs-updated", updateContext);
   window.addEventListener("resize", () => { if (panelVisible()) { updateComposer(); updateLatest(); } });
   updateComposer(); updateContext();
-  initialize();
+  if (panelVisible()) initialize();
 }

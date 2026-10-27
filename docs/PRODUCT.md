@@ -54,7 +54,7 @@ Constraints:
 
 The product is named "GROMACS Console" ("GROMACS 控制台" in the Chinese interface). Its voice is practical, technical, and Chinese-first, with English scientific terms retained where they match GROMACS usage.
 
-The interface and Windows installer share a deep-green/light-green molecular symbol. Dedicated SVG, Windows ICO, and high-resolution installer BMP assets are included. The project also bundles IBM Plex Sans, JetBrains Mono, and Lucide icons with their license files.
+The interface and Windows installer share a deep-green/light-green molecular symbol. Dedicated SVG, Windows ICO, and high-resolution installer BMP assets are included. The project also bundles Inter, JetBrains Mono, and Lucide icons with their license files. Inter is served locally; Chinese text uses the platform's available sans-serif font. Ordinary parameter inputs, including numbers, use the UI font; JetBrains Mono is reserved for code, commands, logs, paths, and numeric statistics in tables.
 
 The project's own code is attributed to `yzk`, with `Copyright (c) 2026 yzk` and the MIT license. The page links to the project license; Windows installation files include the license and third-party notices. License scope and attribution are documented in [LICENSING.md](LICENSING.md).
 
@@ -67,7 +67,7 @@ Real source files:
 - `app/execution.py`
 - `app/gromacs.py`
 - `app/templates/index.html`
-- `app/static/styles.css`
+- `app/static/design-tokens.css` and `app/static/styles.css`
 - `app/static/js/main.js` and its sibling modules
 - `app/static/gromacs-console.svg`
 - `app/static/fonts/` and `app/static/icons/lucide/`
@@ -90,3 +90,7 @@ Use the included visual assets and supported capabilities when describing the pr
 ## Accessibility & Inclusion
 
 The design target is WCAG AA for contrast, visible focus, keyboard access, and mobile touch targets; this is not a compliance certification. The interface uses responsive layouts, a collapsible task sidebar on narrow screens, and a native confirmation dialog with keyboard focus containment and focus restoration. Windows installer graphics support high-DPI scaling. Browser regression checks cover desktop, tablet, and mobile viewports.
+
+Typography uses 14px for UI labels and controls, 13px for explanations, 12px for metadata, and 16px for chat messages. UI body line height is 1.65. Desktop brand, column, and panel headings use 16px; larger result and dialog headings use 18px. Page titles use 24px on desktop and 22px on mobile. Weights are limited to 400, 500, and 600. Mobile labels and buttons remain 14px, while input text uses 16px; layouts stack controls and reduce secondary content to preserve readability. The full font stack and hierarchy are documented in [DESIGN.md](DESIGN.md).
+
+The shared light/dark palette, font loading, type scale, spacing, and radii live in `app/static/design-tokens.css`. Common controls and navigation are defined in `styles.css`; product and AI styles keep their scoped variants. Secondary text is measured against actual surfaces in both themes, including interaction states. The stylesheet ownership and load order are documented in [DESIGN.md](DESIGN.md).

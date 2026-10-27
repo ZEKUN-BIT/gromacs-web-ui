@@ -1,7 +1,7 @@
 // MDP 参数状态、协议摘要与参数覆盖预览。
 
-import { els, state, escapeHtml, updateText, api } from "./core.js?v=621bb939e2b97a80";
-import { selectedUploadFiles } from "./form-files.js?v=621bb939e2b97a80";
+import { els, state, escapeHtml, updateText, api } from "./core.js?v=ed99335f08f47fd8";
+import { selectedUploadFiles } from "./form-files.js?v=ed99335f08f47fd8";
 
 export function setMdpPanelExpanded(expanded) {
   if (!els.mdpPanelToggle || !els.mdpPanelBody) return;
@@ -23,24 +23,24 @@ export function updateMdpPanelState() {
   updateText(els.mdpPanelState, filled ? `已启用覆盖，${filled} 项已填写` : "已启用覆盖，等待填写参数");
 }
 
-export async function refreshProtocolPreview(params, signal) {
+export async function refreshProtocolPreview(params, signal, { files = selectedUploadFiles(), isCurrent = () => true } = {}) {
   if (!["protein_md", "protein_ligand_md"].includes(params.workflow)) {
     els.protocolSummary.textContent = "";
     return;
   }
   try {
     const uploaded_mdp = {};
-    for (const file of selectedUploadFiles()) {
+    for (const file of files) {
       if (!["ions.mdp", "minim.mdp", "nvt.mdp", "npt.mdp", "md.mdp"].includes(file.name)) continue;
       if (file.size > 262144) throw new Error("MDP 超过 256 KiB，无法预览协议");
       uploaded_mdp[file.name] = await file.text();
     }
-    if (signal.aborted) return;
+    if (signal.aborted || !isCurrent()) return;
     const result = await api("/api/protocol-preview", {
       method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ ...params, uploaded_mdp }), signal,
+      body: JSON.stringify({ ...params, uploaded_mdp }), signal, timeoutMs: 30_000,
     });
-    if (signal.aborted) return;
+    if (signal.aborted || !isCurrent()) return;
     const names = { NVT: "NVT", NPT: "限制 NPT", "NPT unrestrained": "无限制 NPT", Production: "生产 MD" };
     const rows = result.stages.map((stage) => {
       const source = stage.source === "uploaded" ? "上传文件" : stage.source === "built-in" ? "内置模板" : stage.source.split("/").slice(-3).join("/");
@@ -60,7 +60,8 @@ export async function refreshProtocolPreview(params, signal) {
     const total = production?.duration_ns != null ? `${Number((production.duration_ns * production.replicas).toPrecision(6))} ns` : "未确定";
     els.protocolSummary.innerHTML = `<strong>本次协议 · 总生产采样 ${escapeHtml(total)}</strong><div class="report-table-scroll"><table><thead><tr><th>阶段与来源</th><th>每段时长</th><th>温度</th><th>压控</th></tr></thead><tbody>${rows}</tbody></table></div>`;
   } catch (error) {
-    if (!signal.aborted) els.protocolSummary.textContent = error.message;
+    if (!signal.aborted && isCurrent()) els.protocolSummary.textContent = error.message;
+    throw error;
   }
 }
 

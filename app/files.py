@@ -1,14 +1,40 @@
 from __future__ import annotations
 
 import hashlib
+import heapq
 import os
 import re
+import shutil
+import stat
+import time
 from datetime import datetime
 from pathlib import Path
 from uuid import uuid4
 
 from fastapi import HTTPException, UploadFile
 from starlette.concurrency import run_in_threadpool
+
+from .operations import OperationContext
+
+
+def copy_file_cancellable(source: Path, target: Path, operation: OperationContext) -> None:
+    """Copy an input in bounded chunks, leaving cleanup to the staging owner."""
+    copied, updated = 0, 0.0
+    total = source.stat().st_size
+    with source.open("rb") as reader, target.open("wb") as writer:
+        while True:
+            operation.checkpoint()
+            chunk = reader.read(UPLOAD_CHUNK_BYTES)
+            if not chunk:
+                break
+            writer.write(chunk)
+            copied += len(chunk)
+            tick = time.monotonic()
+            if tick - updated >= 0.25:
+                operation.report({"phase": "copy", "file": source.name, "copied_bytes": copied, "total_bytes": total})
+                updated = tick
+    operation.report({"phase": "copy", "file": source.name, "copied_bytes": copied, "total_bytes": total})
+    shutil.copystat(source, target)
 
 
 def _positive_env_int(name: str, default: int) -> int:
@@ -47,7 +73,7 @@ LIGAND_FILE_FIELDS = ("gro_file", "itp_file", "structure_file", "chemistry_file"
 
 GENERATED_PDB_PATTERN = re.compile(r"^[A-Za-z0-9._-]+_from_complex\.pdb$")
 
-RESERVED_UPLOAD_NAMES = {"experiment-manifest.json", "metadata.json", "run.log"}
+RESERVED_UPLOAD_NAMES = {"experiment-manifest.json", "execution-manifest.json", "metadata.json", "run.log"}
 
 
 def safe_filename(name: str) -> str:
@@ -277,3 +303,37 @@ def relative_files(workdir: Path, max_files: int = 1000) -> list[dict]:
         except OSError:
             continue
     return sorted(items, key=lambda item: item["path"])
+
+
+def relative_file_page(workdir: Path, *, search: str, offset: int, limit: int) -> dict:
+    """Search every regular output without following directory or file links."""
+    total = 0
+    needle = search.casefold()
+
+    def matches():
+        nonlocal total
+        for directory, folders, filenames in os.walk(workdir, followlinks=False):
+            folders[:] = [name for name in folders if not (Path(directory) / name).is_symlink()]
+            for name in filenames:
+                path = Path(directory) / name
+                rel = path.relative_to(workdir).as_posix()
+                if rel == "metadata.json" or needle not in rel.casefold():
+                    continue
+                try:
+                    info = path.lstat()
+                except OSError:
+                    continue
+                if not stat.S_ISREG(info.st_mode):
+                    continue
+                total += 1
+                yield {"path": rel, "size": info.st_size, "modified": datetime.fromtimestamp(info.st_mtime).isoformat()}
+
+    items = heapq.nsmallest(offset + limit, matches(), key=lambda item: item["path"])
+    return {
+        "files": items[offset : offset + limit],
+        "total": total,
+        "offset": offset,
+        "limit": limit,
+        "has_more": offset + limit < total,
+        "truncated": False,
+    }

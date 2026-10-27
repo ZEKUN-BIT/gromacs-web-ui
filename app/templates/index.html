@@ -6,11 +6,13 @@
     <meta name="description" content="本地 GROMACS 分子动力学工作台：配置、提交、查看模拟任务" />
     <link rel="icon" type="image/svg+xml" href="/static/gromacs-console.svg" />
     <title>GROMACS 控制台</title>
-    <link rel="stylesheet" href="/static/styles.css?v=621bb939e2b97a80" />
-    <link rel="stylesheet" href="/static/icons.css?v=621bb939e2b97a80" />
-    <link rel="stylesheet" href="/static/desktop.css?v=621bb939e2b97a80" />
-    <link rel="stylesheet" href="/static/product.css?v=621bb939e2b97a80" />
-    <link rel="stylesheet" href="/static/agent.css?v=621bb939e2b97a80" />
+    <link rel="stylesheet" href="/static/design-tokens.css?v=ed99335f08f47fd8" />
+    <link rel="stylesheet" href="/static/styles.css?v=ed99335f08f47fd8" />
+    <link rel="stylesheet" href="/static/icons.css?v=ed99335f08f47fd8" />
+    <link rel="stylesheet" href="/static/desktop.css?v=ed99335f08f47fd8" />
+    <link rel="stylesheet" href="/static/product.css?v=ed99335f08f47fd8" />
+    <link rel="stylesheet" href="/static/agent.css?v=ed99335f08f47fd8" />
+    <link rel="stylesheet" href="/static/workflow-feedback.css?v=ed99335f08f47fd8" />
   </head>
   <body>
     <div class="app-shell">
@@ -19,10 +21,23 @@
           <div class="mark" data-ui-icon="atom" aria-hidden="true"></div>
           <div>
             <h1>GROMACS 控制台</h1>
-            <p id="runtime-path">runtime</p>
+            <p>分子动力学工作台</p>
           </div>
         </div>
 
+        <div class="rail-label">任务列表</div>
+        <label class="project-filter-label" for="project-filter">研究项目</label>
+        <select id="project-filter" aria-label="按研究项目筛选"><option value="">全部项目</option></select>
+        <div class="rail-search" data-ui-icon="search">
+          <input id="job-filter" class="job-filter" type="search" maxlength="256" placeholder="搜索全部任务…" autocomplete="off" spellcheck="false" aria-label="搜索全部历史任务" />
+        </div>
+        <nav class="jobs-list" id="jobs-list" aria-label="任务列表"></nav>
+        <div class="jobs-pager" aria-label="任务列表分页">
+          <button id="jobs-previous" class="tool-button" type="button" disabled>上一页</button>
+          <span id="jobs-page-status" role="status" aria-live="polite"></span>
+          <button id="jobs-next" class="tool-button" type="button" disabled>下一页</button>
+        </div>
+        <div class="rail-footer">
         <section class="status-strip" id="health-card">
           <span class="dot muted"></span>
           <div>
@@ -32,6 +47,7 @@
         </section>
         <details class="environment-diagnostics">
           <summary data-ui-icon="activity">运行环境诊断</summary>
+          <p class="runtime-location"><span>运行目录</span><code id="runtime-path">runtime</code></p>
           <div id="environment-diagnostics"></div>
         </details>
 
@@ -53,9 +69,9 @@
         </details>
 
         <div class="rail-tools">
-          <button id="open-library" class="tool-button" type="button">协议模板</button>
-          <button id="open-storage" class="tool-button storage-open" type="button">空间管理</button>
-          <button id="open-help" class="tool-button" type="button">帮助与诊断</button>
+          <button id="open-library" class="tool-button" data-ui-icon="layers" type="button">协议模板</button>
+          <button id="open-storage" class="tool-button storage-open" data-ui-icon="folder" type="button">空间管理</button>
+          <button id="open-help" class="tool-button" data-ui-icon="shield" type="button">帮助与诊断</button>
         </div>
 
         <details class="about-project">
@@ -87,32 +103,25 @@
           </p>
         </section>
         </details>
-
-        <div class="rail-label">任务列表</div>
-        <label class="project-filter-label" for="project-filter">研究项目</label>
-        <select id="project-filter" aria-label="按研究项目筛选"><option value="">全部项目</option></select>
-        <div class="rail-search" data-ui-icon="search">
-          <input id="job-filter" class="job-filter" type="search" maxlength="256" placeholder="搜索全部任务…" autocomplete="off" spellcheck="false" aria-label="搜索全部历史任务" />
-        </div>
-        <nav class="jobs-list" id="jobs-list" aria-label="任务列表"></nav>
-        <div class="jobs-pager" aria-label="任务列表分页">
-          <button id="jobs-previous" class="tool-button" type="button" disabled>上一页</button>
-          <span id="jobs-page-status" role="status" aria-live="polite"></span>
-          <button id="jobs-next" class="tool-button" type="button" disabled>下一页</button>
         </div>
       </aside>
 
+      <button id="sidebar-backdrop" class="sidebar-backdrop" type="button" aria-label="关闭任务列表" tabindex="-1"></button>
       <main class="workspace">
         <header class="workspace-bar">
           <nav class="workspace-nav" aria-label="工作区">
-            <button id="open-agent" class="agent-entry" data-ui-icon="network" type="button" aria-controls="agent-panel">AI 对话</button>
+            <button id="open-agent" class="agent-entry" data-ui-icon="network" type="button" aria-controls="agent-panel" aria-pressed="false">AI 对话</button>
             <button type="button" data-workspace-view="compose" data-manual-compose data-ui-icon="plus" aria-pressed="true">新建任务</button>
             <button type="button" data-workspace-view="detail" data-ui-icon="layers" aria-pressed="false">任务详情</button>
           </nav>
           <button id="toggle-sidebar" class="tool-button" type="button" aria-controls="task-sidebar" aria-expanded="false">任务列表</button>
         </header>
+        <div id="task-sync-notice" class="sync-notice" hidden>
+          <span id="task-sync-message" role="status" aria-live="polite"></span>
+          <button id="retry-task-sync" class="tool-button" type="button">重新连接</button>
+        </div>
         <section class="run-composer" id="compose-view">
-          <section id="agent-panel" class="agent-panel" aria-labelledby="agent-title">
+          <section id="agent-panel" class="agent-panel" aria-labelledby="agent-title" hidden>
             <header class="agent-dialog-head">
               <div class="agent-identity"><span class="agent-avatar" data-ui-icon="network" aria-hidden="true"></span><div><h2 id="agent-title">AI 对话</h2><span id="agent-current-model">连接你的模型，安排下一步</span></div></div>
               <div class="agent-head-actions"><span id="agent-connection-status" class="agent-connection-status" role="status">正在读取配置…</span><button id="agent-open-settings" class="tool-button" type="button" aria-haspopup="dialog" aria-controls="agent-settings">模型与 API</button></div>
@@ -147,6 +156,7 @@
                   </details>
                 </section>
                 <p id="agent-progress" class="agent-progress" role="status" hidden>助手正在处理…</p>
+                <button id="agent-cancel" class="tool-button" type="button" hidden>取消当前操作</button>
               </div>
               <button id="agent-scroll-latest" class="agent-scroll-latest" type="button" aria-label="回到最新消息" hidden>↓ 回到最新消息</button>
             </div>
@@ -166,6 +176,7 @@
             <div class="section-head">
               <div>
                 <h2 id="manual-compose-title">新建模拟任务</h2>
+                <p class="section-intro">配置输入文件、模拟协议与计算资源。</p>
                 <div class="draft-bar">
                   <span id="draft-status" role="status"></span>
                   <button id="clear-draft" class="tool-button icon-only" data-ui-icon="trash" type="button" title="删除已保存草稿" aria-label="删除已保存草稿">删除已保存草稿</button>
@@ -185,11 +196,12 @@
               </div>
             </details>
             <div class="composer-toolbar">
-              <nav class="compose-path" aria-label="创建任务步骤"><button type="button" data-compose-anchor="inputs">1 选择流程与文件</button><button type="button" data-compose-anchor="parameters">2 确认协议</button><button type="button" data-compose-anchor="resources">3 资源与提交</button></nav>
+              <nav class="compose-path" aria-label="创建任务步骤"><button type="button" data-compose-anchor="inputs">选择流程与文件</button><button type="button" data-compose-anchor="parameters">确认协议</button><button type="button" data-compose-anchor="resources">资源与提交</button></nav>
               <div class="view-mode" role="group" aria-label="参数显示方式"><button id="guided-mode" type="button" aria-pressed="true">引导视图</button><button id="expert-mode" type="button" aria-pressed="false">专业视图</button></div>
             </div>
             <form id="job-form" class="composer-grid" autocomplete="off">
               <div class="form-column">
+                <div class="column-heading"><span class="section-index" aria-hidden="true">01</span><div><h3>输入与工作流</h3><p>准备本次任务的结构与文件</p></div></div>
                 <label class="job-name-field" for="job-name" title="任务的显示名，会用于生成任务目录名；必填">
                   <span class="field-label">任务名 <span class="req-mark" aria-hidden="true">*</span></span>
                   <input id="job-name" name="name" required placeholder="例如 protein-md-run" spellcheck="false" />
@@ -234,9 +246,9 @@
 
                 <details class="new-job-organization"><summary>添加项目、标签和备注</summary><label>研究项目<input name="project" maxlength="80" list="project-options" placeholder="例如 蛋白突变体比较" /></label><label>标签<input name="tags" placeholder="用逗号分隔，例如 WT, 300K" /></label><label>实验备注<textarea name="notes" maxlength="4000" rows="3" placeholder="记录研究目的与实验条件"></textarea></label></details>
                 <div class="dropzone" id="dropzone">
-                  <input id="files" name="files" type="file" multiple />
+                  <input id="files" name="files" type="file" multiple aria-labelledby="upload-label" />
                   <span class="dropzone-icon" data-ui-icon="upload" aria-hidden="true"></span>
-                  <strong>拖入文件，或点击选择</strong>
+                  <strong id="upload-label">拖入文件，或点击选择</strong>
                   <span id="file-summary">可上传结构、拓扑、MDP 和轨迹文件</span>
                 </div>
 
@@ -269,6 +281,7 @@
               </div>
 
               <div class="parameter-column">
+                <div class="column-heading"><span class="section-index" aria-hidden="true">02</span><div><h3>协议与运行</h3><p>确认模拟条件与计算资源</p></div></div>
                 <div class="param-section system-section" data-section="base">
                   <fieldset class="base-group">
                   <legend data-ui-icon="atom">体系设置</legend>
@@ -751,6 +764,7 @@
         </section>
 
         <section class="monitor-grid" id="detail-view" hidden>
+          <p class="sync-summary"><span id="task-sync-state">正在连接实时更新…</span><time id="task-sync-time" hidden></time></p>
           <div class="detail-header">
             <h2 id="active-job-title" class="detail-title">未选择任务</h2>
             <div class="detail-analysis-actions">
@@ -828,11 +842,16 @@
               <div class="panel-head">
                 <h3>输出文件</h3>
                 <div class="panel-tools file-tools">
-                  <input id="file-filter" class="file-filter" type="search" placeholder="过滤文件名…" autocomplete="off" spellcheck="false" aria-label="过滤输出文件" />
+                  <input id="file-filter" class="file-filter" type="search" maxlength="256" placeholder="搜索全部输出文件…" autocomplete="off" spellcheck="false" aria-label="搜索输出文件" />
                   <span id="file-count" class="count-pill">0 个</span>
                 </div>
               </div>
               <div id="output-files" class="output-files"></div>
+              <nav id="file-pagination" class="research-pager" aria-label="输出文件分页" hidden>
+                <button id="files-previous" class="tool-button" type="button">上一页</button>
+                <span id="files-page-status" role="status"></span>
+                <button id="files-next" class="tool-button" type="button">下一页</button>
+              </nav>
             </div>
 
           <section id="result-summary" class="result-summary" data-detail-panel="overview"><h3>结果与下一步</h3><div id="result-summary-content">选择任务后查看。</div></section>
@@ -851,7 +870,8 @@
                 <button id="benchmark-job" class="tool-button" type="button" title="复制当前 TPR，短跑多个线程组合并比较 ns/day">性能基准</button>
                 <select id="compare-job-select" class="compact-select" aria-label="选择参数比较任务"></select>
                 <button id="compare-job" class="tool-button" type="button">比较参数</button>
-                <button id="copy-log" class="tool-button" type="button" title="复制当前日志">复制日志</button>
+                <button id="copy-log" class="tool-button" type="button" title="复制当前显示的日志">复制日志</button>
+                <a id="download-log" class="tool-button" hidden download>下载已保留日志</a>
                 <button id="log-bottom" class="tool-button" type="button" title="滚动到日志末尾">回到底部</button>
                   </div>
                 </details>
@@ -869,7 +889,7 @@
               <div><span>模拟速度</span><strong id="job-performance">-</strong></div>
               <div><span>预计剩余</span><strong id="job-eta">-</strong></div>
             </div>
-            <div class="progress" id="job-progress" title="步骤进度">
+            <div class="progress" id="job-progress" role="progressbar" aria-label="任务进度" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" aria-valuetext="未选择任务">
               <div class="progress-fill" id="progress-fill"></div>
             </div>
             <p id="progress-observation" class="progress-observation" role="status" hidden></p>
@@ -1030,6 +1050,6 @@
       <details><summary>排错与本机使用记录</summary><p>诊断信息仅在本机生成，预览后可自行下载并提供给维护者。</p><div class="product-actions"><button id="preview-diagnostics" class="tool-button" type="button">预览环境诊断</button><button id="download-diagnostics" class="tool-button" type="button" disabled>下载诊断 JSON</button><button id="show-local-usage" class="tool-button" type="button">查看本机使用记录</button></div><pre id="diagnostic-preview" tabindex="0"></pre></details>
     </dialog>
     <dialog id="field-help-dialog" class="product-dialog" aria-labelledby="field-help-title"><div class="product-dialog-head"><h2 id="field-help-title">参数说明</h2><button type="button" data-close-dialog="field-help-dialog">关闭</button></div><p id="field-help-content"></p></dialog>
-    <script src="/static/js/main.js?v=621bb939e2b97a80" type="module"></script>
+    <script src="/static/js/main.js?v=ed99335f08f47fd8" type="module"></script>
   </body>
 </html>

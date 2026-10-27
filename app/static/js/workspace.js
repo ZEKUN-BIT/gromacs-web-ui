@@ -1,9 +1,10 @@
-import { els, state, FILE_FIELD_NAMES, api, toast, confirmDialog, showWorkspaceView, showDetailTab } from "./core.js?v=621bb939e2b97a80";
-import { refreshJobs, selectJob } from "./jobs.js?v=621bb939e2b97a80";
-import { product, loadProduct, bindLibrary, downloadJson } from "./library.js?v=621bb939e2b97a80";
+import { els, state, FILE_FIELD_NAMES, api, toast, confirmDialog, showWorkspaceView, showDetailTab } from "./core.js?v=ed99335f08f47fd8";
+import { refreshJobs, selectJob } from "./jobs.js?v=ed99335f08f47fd8";
+import { product, loadProduct, bindLibrary, downloadJson } from "./library.js?v=ed99335f08f47fd8";
 
 let diagnostics = null;
 let diagnosticsGeneration = 0;
+let workspacePrepared = false, productLoading = false;
 const families = { simulation: ["protein_md", "protein_ligand_md", "em_only"], analysis: ["analysis_rmsd", "postprocess", "analysis_suite"], tpr: ["run_tpr"], all: [] };
 const advanced = new Set(["solvent_template", "box_type", "solvent_group", "ignh", "clean_pdb", "pre_nvt", "maxwarn", "production_deffnm", "verbose", "ntmpi", "ntomp", "pin", "protein_group", "complex_group", "water_ions_group", "restraint_fc", "atom_type", "charge_method", "custom_index_script", "center_output", "fit_output", "first_frame_output", "stdin_overrides"]);
 
@@ -74,28 +75,9 @@ function addFieldHelp() {
 }
 
 export async function prepareWorkspace() {
-  try { await loadProduct(); }
-  catch (error) {
-    const message = error.status === 404
-      ? "当前服务仍在使用旧版本。新功能将在现有任务结束、重启服务后启用；任务监控与原有工作流可继续使用。"
-      : "新增功能暂时无法连接服务。任务监控与原有工作流可继续使用，请稍后刷新页面。";
-    const notice = document.createElement("p"); notice.className = "product-availability"; notice.id = "product-availability"; notice.setAttribute("role", "status"); notice.textContent = message;
-    document.querySelector(".workspace-bar").after(notice);
-    for (const id of ["open-library", "project-filter", "open-help", "start-example"]) {
-      const control = document.getElementById(id); control.disabled = true; control.title = message;
-    }
-    document.querySelector(".new-job-organization").hidden = true;
-    document.querySelector(".organization-panel").hidden = true;
-    document.querySelector("#template-error").textContent = message;
-  }
-  // Match fresh forms to backend defaults; saved drafts are restored afterwards.
-  for (const name of ["force_field", "water_model", "solvent_template", "box_type", "box_distance", "replicas", "verbose", "ignh", "clean_pdb", "pre_nvt", "release_restraints", "pin", "gpu"]) {
-    const field = els.jobForm.elements.namedItem(name);
-    const value = product.defaults[name];
-    if (!field || value == null) continue;
-    if (field.type === "checkbox") { field.checked = value; field.defaultChecked = value; }
-    else { field.value = String(value); if (field.tagName === "INPUT") field.defaultValue = String(value); }
-  }
+  if (productLoading) return;
+  productLoading = true;
+  if (!workspacePrepared) {
   els.jobForm.querySelectorAll("input[name],select[name],textarea[name]").forEach(field => {
     if (advanced.has(field.name)) field.closest("label")?.classList.add("advanced-field");
   });
@@ -107,6 +89,61 @@ export async function prepareWorkspace() {
   try { mode = localStorage.getItem("gromacs.form-mode") || mode; } catch { /* Optional storage. */ }
   setMode(mode); addFieldHelp();
   new MutationObserver(addFieldHelp).observe(els.ligandList, { childList: true, subtree: true });
+  workspacePrepared = true;
+  }
+  const initial = new Map([...els.jobForm.elements].map(field => [field, field.type === "checkbox" ? field.checked : field.value]));
+  try {
+    await loadProduct();
+    document.querySelector("#product-availability")?.remove();
+    for (const id of ["open-library", "project-filter", "open-help", "start-example"]) {
+      const control = document.getElementById(id); control.disabled = false; control.removeAttribute("title");
+    }
+    document.querySelector(".new-job-organization").hidden = false;
+    document.querySelector(".organization-panel").hidden = false;
+    document.querySelector("#template-error").textContent = "";
+  }
+  catch (error) {
+    const message = error.status === 404
+      ? "当前服务仍在使用旧版本。新功能将在现有任务结束、重启服务后启用；任务监控与原有工作流可继续使用。"
+      : "新增功能暂时无法连接服务。可重试连接，已填写参数和已选文件会保留。";
+    document.querySelector("#product-availability")?.remove();
+    const notice = document.createElement("p"); notice.className = "product-availability"; notice.id = "product-availability"; notice.setAttribute("role", "status"); notice.textContent = message;
+    const retry = document.createElement("button");
+    retry.type = "button"; retry.className = "tool-button"; retry.id = "retry-product-initialization"; retry.textContent = "重试连接";
+    retry.addEventListener("click", async () => {
+      retry.disabled = true;
+      await prepareWorkspace();
+      els.jobForm.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+    notice.append(retry);
+    document.querySelector(".workspace-bar").after(notice);
+    for (const id of ["open-library", "project-filter", "open-help", "start-example"]) {
+      const control = document.getElementById(id); control.disabled = true; control.title = message;
+    }
+    if (error.status === 404) {
+      document.querySelector(".new-job-organization").hidden = true;
+      document.querySelector(".organization-panel").hidden = true;
+    }
+    document.querySelector("#template-error").textContent = message;
+  }
+  finally { productLoading = false; }
+  // Apply late defaults only to untouched fields; restored drafts and edits win.
+  for (const name of ["force_field", "water_model", "solvent_template", "box_type", "box_distance", "replicas", "verbose", "ignh", "clean_pdb", "pre_nvt", "release_restraints", "pin", "gpu"]) {
+    const field = els.jobForm.elements.namedItem(name);
+    const value = product.defaults[name];
+    if (!field || value == null) continue;
+    const unchanged = !field.dataset.userEdited && initial.get(field) === (field.type === "checkbox" ? field.checked : field.value);
+    if (field.type === "checkbox") {
+      const current = field.checked;
+      field.defaultChecked = value;
+      field.checked = unchanged ? value : current;
+    } else {
+      const current = field.value;
+      if (field.tagName === "INPUT") field.defaultValue = String(value);
+      if (unchanged && field.tagName === "SELECT" && ![...field.options].some(option => option.value === String(value))) field.add(new Option(String(value), String(value)));
+      field.value = unchanged ? String(value) : current;
+    }
+  }
 }
 
 export function bindWorkspace() {

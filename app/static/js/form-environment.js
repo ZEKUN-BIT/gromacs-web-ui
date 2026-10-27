@@ -1,6 +1,6 @@
 // 环境诊断、力场水模型与硬件配置建议。
 
-import { $, els, state, escapeHtml, updateText, toast, api } from "./core.js?v=621bb939e2b97a80";
+import { $, els, state, escapeHtml, updateText, toast, api } from "./core.js?v=ed99335f08f47fd8";
 
 function setHealthCard(dotClass, title, detail) {
   const dot = els.healthCard.querySelector(".dot");
@@ -158,14 +158,19 @@ export function applyHardwareRecommendation() {
   return true;
 }
 
+let healthGeneration = 0;
+
 export async function refreshHealth() {
+  const generation = ++healthGeneration;
+  const settingsFields = [[els.gmxBin, "gmx_bin", "gmx"], [els.maxParallel, "max_parallel", 1], [document.querySelector("#analysis-parallel"), "analysis_parallel", 2]];
+  const initial = settingsFields.map(([field]) => field?.value);
   try {
     const payload = await api("/api/health");
+    if (generation !== healthGeneration) return;
     state.healthPayload = payload;
-    els.gmxBin.value = payload.settings.gmx_bin || "gmx";
-    if (els.maxParallel) els.maxParallel.value = String(payload.settings.max_parallel || 1);
-    const analysisParallel = document.querySelector("#analysis-parallel");
-    if (analysisParallel) analysisParallel.value = String(payload.settings.analysis_parallel || 2);
+    settingsFields.forEach(([field, key, fallback], index) => {
+      if (field && field.value === initial[index] && !field.dataset.userEdited) field.value = String(payload.settings[key] || fallback);
+    });
     applyRuntimeDefaults(payload.settings || {});
     updateText(els.runtimePath, payload.settings.runtime_root || "runtime");
     state.localForceFields = payload.local_force_fields || [];
@@ -202,6 +207,7 @@ export async function refreshHealth() {
     }
     renderReadiness();
   } catch (error) {
+    if (generation !== healthGeneration) return;
     setHealthCard("bad", "健康检查失败", error.message);
     throw error;
   }

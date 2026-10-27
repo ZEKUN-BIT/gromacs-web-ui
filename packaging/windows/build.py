@@ -31,13 +31,13 @@ HELP_NAMES = (
     "AI-AGENT",
 )
 EXAMPLE_SUFFIXES = {".html", ".css", ".json", ".xvg", ".png", ".md", ".mdp", ".txt"}
-FONT_SOURCES = ("app/static/fonts/ibm-plex-sans-var-latin.woff2", "app/static/fonts/jetbrains-mono-var-latin.woff2")
+FONT_SOURCES = ("app/static/fonts/inter-variable.woff2", "app/static/fonts/jetbrains-mono-var-latin.woff2")
 LEGAL_SOURCES = (
     "LICENSE",
     "THIRD_PARTY_NOTICES.md",
     "app/static/licenses/project-MIT.txt",
     "app/static/icons/lucide/LICENSE",
-    "app/static/fonts/IBM-Plex-OFL.txt",
+    "app/static/fonts/Inter-OFL.txt",
     "app/static/fonts/JetBrains-Mono-OFL.txt",
 )
 ENVIRONMENT_FILES = (

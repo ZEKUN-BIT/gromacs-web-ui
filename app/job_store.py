@@ -8,18 +8,46 @@ import shutil
 import sqlite3
 import stat
 import threading
-from contextlib import ExitStack, contextmanager
+from collections import OrderedDict
+from collections.abc import Iterator
+from contextlib import ExitStack, contextmanager, nullcontext
 from datetime import datetime
 from pathlib import Path
-from typing import Callable
+from typing import TYPE_CHECKING, Callable
 from uuid import uuid4
 
 from .files import ensure_under_root
 from .gromacs import Step, directory_slug, read_json, utc_now
 
+if TYPE_CHECKING:
+    from .operations import OperationContext
+
 JOB_STATES = {"preparing", "queued", "running", "completed", "failed", "cancelled", "interrupted"}
 
 MAX_LOG_FILE_BYTES = int(os.environ.get("GROMACS_WEB_MAX_LOG_BYTES", str(100 * 1024**2)))
+MAX_PAGE_SNAPSHOTS = 64
+SUMMARY_FIELDS = (
+    "id",
+    "name",
+    "status",
+    "created_at",
+    "updated_at",
+    "workflow",
+    "directory_name",
+    "current_step",
+    "step_index",
+    "step_count",
+    "exit_code",
+    "error",
+    "progress_percent",
+    "simulation_progress",
+    "performance_ns_per_day",
+    "benchmark_results",
+    "project",
+    "tags",
+    "pinned",
+    "is_example",
+)
 
 
 class JobStore:
@@ -31,6 +59,8 @@ class JobStore:
         self.jobs_root.mkdir(parents=True, exist_ok=True)
         self.db_path = runtime_root / "jobs.sqlite3"
         self._log_lock = threading.Lock()
+        self._snapshot_lock = threading.Lock()
+        self._page_snapshots: OrderedDict[tuple, tuple[int, str, str]] = OrderedDict()
         self._max_parallel = max(1, int(max_parallel))
         self._analysis_parallel = max(1, min(16, int(analysis_parallel)))
         self._initialize_database()
@@ -38,12 +68,17 @@ class JobStore:
         self._index_existing_research_reports()
         self._recover_maintenance_jobs()
 
-    def _connect(self) -> sqlite3.Connection:
+    @contextmanager
+    def _connect(self) -> Iterator[sqlite3.Connection]:
         connection = sqlite3.connect(self.db_path, timeout=30, isolation_level=None)
-        connection.row_factory = sqlite3.Row
-        connection.execute("PRAGMA foreign_keys = ON")
-        connection.execute("PRAGMA busy_timeout = 30000")
-        return connection
+        try:
+            connection.row_factory = sqlite3.Row
+            connection.execute("PRAGMA foreign_keys = ON")
+            connection.execute("PRAGMA busy_timeout = 30000")
+            with connection:
+                yield connection
+        finally:
+            connection.close()
 
     def _initialize_database(self) -> None:
         with self._connect() as connection:
@@ -63,6 +98,19 @@ class JobStore:
                     version INTEGER NOT NULL DEFAULT 0
                 );
                 CREATE INDEX IF NOT EXISTS jobs_status_created_idx ON jobs(status, created_at);
+                CREATE INDEX IF NOT EXISTS jobs_pinned_created_id_idx
+                    ON jobs(coalesce(json_extract(meta_json,'$.pinned'),0) DESC,created_at DESC,id DESC);
+                CREATE TABLE IF NOT EXISTS jobs_revision (
+                    singleton INTEGER PRIMARY KEY CHECK(singleton=1),
+                    revision INTEGER NOT NULL
+                );
+                INSERT OR IGNORE INTO jobs_revision VALUES(1,0);
+                CREATE TRIGGER IF NOT EXISTS jobs_revision_insert AFTER INSERT ON jobs
+                BEGIN UPDATE jobs_revision SET revision=revision+1 WHERE singleton=1; END;
+                CREATE TRIGGER IF NOT EXISTS jobs_revision_update AFTER UPDATE ON jobs
+                BEGIN UPDATE jobs_revision SET revision=revision+1 WHERE singleton=1; END;
+                CREATE TRIGGER IF NOT EXISTS jobs_revision_delete AFTER DELETE ON jobs
+                BEGIN UPDATE jobs_revision SET revision=revision+1 WHERE singleton=1; END;
                 CREATE TABLE IF NOT EXISTS store_migrations (
                     name TEXT PRIMARY KEY,
                     applied_at TEXT NOT NULL
@@ -246,6 +294,23 @@ class JobStore:
                 # visible for manual recovery rather than changing task state.
                 continue
 
+    def recover_preparing_jobs(self) -> list[str]:
+        """Recover abandoned staging only after acquiring the exclusive Web lock."""
+        recovered = []
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            for row in connection.execute("SELECT * FROM jobs WHERE status='preparing'").fetchall():
+                meta = self._decode(row)
+                meta.update(
+                    status="failed",
+                    error="Input preparation was interrupted by a server restart. Resubmit the task to prepare its inputs again.",
+                    preparation_interrupted_at=utc_now(),
+                )
+                meta.pop("worker_id", None)
+                self._persist(connection, meta)
+                recovered.append(meta["id"])
+        return recovered
+
     def meta_path(self, job_id: str) -> Path:
         return self.job_dir(job_id) / "metadata.json"
 
@@ -338,32 +403,43 @@ class JobStore:
 
     @staticmethod
     def summarize(meta: dict) -> dict:
-        fields = (
-            "id",
-            "name",
-            "status",
-            "created_at",
-            "updated_at",
-            "workflow",
-            "directory_name",
-            "current_step",
-            "step_index",
-            "step_count",
-            "exit_code",
-            "error",
-            "progress_percent",
-            "simulation_progress",
-            "performance_ns_per_day",
-            "benchmark_results",
-            "project",
-            "tags",
-            "pinned",
-            "is_example",
-        )
-        return {field: meta.get(field) for field in fields}
+        return {field: meta.get(field) for field in SUMMARY_FIELDS}
 
     def list_page(
         self, limit: int = 50, offset: int = 0, search: str = "", *, search_aliases: tuple[str, ...] = (), project: str = ""
+    ) -> dict:
+        with self._connect() as connection:
+            connection.execute("BEGIN")
+            return self._list_page(connection, limit, offset, search, search_aliases=search_aliases, project=project)
+
+    def list_page_snapshot(
+        self, limit: int = 50, offset: int = 0, search: str = "", *, search_aliases: tuple[str, ...] = (), project: str = ""
+    ) -> tuple[str, str]:
+        """Share immutable SSE payloads until any process changes the jobs table."""
+        limit, offset, search = max(1, min(int(limit), 200)), max(0, int(offset)), search.strip()
+        aliases = tuple(sorted(set(search_aliases))) if search else ()
+        key = (limit, offset, search, aliases, project)
+        with self._snapshot_lock, self._connect() as connection:
+            # Pin the revision and page to the same SQLite read snapshot.
+            connection.execute("BEGIN")
+            revision = connection.execute("SELECT revision FROM jobs_revision WHERE singleton=1").fetchone()[0]
+            cached = self._page_snapshots.get(key)
+            if cached is not None and cached[0] == revision:
+                self._page_snapshots.move_to_end(key)
+                return cached[1], cached[2]
+            page = self._list_page(connection, limit, offset, search, search_aliases=aliases, project=project)
+            if search:
+                page["search"] = search
+            payload = json.dumps(page, ensure_ascii=False, sort_keys=True)
+            signature = hashlib.sha256(payload.encode("utf-8")).hexdigest()
+            self._page_snapshots[key] = (revision, payload, signature)
+            self._page_snapshots.move_to_end(key)
+            while len(self._page_snapshots) > MAX_PAGE_SNAPSHOTS:
+                self._page_snapshots.popitem(last=False)
+            return payload, signature
+
+    def _list_page(
+        self, connection: sqlite3.Connection, limit: int, offset: int, search: str, *, search_aliases: tuple[str, ...], project: str
     ) -> dict:
         limit = max(1, min(int(limit), 200))
         offset = max(0, int(offset))
@@ -391,16 +467,28 @@ class JobStore:
             conditions.append("json_extract(meta_json,'$.project') = ?")
             parameters.append(project)
         where = " WHERE " + " AND ".join(conditions) if conditions else ""
-        with self._connect() as connection:
-            total = int(connection.execute("SELECT count(*) FROM jobs" + where, parameters).fetchone()[0])
-            rows = connection.execute(
-                "SELECT * FROM jobs"
-                + where
-                + " ORDER BY coalesce(json_extract(meta_json,'$.pinned'),0) DESC,created_at DESC LIMIT ? OFFSET ?",
-                [*parameters, limit, offset],
-            ).fetchall()
+        # Project only public summary fields; commands and large input metadata
+        # never cross into Python for each history/SSE request.
+        fields = []
+        for field in SUMMARY_FIELDS:
+            value = field if field in {"id", "status", "created_at", "updated_at"} else f"json_extract(meta_json,'$.{field}')"
+            if field in {"pinned", "is_example"}:
+                value = (
+                    f"CASE json_type(meta_json,'$.{field}') WHEN 'true' THEN json('true') WHEN 'false' THEN json('false') ELSE {value} END"
+                )
+            fields.extend((f"'{field}'", value))
+        projection = "json_object(" + ",".join(fields) + ") AS summary_json"
+        total = int(connection.execute("SELECT count(*) FROM jobs" + where, parameters).fetchone()[0])
+        rows = connection.execute(
+            "SELECT "
+            + projection
+            + " FROM jobs"
+            + where
+            + " ORDER BY coalesce(json_extract(meta_json,'$.pinned'),0) DESC,created_at DESC,id DESC LIMIT ? OFFSET ?",
+            [*parameters, limit, offset],
+        ).fetchall()
         return {
-            "jobs": [self.summarize(self._decode(row)) for row in rows],
+            "jobs": [json.loads(row["summary_json"]) for row in rows],
             "limit": limit,
             "offset": offset,
             "total": total,
@@ -874,9 +962,19 @@ class JobStore:
                 connection.commit()
             return meta
 
-    def clone(self, job_id: str, name: str | None = None) -> dict:
+    def clone(self, job_id: str, name: str | None = None, *, operation: OperationContext | None = None) -> dict:
         from .execution import live_process_identities
+        from .files import copy_file_cancellable
         from .reproducibility import write_experiment_manifest
+
+        if operation is not None:
+            operation.checkpoint()
+
+        def copy_input(source_file, target_file):
+            if operation is None:
+                return shutil.copy2(source_file, target_file)
+            copy_file_cancellable(Path(source_file), Path(target_file), operation)
+            return str(target_file)
 
         with self.job_files_lock(job_id):
             source = self.get(job_id)
@@ -922,14 +1020,16 @@ class JobStore:
                 with self.job_files_lock(cloned["id"]):
                     if self.get(cloned["id"])["status"] != "preparing":
                         raise RuntimeError("Clone preparation was cancelled before inputs were ready.")
+                    if operation is not None:
+                        operation.report({"phase": "copy", "job_id": cloned["id"]})
                     for source_file in input_files:
-                        shutil.copy2(source_file, target_dir / source_file.name)
+                        copy_input(source_file, target_dir / source_file.name)
                     for source_file in source_dir.glob("*.mdp"):
                         if source_file.is_file():
-                            shutil.copy2(ensure_under_root(source_file, source_dir), target_dir / source_file.name)
+                            copy_input(ensure_under_root(source_file, source_dir), target_dir / source_file.name)
                     for force_field in source_dir.glob("*.ff"):
                         if force_field.is_dir() and not force_field.is_symlink():
-                            shutil.copytree(force_field, target_dir / force_field.name)
+                            shutil.copytree(force_field, target_dir / force_field.name, copy_function=copy_input)
                     self.update(
                         cloned["id"],
                         cloned_from=job_id,
@@ -941,11 +1041,14 @@ class JobStore:
                         mdp_overrides=source.get("mdp_overrides") or [],
                         local_force_fields=source.get("local_force_fields") or [],
                     )
+                    if operation is not None:
+                        operation.checkpoint()
                     manifest = write_experiment_manifest(self.get(cloned["id"]))
                     self.update(cloned["id"], experiment_manifest="experiment-manifest.json", input_hashes=manifest["input_files"])
                     if self.get(cloned["id"])["status"] != "preparing":
                         raise RuntimeError("Clone preparation was cancelled before inputs were ready.")
-                    self.start(cloned["id"], steps, dry_run=bool(source.get("dry_run")))
+                    with operation.commit() if operation is not None else nullcontext():
+                        self.start(cloned["id"], steps, dry_run=bool(source.get("dry_run")))
                     return self.get(cloned["id"])
             except Exception as exc:
                 try:

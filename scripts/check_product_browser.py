@@ -20,7 +20,7 @@ APP = ROOT / "app"
 ORIGIN = "http://gromacs-product.test"
 
 
-def check_viewport(browser, width: int, height: int, scheme: str, artifact_dir: Path | None, *, legacy: bool = False, first_use: bool = False) -> None:
+def check_viewport(browser, width: int, height: int, scheme: str, artifact_dir: Path | None, *, legacy: bool = False, first_use: bool = False, inspect=None, configure=None, context_options=None) -> None:
     jobs = [{
         "id": f"product-{index}", "name": f"产品流程测试 {index}", "workflow": "run_tpr",
         "status": "completed", "created_at": "2026-10-19T00:00:00Z", "updated_at": "2026-10-19T01:00:00Z",
@@ -32,6 +32,7 @@ def check_viewport(browser, width: int, height: int, scheme: str, artifact_dir: 
     templates: list[dict] = []
     errors: list[str] = []
     pending: dict = {}
+    preview_payloads: list[dict] = []
     control = {"hold_product": False, "hold_patch": False, "hold_help": False, "hold_diagnostics": False, "hold_summary": False, "fail_files": False}
 
     def catalog():
@@ -83,8 +84,12 @@ def check_viewport(browser, width: int, height: int, scheme: str, artifact_dir: 
             templates[:] = [item for item in templates if item["id"] != template_id]
             payload = {"deleted": template_id}
         elif path == "/api/preview":
-            if legacy:
-                assert not ({"project", "tags", "notes"} & route.request.post_data_json.keys()), "Older services must receive their original parameter contract"
+            preview_payloads.append(route.request.post_data_json)
+            if legacy and {"project", "tags", "notes"} & preview_payloads[-1].keys():
+                # The first preview may precede capability discovery. Emulate
+                # the old API's validation error, then require a compatible retry.
+                route.fulfill(status=422, content_type="application/json", body='{"detail":"Extra inputs are not permitted"}')
+                return
             payload = {"commands": [], "mdp_overrides": []}
         elif path == "/api/protocol-preview":
             payload = {"stages": []}
@@ -150,9 +155,11 @@ def check_viewport(browser, width: int, height: int, scheme: str, artifact_dir: 
         assert target.is_file(), f"Unknown asset: {path}"
         route.fulfill(content_type=mimetypes.guess_type(target.name)[0] or "application/octet-stream", body=target.read_bytes())
 
-    context = browser.new_context(viewport={"width": width, "height": height}, color_scheme=scheme)
+    context = browser.new_context(viewport={"width": width, "height": height}, color_scheme=scheme, **(context_options or {}))
     context.route("**/*", fixture)
     page = context.new_page()
+    if configure:
+        configure(page)
     page.on("pageerror", lambda error: errors.append(str(error)))
     page.add_init_script("""
         window.testStreams = [];
@@ -176,6 +183,10 @@ def check_viewport(browser, width: int, height: int, scheme: str, artifact_dir: 
 
     try:
         page.goto(ORIGIN, wait_until="networkidle")
+        if inspect:
+            inspect(page)
+            assert not errors, errors
+            return
         if first_use:
             expect(page.locator(".job-item")).to_have_count(0)
             assert page.evaluate("!new URL(window.testStreams.at(-1).url, location.href).searchParams.has('job_id')")
@@ -196,6 +207,8 @@ def check_viewport(browser, width: int, height: int, scheme: str, artifact_dir: 
         expect(page.locator(".job-item")).to_have_count(2)
         if legacy:
             expect(page.locator("#product-availability")).to_contain_text("现有任务结束")
+            expect(page.locator("#preview-count")).to_have_text("0 步")
+            assert preview_payloads and not ({"project", "tags", "notes"} & preview_payloads[-1].keys()), "Confirmed legacy services must receive a compatible preview retry"
             for selector in ("#open-library", "#project-filter", "#open-help", "#start-example"):
                 expect(page.locator(selector)).to_be_disabled()
             expect(page.locator("#download-result-bundle")).not_to_be_visible()

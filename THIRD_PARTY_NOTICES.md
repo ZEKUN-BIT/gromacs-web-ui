@@ -8,12 +8,17 @@ GROMACS Console is an independent project and is not endorsed by these projects.
 
 | Component | License | Included license |
 | --- | --- | --- |
-| IBM Plex Sans | SIL Open Font License 1.1 | `app/static/fonts/IBM-Plex-OFL.txt` |
+| Inter | SIL Open Font License 1.1 | `app/static/fonts/Inter-OFL.txt` |
 | JetBrains Mono | SIL Open Font License 1.1 | `app/static/fonts/JetBrains-Mono-OFL.txt` |
 | Lucide icons | ISC; original Feather icons MIT | `app/static/icons/lucide/LICENSE` |
 
 Font licenses permit redistribution subject to their conditions, including
 retention of notices and any reserved font names. Fonts are not relicensed under MIT.
+
+The bundled `app/static/fonts/inter-variable.woff2` comes from the
+[official Inter variable font](https://rsms.me/inter/font-files/InterVariable.woff2).
+Its license is supplied by the [rsms/inter repository](https://github.com/rsms/inter/blob/master/LICENSE.txt)
+and was retrieved through its [jsDelivr mirror](https://cdn.jsdelivr.net/gh/rsms/inter@master/LICENSE.txt).
 
 ## Components downloaded or supplied by the target system
 
@@ -41,3 +46,22 @@ hashes are fixed in `gpu_setup.py`. When redistributing third-party binaries,
 retain their notices and comply with any source-offer, attribution and
 redistribution requirements that apply to those specific components. The MIT
 license for this application's code does not waive those requirements.
+
+## Assets used only by browser tests
+
+The repository includes the following test fixtures under `tests/browser_assets`.
+They are not included in the application wheel or Windows application payload.
+Their licenses still apply when redistributing the test fixtures themselves.
+
+| Component | License | Included license |
+| --- | --- | --- |
+| axe-core 4.10.3, copyright Deque Systems, Inc. | Mozilla Public License 2.0 | `tests/browser_assets/axe-LICENSE.txt` |
+| Modified Simplified Chinese subsets of Noto Sans CJK 2.004 | SIL Open Font License 1.1 | `tests/browser_assets/Noto-CJK-LICENSE.txt` |
+
+The unmodified axe browser distribution retains its upstream notice; its
+corresponding source is available in the
+[axe-core 4.10.3 release](https://github.com/dequelabs/axe-core/tree/v4.10.3).
+The Noto subsets are renamed to the `Gromacs Snapshot CJK` family and injected
+only by the visual test harness. The application continues to use system Chinese
+fonts. Source details, subset modifications and checksums are recorded in
+[`tests/browser_assets/README.md`](tests/browser_assets/README.md).

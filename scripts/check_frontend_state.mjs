@@ -257,11 +257,16 @@ console.log("Organization drafts preserve all fields across task switches/reload
 const artifactStart = source.indexOf("let artifactRequestGeneration = 0;");
 const artifactEnd = source.indexOf("let logHighlightTimer", artifactStart);
 assert(artifactStart >= 0 && artifactEnd > artifactStart);
+let artifactNow = 0;
 const artifactRequests = [];
 const artifactRenders = [];
 const artifacts = {
-  state: { activeJobId: "a", detailTab: "files", artifactKey: "", filesSignature: "", plotFilters: { replica: "", metric: "", begin: "", end: "" } },
+  AbortController,
+  fileViews: new Map(), filePage: null, renderFilePager() {},
+  state: { workspaceView: "detail", activeJobId: "a", detailTab: "files", artifactKey: "", filesSignature: "", plotFilters: { replica: "", metric: "", begin: "", end: "" } },
   URLSearchParams,
+  ACTIVE_STATES: new Set(["preparing", "queued", "running", "interrupted"]),
+  Date: { now: () => artifactNow },
   els: { outputFiles: new TestElement(), fileCount: new TestElement(), qualityReports: new TestElement(), plotFilterError: new TestElement(), analysisPlots: new TestElement() },
   document: { createElement() { return new TestElement(); } },
   api(url) { const request = deferred(); artifactRequests.push({ ...request, url }); return request.promise; },
@@ -320,3 +325,125 @@ await failedQuality;
 assert.match(artifacts.els.qualityReports.children[0].textContent, /加载失败/);
 assert.equal(artifacts.state.artifactKey, "");
 console.log("File list failures show retry controls and recover; stale task/tab responses cannot replace newer results or invalidate their cache.");
+
+// An active step may run for hours without changing status or step_index.
+// Visible artifacts refresh on a deadline, with no duplicate in-flight reads;
+// completed tasks and hidden panels keep their cache.
+artifacts.state.detailTab = "files";
+artifacts.state.artifactKey = "";
+const runningJob = { id: "a", status: "running", step_index: 3 };
+let activeFiles = artifacts.refreshJobArtifacts(runningJob);
+let count = artifactRequests.length;
+artifactNow += 6000;
+await artifacts.refreshJobArtifacts(runningJob);
+assert.equal(artifactRequests.length, count, "pending artifact reads must not multiply");
+artifactRequests.at(-1).resolve({ files: [{ path: "md.xtc", size: 100 }] });
+await activeFiles;
+activeFiles = artifacts.refreshJobArtifacts(runningJob);
+assert.equal(artifactRequests.length, count + 1);
+artifactRequests.at(-1).resolve({ files: [{ path: "md.xtc", size: 200 }, { path: "md.cpt", size: 40 }] });
+await activeFiles;
+assert.equal(artifacts.els.outputFiles.textContent, "md.xtc,md.cpt");
+count = artifactRequests.length;
+await artifacts.refreshJobArtifacts(runningJob);
+assert.equal(artifactRequests.length, count);
+artifacts.document.hidden = true;
+artifactNow += 6000;
+await artifacts.refreshJobArtifacts(runningJob);
+assert.equal(artifactRequests.length, count);
+artifacts.document.hidden = false;
+artifacts.state.workspaceView = "compose";
+await artifacts.refreshJobArtifacts(runningJob);
+assert.equal(artifactRequests.length, count);
+artifacts.state.workspaceView = "detail";
+const completed = artifacts.refreshJobArtifacts({ ...runningJob, status: "completed" });
+artifactRequests.at(-1).resolve({ files: [{ path: "final.xtc" }] });
+await completed;
+count = artifactRequests.length;
+artifactNow += 60000;
+await artifacts.refreshJobArtifacts({ ...runningJob, status: "completed" });
+assert.equal(artifactRequests.length, count);
+const plotRenders = [];
+artifacts.renderPlots = (jobId, plots) => plotRenders.push(plots);
+artifacts.state.detailTab = "plots";
+for (const sampleCount of [10, 20]) {
+  artifactNow += 6000;
+  const pending = artifacts.refreshJobArtifacts(runningJob);
+  artifactRequests.at(-2).resolve({ files: [{ path: "energy.xvg", size: sampleCount * 20 }] });
+  artifactRequests.at(-1).resolve({ plots: [{ path: "energy.xvg", sample_count: sampleCount }] });
+  await pending;
+}
+assert.equal(plotRenders.at(-1)[0].sample_count, 20);
+console.log("Visible running artifacts and plots refresh within one step; pending reads, hidden views and terminal caches stay bounded.");
+
+const logStart = source.indexOf("let logHighlightTimer");
+const logEnd = source.indexOf("function formatSize", logStart);
+const logHarness = {
+  state: { activeJobId: "log-job", logOffset: 0, logText: "", logSignature: "", logTailOmittedBytes: 0, logTrimmedChars: 0 },
+  MAX_LOG_CHARS: 10,
+  els: { jobLog: { textContent: "", scrollTop: 0, clientHeight: 20, scrollHeight: 20 }, logNotice: { hidden: true } },
+  window: { setTimeout() {}, clearTimeout() {} },
+  updateText(element, text) { element.textContent = text; },
+  escapeHtml(text) { return text; },
+};
+vm.createContext(logHarness);
+vm.runInContext(source.slice(logStart, logEnd).replaceAll("export ", ""), logHarness);
+logHarness.appendLogChunk({ start: 2048, offset: 2053, text: "hello" });
+assert.equal(logHarness.state.logTailOmittedBytes, 2048);
+assert.equal(logHarness.els.logNotice.hidden, false);
+assert.match(logHarness.els.logNotice.textContent, /打开时省略 2.0 KB/);
+logHarness.appendLogChunk({ start: 2053, offset: 2063, text: "0123456789" });
+assert.equal(logHarness.state.logTrimmedChars, 5);
+assert.equal(logHarness.els.jobLog.textContent, "0123456789");
+assert.match(logHarness.els.logNotice.textContent, /后续裁剪 5 个字符/);
+logHarness.appendLogChunk({ start: 2063, offset: 2066, text: "abc" });
+assert.equal(logHarness.state.logTrimmedChars, 8);
+logHarness.appendLogChunk({ start: 2053, offset: 2063, text: "old duplicate" });
+assert.equal(logHarness.state.logTrimmedChars, 8);
+logHarness.appendLogChunk({ reset: true, start: 0, offset: 0, text: "" });
+assert.equal(logHarness.state.logOffset, 0);
+assert.equal(logHarness.state.logTailOmittedBytes, 0);
+assert.equal(logHarness.state.logTrimmedChars, 0);
+assert.equal(logHarness.els.logNotice.hidden, true);
+console.log("Tail omissions and cumulative clipping remain visible, duplicate chunks are ignored, and log rotation resets all counters.");
+
+// Timeouts cover response bodies as well as headers, and remain opt-in for writes.
+const apiStart = coreSource.indexOf("export async function api(");
+const apiEnd = coreSource.indexOf("export function formatApiError", apiStart);
+const timers = new Map();
+let timerId = 0;
+const apiRequests = [];
+const apiHarness = {
+  AbortController,
+  window: { setTimeout(callback) { timers.set(++timerId, callback); return timerId; }, clearTimeout(id) { timers.delete(id); } },
+  fetch(url, options) {
+    const pending = deferred();
+    const abort = () => pending.reject(Object.assign(new Error("Aborted"), { name: "AbortError" }));
+    if (options.signal?.aborted) abort();
+    else options.signal?.addEventListener("abort", abort, { once: true });
+    apiRequests.push({ url, options, ...pending });
+    return pending.promise;
+  },
+  formatApiError: value => value,
+};
+vm.createContext(apiHarness);
+vm.runInContext(coreSource.slice(apiStart, apiEnd).replaceAll("export ", ""), apiHarness);
+const timedRead = apiHarness.api("/api/health");
+assert.equal(timers.size, 1);
+[...timers.values()][0]();
+await assert.rejects(timedRead, error => error.name === "TimeoutError" && /请求超时/.test(error.message));
+assert.equal(timers.size, 0);
+const cancelled = new AbortController();
+const cancelRead = apiHarness.api("/api/jobs", { signal: cancelled.signal });
+cancelled.abort();
+await assert.rejects(cancelRead, error => error.name === "AbortError");
+assert.equal(timers.size, 0);
+const pendingWrite = apiHarness.api("/api/jobs/job/retry", { method: "POST" });
+assert.equal(timers.size, 0, "a pending mutation must not acquire an implicit timeout");
+apiRequests.at(-1).resolve({ ok: true, headers: { get: () => "application/json" }, json: async () => ({ saved: true }) });
+assert.equal((await pendingWrite).saved, true);
+const preview = apiHarness.api("/api/preview", { method: "POST", timeoutMs: 30000 });
+[...timers.values()][0]();
+await assert.rejects(preview, error => error.name === "TimeoutError");
+assert.equal(timers.size, 0);
+console.log("Read requests and explicit previews time out cleanly; external cancellation propagates and mutations retain their full duration.");

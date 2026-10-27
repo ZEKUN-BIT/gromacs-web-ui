@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import os
 import re
 import shlex
@@ -11,20 +12,25 @@ import sqlite3
 import subprocess
 import threading
 import time
+from contextlib import ExitStack
 from pathlib import Path
 
+from . import reproducibility
 from .files import ensure_under_root
 from .gromacs import Step, execute_internal_step, utc_now
 from .job_store import JobStore
+from .reproducibility import write_execution_manifest
 
 MDRUN_STEP_RE = re.compile(r"\bstep\s+(\d+)(?:.*?\btime\s+([0-9.eE+\-]+))?", re.IGNORECASE)
 MDRUN_PERFORMANCE_RE = re.compile(r"\bPerformance:\s*([0-9.eE+\-]+)", re.IGNORECASE)
+GROMACS_SEED_RE = re.compile(r"\b(?:seed|seeds)\b.*?[-+]?\d+", re.IGNORECASE)
 PROGRESS_UPDATE_INTERVAL_SECONDS = 1.0
 
 MIN_FREE_DISK_BYTES = int(os.environ.get("GROMACS_WEB_MIN_FREE_DISK_BYTES", str(2 * 1024**3)))
 TERMINATION_GRACE_SECONDS = 5.0
 DISK_CHECK_INTERVAL_SECONDS = 5.0
 DISK_STOP_GRACE_SECONDS = 120.0
+LOGGER = logging.getLogger(__name__)
 
 
 def command_fingerprint(args: list[str]) -> str:
@@ -190,6 +196,7 @@ class WorkerEngine:
     def __init__(self, store: JobStore, worker_id: str):
         self.store = store
         self.worker_id = worker_id
+        self._software = reproducibility.execution_software()
         self._progress_samples: dict[tuple[str, int], tuple[float, int]] = {}
         self._pending_recovery = threading.local()
         self._launch_lock = threading.Lock()
@@ -221,6 +228,55 @@ class WorkerEngine:
     @staticmethod
     def _is_mdrun_step(step: dict | None) -> bool:
         return bool(step) and "mdrun" in [str(arg) for arg in (step or {}).get("args") or []]
+
+    def _finalize_job(self, job_id: str, **updates: object) -> None:
+        """Publish terminal state and protocol capture under the deletion/export lock."""
+        with ExitStack() as stack:
+            try:
+                stack.enter_context(self.store.job_files_lock(job_id))
+            except (OSError, RuntimeError) as error:
+                # A failed snapshot must never change a successful simulation to failed.
+                try:
+                    self.store.update(job_id, **updates, manifest_error=f"Execution manifest could not acquire the task file lock: {error}")
+                except FileNotFoundError:
+                    # Another owner may have deleted an already stopped job
+                    # while its file lock was unavailable. Never recreate it.
+                    return
+                return
+            current = self.store.get(job_id)
+            runs = list(current.get("step_runs") or [])
+            for run in runs:
+                if run.get("status") == "running":
+                    run.update(status=updates.get("status", current["status"]), ended_at=utc_now())
+            meta = self.store.update(job_id, step_runs=runs, **updates)
+            if meta.get("deletion_pending") or meta.get("maintenance_pending") or meta.get("desired_action"):
+                return
+            try:
+                if live_process_identities(meta, self.store.job_dir(job_id)):
+                    raise RuntimeError("Execution manifest deferred because a verified computation process is still active.")
+                manifest = write_execution_manifest(meta, software=self._software)
+                self.store.update(
+                    job_id,
+                    execution_manifest="execution-manifest.json",
+                    manifest_generated_at=manifest["generated_at"],
+                    manifest_error=None,
+                    storage_revision=int(meta.get("storage_revision") or 0) + 1,
+                )
+            except Exception as error:
+                message = f"Execution manifest capture failed: {error}"
+                try:
+                    self.store.update(job_id, manifest_error=message)
+                except (OSError, sqlite3.Error):
+                    # Preserve the committed simulation result even if storage
+                    # also prevents recording its manifest diagnostic.
+                    LOGGER.exception("%s: %s", job_id, message)
+
+    @staticmethod
+    def _record_seed_message(step_run: dict, line: str) -> None:
+        if GROMACS_SEED_RE.search(line):
+            messages = step_run.setdefault("seed_messages", [])
+            if len(messages) < 32:
+                messages.append(line.strip()[:1000])
 
     def _terminate_leftover(self, meta: dict) -> None:
         """Stop only registered processes/groups whose complete identity still matches."""
@@ -281,9 +337,9 @@ class WorkerEngine:
             self._terminate_leftover(self.store.get(meta["id"]))
         except Exception as error:
             status = meta["status"] if meta["status"] in {"completed", "failed", "cancelled"} else "interrupted"
-            self.store.update(meta["id"], status=status, desired_action=None, worker_id=None, error=str(error))
+            self._finalize_job(meta["id"], status=status, desired_action=None, worker_id=None, error=str(error))
             return
-        self.store.update(
+        self._finalize_job(
             meta["id"],
             status="completed" if meta["status"] == "completed" else "cancelled",
             desired_action=None,
@@ -325,7 +381,7 @@ class WorkerEngine:
                         error="Worker restarted; verified process identity and queued re-adoption.",
                     )
                 else:
-                    self.store.update(
+                    self._finalize_job(
                         meta["id"],
                         status="interrupted",
                         desired_action=None,
@@ -501,7 +557,7 @@ class WorkerEngine:
             candidate = ensure_under_root(self.store.job_dir(job_id) / args[args.index("-cpi") + 1], self.store.job_dir(job_id))
             if candidate.is_file() and candidate.stat().st_size:
                 checkpoint = candidate.name
-        self.store.update(
+        self._finalize_job(
             job_id,
             status="interrupted",
             desired_action=None,
@@ -663,7 +719,14 @@ class WorkerEngine:
         step_started_at = utc_now()
         step_started_monotonic = time.monotonic()
         step_runs = list(self.store.get(job_id).get("step_runs") or [])
-        step_run = {"index": index, "title": step.title, "started_at": step_started_at, "status": "running"}
+        step_run = {
+            "index": index,
+            "title": step.title,
+            "args": step.args,
+            "operation": step.operation,
+            "started_at": step_started_at,
+            "status": "running",
+        }
         step_runs.append(step_run)
         self.store.update(
             job_id,
@@ -708,6 +771,7 @@ class WorkerEngine:
             with proc.stdout:
                 for line in proc.stdout:
                     self.store.append_log(job_id, line)
+                    self._record_seed_message(step_run, line)
                     self._record_progress(job_id, line, index, step_count, total_steps, dt_ps)
             exit_code = proc.wait()
         except BaseException:
@@ -734,15 +798,15 @@ class WorkerEngine:
             exit_code=exit_code,
             status="completed" if exit_code == 0 else "failed",
         )
+        if disk_state.get("reason"):
+            step_run["status"] = "interrupted"
         self.store.update(job_id, step_runs=step_runs)
         if self._finish_disk_stop(job_id, disk_state):
-            step_run["status"] = "interrupted"
-            self.store.update(job_id, step_runs=step_runs)
             return False
         if self._cancel_requested(job_id):
             step_run["status"] = "cancelled"
             self.store.update(job_id, step_runs=step_runs)
-            self.store.update(
+            self._finalize_job(
                 job_id,
                 status="cancelled",
                 desired_action=None,
@@ -753,7 +817,7 @@ class WorkerEngine:
             )
             return False
         if exit_code != 0:
-            self.store.update(
+            self._finalize_job(
                 job_id,
                 status="failed",
                 desired_action=None,
@@ -770,7 +834,9 @@ class WorkerEngine:
         batch_started_monotonic = time.monotonic()
         step_runs = list(self.store.get(job_id).get("step_runs") or [])
         for offset, step in enumerate(steps):
-            step_runs.append({"index": start_index + offset, "title": step.title, "started_at": started_at, "status": "running"})
+            step_runs.append(
+                {"index": start_index + offset, "title": step.title, "args": step.args, "started_at": started_at, "status": "running"}
+            )
         self.store.update(
             job_id,
             current_step=" + ".join(step.title for step in steps),
@@ -806,6 +872,7 @@ class WorkerEngine:
                 with proc.stdout:
                     for line in proc.stdout:
                         self.store.append_log(job_id, line)
+                        self._record_seed_message(step_runs[len(step_runs) - len(steps) + offset], line)
                 exit_code = proc.wait()
             except Exception as error:
                 results[offset] = {"error": str(error)}
@@ -912,17 +979,17 @@ class WorkerEngine:
             else:
                 failed_title = failed_title or step.title
                 run.update(status="failed", ended_at=utc_now(), duration_seconds=duration, exit_code=info.get("exit_code"))
-        self.store.update(job_id, step_runs=step_runs)
-        if self._finish_disk_stop(job_id, disk_state):
+        if disk_state.get("reason"):
             for run in step_runs[-len(steps) :]:
                 run["status"] = "interrupted"
-            self.store.update(job_id, step_runs=step_runs)
+        self.store.update(job_id, step_runs=step_runs)
+        if self._finish_disk_stop(job_id, disk_state):
             return False
         if cancelled:
-            self.store.update(job_id, status="cancelled", desired_action=None, worker_id=None, current_step=None, cancelled_at=utc_now())
+            self._finalize_job(job_id, status="cancelled", desired_action=None, worker_id=None, current_step=None, cancelled_at=utc_now())
             return False
         if failed_title:
-            self.store.update(job_id, status="failed", desired_action=None, worker_id=None, exit_code=1, error=f"{failed_title} failed")
+            self._finalize_job(job_id, status="failed", desired_action=None, worker_id=None, exit_code=1, error=f"{failed_title} failed")
             return False
         return True
 
@@ -939,7 +1006,7 @@ class WorkerEngine:
             reservation = meta.get("resource_reservation") or self.store._resource_reservation(meta)
             for batch in self._batch_steps(flat, parallel_limit=int(reservation["analysis_parallel"])):
                 if self._cancel_requested(job_id):
-                    self.store.update(
+                    self._finalize_job(
                         job_id, status="cancelled", desired_action=None, worker_id=None, current_step=None, cancelled_at=utc_now()
                     )
                     return
@@ -960,7 +1027,7 @@ class WorkerEngine:
                 if best.get("ns_per_day") is not None:
                     completion_updates["performance_ns_per_day"] = float(best["ns_per_day"])
             self.store.append_log(job_id, "\n[worker] completed\n")
-            self.store.update(
+            self._finalize_job(
                 job_id,
                 status="completed",
                 desired_action=None,
@@ -977,7 +1044,7 @@ class WorkerEngine:
                 self._terminate_leftover(self.store.get(job_id))
             except RuntimeError as cleanup_error:
                 message += f"; process cleanup needs attention: {cleanup_error}"
-            self.store.update(job_id, status="failed", desired_action=None, worker_id=None, error=message)
+            self._finalize_job(job_id, status="failed", desired_action=None, worker_id=None, error=message)
             self.store.append_log(job_id, f"\n[worker] error: {exc}\n")
 
     def _adopt(self, meta: dict) -> None:
@@ -995,7 +1062,7 @@ class WorkerEngine:
             self._run_job(current, self.steps_from_commands(commands), step_index)
             return
         if not identity_matches(current, workdir):
-            self.store.update(
+            self._finalize_job(
                 job_id,
                 status="interrupted",
                 desired_action=None,
@@ -1022,7 +1089,7 @@ class WorkerEngine:
         gromacs_log = ensure_under_root(workdir / f"{deffnm}.log", workdir) if deffnm else None
         log_text = gromacs_log.read_text(encoding="utf-8", errors="replace") if gromacs_log and gromacs_log.is_file() else ""
         if "Finished mdrun" not in log_text:
-            self.store.update(
+            self._finalize_job(
                 job_id,
                 status="interrupted",
                 desired_action=None,
@@ -1033,8 +1100,13 @@ class WorkerEngine:
             return
         commands = list(current.get("commands") or [])
         completed_index = int(current.get("step_index") or 0)
+        runs = list(current.get("step_runs") or [])
+        for run in runs:
+            if run.get("status") == "running":
+                run.update(status="completed", ended_at=utc_now(), completion_evidence="adopted GROMACS log: Finished mdrun")
+        self.store.update(job_id, step_runs=runs)
         remaining = self.steps_from_commands(commands[self.store.current_command_index(current) + 1 :])
         if remaining:
             self._run_job(current, remaining, completed_index)
         else:
-            self.store.update(job_id, status="completed", desired_action=None, worker_id=None, current_step=None, completed_at=utc_now())
+            self._finalize_job(job_id, status="completed", desired_action=None, worker_id=None, current_step=None, completed_at=utc_now())

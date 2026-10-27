@@ -21,6 +21,14 @@ from app.job_store import JobStore
 pytestmark = pytest.mark.skipif(sys.platform != "linux", reason="Process identity checks use Linux /proc")
 
 
+@pytest.fixture(autouse=True)
+def isolate_manifest_environment_probes(monkeypatch):
+    # These tests count and signal simulation children. Environment inspection
+    # has its own subprocesses, unrelated to the process ownership under test.
+    monkeypatch.setattr("app.reproducibility.execution_software", lambda: {})
+    monkeypatch.setattr("app.reproducibility.detect_gromacs", lambda _: {})
+
+
 def wait_until(predicate, timeout=4):
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:

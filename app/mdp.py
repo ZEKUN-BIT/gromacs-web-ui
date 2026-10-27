@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import math
 import re
+import secrets
 from pathlib import Path
 
 from .files import ensure_under_root
@@ -420,7 +421,11 @@ def prepare_replica_mdp(workdir: Path, data: dict) -> None:
     text = source.read_text(encoding="utf-8")
     text = patch_mdp_key(text, "continuation", "no")
     text = patch_mdp_key(text, "gen_vel", "yes")
-    text = patch_mdp_key(text, "gen_seed", str(int(data.get("seed", -1))))
+    seed = int(data.get("seed", -1))
+    if seed == -1:
+        # Persist the selected seed before grompp so every replica is reproducible.
+        seed = secrets.randbelow(2**31 - 1) + 1
+    text = patch_mdp_key(text, "gen_seed", str(seed))
     output.write_text(text, encoding="utf-8")
 
 

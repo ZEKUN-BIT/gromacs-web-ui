@@ -30,6 +30,48 @@ def source_job(store, *, queued=False):
     return store.get(meta["id"])
 
 
+def test_clone_can_cancel_during_large_input_copy_without_queueing(store):
+    from app.operations import OperationCancelled, OperationContext
+
+    source = source_job(store)
+    source_file = store.job_dir(source["id"]) / "input.tpr"
+    source_file.write_bytes(b"a" * (3 * 1024 * 1024))
+    progress = []
+
+    def cancel_after_first_chunk(value):
+        progress.append(value)
+        if value.get("copied_bytes", 0) > 0:
+            operation.cancel()
+
+    operation = OperationContext(30, cancel_after_first_chunk)
+    with operation.local(), pytest.raises(OperationCancelled):
+        store.clone(source["id"], operation=operation)
+    clone = next(job for job in store.list() if job["id"] != source["id"])
+    assert clone["status"] == "failed"
+    assert not clone.get("desired_action")
+    assert 0 < (store.job_dir(clone["id"]) / "input.tpr").stat().st_size < source_file.stat().st_size
+    assert source_file.stat().st_size == 3 * 1024 * 1024
+    assert any(value.get("copied_bytes", 0) > 0 for value in progress)
+    assert store.claim_next("worker") is None
+
+
+def test_clone_commit_rejects_late_cancellation_and_keeps_queued_result(store):
+    from app.operations import OperationContext
+
+    source = source_job(store)
+    cancellations = []
+
+    def cancel_on_commit(value):
+        if value.get("phase") == "commit":
+            cancellations.append(operation.cancel())
+
+    operation = OperationContext(30, cancel_on_commit)
+    with operation.local():
+        clone = store.clone(source["id"], operation=operation)
+    assert cancellations == [False]
+    assert clone["status"] == "queued" and clone["desired_action"] == "run"
+
+
 def start_thread(operation):
     outcome = {}
 

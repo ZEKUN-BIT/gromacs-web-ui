@@ -243,6 +243,44 @@ def test_overview_reports_runtime_and_protected_tasks_without_following_links(st
     assert protected["jobs"][0]["eligible"] is False
 
 
+def test_overview_visits_each_directory_once_and_counts_unregistered_files(store):
+    job = terminal_job(store)
+    root = write_files(store, job, ["nested/result.dat", "nvt.trr"])
+    unregistered = store.jobs_root / "unregistered"
+    unregistered.mkdir()
+    (unregistered / "orphan.dat").write_bytes(b"orphan")
+    visits = []
+    scandir = os.scandir
+
+    def record_scan(directory):
+        info = os.fstat(directory)
+        visits.append((info.st_dev, info.st_ino))
+        return scandir(directory)
+
+    with patch("app.storage.os.scandir", side_effect=record_scan):
+        overview = storage_overview(store)
+    assert len(visits) == len(set(visits)), "Overview should not rescan task directories"
+    assert overview["jobs"][0]["bytes"] == 18
+    assert overview["runtime"]["other_bytes"] >= len(b"orphan")
+    assert (root / "nvt.trr").exists()
+
+
+def test_overview_protects_missing_or_symlinked_job_directories(store, tmp_path):
+    job = terminal_job(store)
+    root = store.job_dir(job["id"])
+    for child in root.iterdir():
+        child.unlink()
+    root.rmdir()
+    missing = storage_overview(store)["jobs"][0]
+    assert missing["bytes"] == 0 and not missing["eligible"]
+    external = tmp_path / "external-job"
+    external.mkdir()
+    (external / "large.xtc").write_bytes(b"outside")
+    root.symlink_to(external, target_is_directory=True)
+    linked = storage_overview(store)["jobs"][0]
+    assert linked["bytes"] == 0 and not linked["eligible"]
+
+
 def test_two_previews_cannot_both_clean_the_same_revision(store):
     job = terminal_job(store)
     write_files(store, job, ["nvt.trr"])

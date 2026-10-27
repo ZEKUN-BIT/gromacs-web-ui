@@ -54,13 +54,15 @@ export const state = {
   logSignature: "",
   logText: "",
   logOffset: 0,
+  logTailOmittedBytes: 0,
+  logTrimmedChars: 0,
   artifactKey: "",
   filesSignature: "",
   plotsSignature: "",
   fileFilter: "",
   jobFilter: "",
   jobProject: "",
-  productAvailable: false,
+  productStatus: "loading",
   jobsOffset: 0,
   jobsTotal: 0,
   jobsHasMore: false,
@@ -82,7 +84,10 @@ export function cacheElements() {
     toast: $("#toast"),
     composeView: $("#compose-view"),
     detailView: $("#detail-view"),
+    manualCompose: $("#manual-compose"),
+    agentPanel: $("#agent-panel"),
     toggleSidebar: $("#toggle-sidebar"),
+    sidebarBackdrop: $("#sidebar-backdrop"),
     jobError: $("#job-error"),
     skippedStepsNotice: $("#skipped-steps-notice"),
     qualityReports: $("#quality-reports"),
@@ -153,6 +158,7 @@ export function cacheElements() {
     retryJob: $("#retry-job"),
     skipJob: $("#skip-job"),
     copyLog: $("#copy-log"),
+    downloadLog: $("#download-log"),
     logBottom: $("#log-bottom"),
     jobStatus: $("#job-status"),
     jobStep: $("#job-step"),
@@ -184,20 +190,34 @@ export function cacheElements() {
   });
 }
 
+export function setSidebarOpen(open, restoreFocus = false) {
+  document.body.classList.toggle("sidebar-open", open);
+  els.toggleSidebar.setAttribute("aria-expanded", String(open));
+  els.composeView.inert = open;
+  els.detailView.inert = open;
+  if (open) els.jobFilter?.focus({ preventScroll: true });
+  else if (restoreFocus) els.toggleSidebar.focus({ preventScroll: true });
+}
+
 export function showWorkspaceView(view, chosen = true) {
-  state.workspaceView = view === "detail" ? "detail" : "compose";
+  window.dispatchEvent(new CustomEvent("before-workspace-view-change"));
+  state.workspaceView = ["agent", "detail"].includes(view) ? view : "compose";
   if (chosen) state.viewChosen = true;
-  els.composeView.hidden = state.workspaceView !== "compose";
+  els.composeView.hidden = state.workspaceView === "detail";
   els.detailView.hidden = state.workspaceView !== "detail";
+  els.manualCompose.hidden = state.workspaceView !== "compose";
+  els.agentPanel.hidden = state.workspaceView !== "agent";
   document.querySelectorAll("[data-workspace-view]").forEach((button) => {
     button.setAttribute("aria-pressed", String(button.dataset.workspaceView === state.workspaceView));
   });
-  document.body.classList.remove("sidebar-open");
-  els.toggleSidebar.setAttribute("aria-expanded", "false");
+  document.querySelector("#open-agent")?.setAttribute("aria-pressed", String(state.workspaceView === "agent"));
+  setSidebarOpen(false);
   window.scrollTo({ top: 0, behavior: "instant" });
+  window.dispatchEvent(new CustomEvent("workspace-view-change"));
 }
 
 export function showDetailTab(tab) {
+  window.dispatchEvent(new CustomEvent("before-detail-tab-change"));
   state.detailTab = tab;
   document.querySelectorAll("[data-detail-panel]").forEach((panel) => {
     panel.hidden = panel.dataset.detailPanel !== tab;
@@ -206,6 +226,7 @@ export function showDetailTab(tab) {
     button.setAttribute("aria-pressed", String(button.dataset.detailTab === tab));
   });
   state.artifactKey = "";
+  window.dispatchEvent(new CustomEvent("detail-tab-change"));
 }
 
 export function escapeHtml(value) {
@@ -238,24 +259,50 @@ export function toast(message, type = "info") {
 }
 
 export async function api(path, options = {}) {
-  const response = await fetch(path, options);
-  if (!response.ok) {
-    let detail = response.statusText;
-    const text = await response.text();
-    try {
-      const payload = JSON.parse(text);
-      detail = payload.problem?.code && !["operation_failed", "invalid_request"].includes(payload.problem.code)
-        ? [payload.problem.message, payload.problem.recovery].filter(Boolean).join("；")
-        : payload.detail || text || detail;
-    } catch {
-      detail = text || detail;
-    }
-    const error = new Error(formatApiError(detail));
-    error.status = response.status;
-    throw error;
+  // Reading diagnostics or previews must not hold the UI indefinitely. Writes
+  // deliberately have no implicit timeout: the server may already have saved them.
+  const { responseType, timeoutMs = ["GET", "HEAD"].includes((options.method || "GET").toUpperCase()) ? 30_000 : 0, ...request } = options;
+  const controller = timeoutMs > 0 ? new AbortController() : null;
+  const abort = () => controller.abort(request.signal.reason);
+  if (controller && request.signal) {
+    if (request.signal.aborted) abort();
+    else request.signal.addEventListener("abort", abort, { once: true });
   }
-  const contentType = response.headers.get("content-type") || "";
-  return contentType.includes("application/json") ? response.json() : response.text();
+  let timedOut = false;
+  const timer = controller ? window.setTimeout(() => { timedOut = true; controller.abort(); }, timeoutMs) : null;
+  try {
+    const response = await fetch(path, { ...request, ...(controller ? { signal: controller.signal } : {}) });
+    if (!response.ok) {
+      let detail = response.statusText;
+      let payload = null;
+      const text = await response.text();
+      try {
+        payload = JSON.parse(text);
+        detail = payload.problem?.code && !["operation_failed", "invalid_request"].includes(payload.problem.code)
+          ? [payload.problem.message, payload.problem.recovery].filter(Boolean).join("；")
+          : payload.detail || text || detail;
+      } catch {
+        detail = text || detail;
+      }
+      const error = new Error(formatApiError(detail));
+      error.status = response.status;
+      error.detail = payload?.detail;
+      error.problem = payload?.problem;
+      throw error;
+    }
+    const contentType = response.headers.get("content-type") || "";
+    return await (responseType !== "text" && contentType.includes("application/json") ? response.json() : response.text());
+  } catch (error) {
+    if (timedOut) {
+      const timeout = new Error(`请求超时（${Math.round(timeoutMs / 1000)} 秒），请检查服务后重试。`);
+      timeout.name = "TimeoutError";
+      throw timeout;
+    }
+    throw error;
+  } finally {
+    if (timer !== null) window.clearTimeout(timer);
+    request.signal?.removeEventListener("abort", abort);
+  }
 }
 
 export function formatApiError(detail) {

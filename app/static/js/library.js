@@ -1,5 +1,5 @@
-import { els, state, api, toast, confirmDialog, showWorkspaceView, FILE_FIELD_NAMES } from "./core.js?v=621bb939e2b97a80";
-import { formObject, toggleSections, refreshPreview, renderWorkflowGuide, addLigandRow, renderWaterModelOptions } from "./form.js?v=621bb939e2b97a80";
+import { els, state, api, toast, confirmDialog, showWorkspaceView, FILE_FIELD_NAMES } from "./core.js?v=ed99335f08f47fd8";
+import { formObject, toggleSections, refreshPreview, renderWorkflowGuide, addLigandRow, renderWaterModelOptions } from "./form.js?v=ed99335f08f47fd8";
 
 export const product = { templates: [], projects: [], defaults: {}, available: false };
 let productGeneration = 0;
@@ -12,11 +12,17 @@ export function downloadJson(name, value) {
 
 export async function loadProduct(selectedTemplate) {
   const generation = ++productGeneration;
-  const payload = await api("/api/product");
+  let payload;
+  try {
+    payload = await api("/api/product");
+  } catch (error) {
+    if (generation === productGeneration) state.productStatus = error.status === 404 ? "unsupported" : "error";
+    throw error;
+  }
   if (generation !== productGeneration) return;
   Object.assign(product, payload);
   product.available = true;
-  state.productAvailable = true;
+  state.productStatus = "available";
   const filter = document.querySelector("#project-filter");
   const selected = filter.value;
   filter.replaceChildren(new Option("全部项目", ""));

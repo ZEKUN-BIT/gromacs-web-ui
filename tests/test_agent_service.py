@@ -456,6 +456,21 @@ def test_model_switch_reuses_saved_key_and_same_deepseek_session(local, monkeypa
     assert local.service.config.credentials()[2] == FAKE_KEY
 
 
+def test_session_conditionals_skip_unchanged_payloads_and_invalidate_on_change(api, monkeypatch):
+    session = api.client.post("/api/agent/sessions").json()["id"]
+    url = f"/api/agent/sessions/{session}"
+    first = api.client.get(url)
+    etag = first.headers["etag"]
+    unchanged = api.client.get(url, headers={"If-None-Match": etag})
+    assert unchanged.status_code == 304 and unchanged.content == b""
+    assert unchanged.headers["cache-control"] == "no-store"
+    provider_script(monkeypatch, model_response(text="状态已更新"))
+    assert api.client.post(url + "/messages", json={"message": "你好", "request_id": str(uuid4())}).status_code == 200
+    changed = api.client.get(url, headers={"If-None-Match": etag})
+    assert changed.status_code == 200 and changed.headers["etag"] != etag
+    assert changed.json()["messages"][-1]["content"] == "状态已更新"
+
+
 def test_model_catalog_missing_key_or_failure_releases_capacity(local, monkeypatch):
     models = Mock(side_effect=AgentError("模型列表不可用", 502))
     monkeypatch.setattr(agent_provider.ProviderClient, "list_models", models)
@@ -579,3 +594,204 @@ def test_api_network_adapter_redacts_credential_echo_from_input_and_output(api, 
     assert FAKE_KEY not in json.dumps(posted)
     stored = AgentService(api.store.runtime_root)._load(session)
     assert FAKE_KEY not in json.dumps(stored)
+
+
+def wait_idle(service, session_id):
+    deadline = time.monotonic() + 5
+    while time.monotonic() < deadline:
+        state = service.get(session_id)
+        if state["status"] == "idle":
+            return state
+        time.sleep(0.01)
+    pytest.fail("Background operation did not finish")
+
+
+def test_background_preparation_exposes_progress_and_releases_model_slots(local, monkeypatch):
+    from app.operations import current_operation
+
+    entered = threading.Barrier(3)
+    release = threading.Event()
+
+    def read(*_):
+        operation = current_operation()
+        operation.report({"phase": "preflight", "message": "正在检查轨迹…"})
+        entered.wait(timeout=5)
+        while not release.wait(0.01):
+            operation.checkpoint()
+        operation.checkpoint()
+        return {"ok": True}
+
+    monkeypatch.setattr(local.tools, "run_read", read)
+    provider_script(
+        monkeypatch,
+        model_response(("list_jobs", {})),
+        model_response(("list_jobs", {})),
+        model_response(text="模型仍可响应。"),
+        model_response(text="第二项完成。"),
+    )
+    first, second, third = [local.service.create()["id"] for _ in range(3)]
+    try:
+        for session in (first, second):
+            state = local.service.send(session, "检查输入", str(uuid4()), None, local.tools, background=True)
+            assert state["status"] == "running"
+        entered.wait(timeout=5)
+        assert local.service.get(first)["operation"]["phase"] == "preflight"
+        assert send(local, third)["messages"][-1]["content"] == "模型仍可响应。"
+        assert local.service.cancel(first)["operation"]["cancel_requested"]
+        cancelled = wait_idle(local.service, first)
+        assert "已取消" in cancelled["last_error"] and cancelled["actions"] == []
+        assert local.service.get(second)["status"] == "running"
+        release.set()
+        assert wait_idle(local.service, second)["last_error"] is None
+    finally:
+        release.set()
+        local.service.close()
+    assert local.service.get(second)["last_error"] is None
+
+
+def test_cancelled_approved_background_action_never_executes_or_replays(local, monkeypatch):
+    from app.operations import current_operation
+
+    job, state = proposed_cancel(local, monkeypatch)
+    entered = threading.Event()
+    original = local.tools.execute_action
+
+    def prepare(*args):
+        operation = current_operation()
+        operation.report({"phase": "copy", "copied_bytes": 10, "total_bytes": 100})
+        entered.set()
+        while True:
+            operation.checkpoint()
+            time.sleep(0.01)
+        return original(*args)
+
+    execute = Mock(side_effect=prepare)
+    monkeypatch.setattr(local.tools, "execute_action", execute)
+    action_id = state["actions"][0]["id"]
+    try:
+        running = local.service.decide(state["id"], action_id, "approve", local.tools, background=True)
+        assert running["actions"][0]["status"] == "running"
+        assert entered.wait(5)
+        assert local.service.get(state["id"])["operation"]["copied_bytes"] == 10
+        local.service.cancel(state["id"])
+        # Transport retries of the cancellation never replay the approval.
+        local.service.cancel(state["id"])
+        result = wait_idle(local.service, state["id"])
+        assert result["actions"][0]["status"] == "cancelled"
+        assert local.store.get(job["id"])["status"] == "queued"
+        assert local.service.decide(state["id"], action_id, "approve", local.tools) == result
+        assert execute.call_count == 1
+    finally:
+        local.service.close()
+
+
+def test_cancel_after_commit_keeps_successful_action_result(local, monkeypatch):
+    job, state = proposed_cancel(local, monkeypatch)
+    committed, release = threading.Event(), threading.Event()
+    original = local.tools.execute_action
+
+    def execute(*args):
+        result = original(*args)
+        committed.set()
+        assert release.wait(5)
+        return result
+
+    monkeypatch.setattr(local.tools, "execute_action", execute)
+    try:
+        local.service.decide(state["id"], state["actions"][0]["id"], "approve", local.tools, background=True)
+        assert committed.wait(5)
+        result = local.service.cancel(state["id"])
+        assert not result["operation"]["cancellable"]
+        assert not result["operation"].get("cancel_requested")
+        assert local.store.get(job["id"])["status"] == "cancelled"
+        release.set()
+        assert wait_idle(local.service, state["id"])["actions"][0]["status"] == "succeeded"
+    finally:
+        release.set()
+        local.service.close()
+
+
+def test_local_budget_is_separate_from_model_budget(local, monkeypatch):
+    ticks = [1000.0]
+    monkeypatch.setattr(agent_service.time, "monotonic", lambda: ticks[0])
+    monkeypatch.setattr(agent_service, "TURN_SECONDS", 10)
+    responses = iter([model_response(("list_jobs", {})), model_response(text="预检完成。")])
+
+    def complete(*args, **kwargs):
+        ticks[0] += 2
+        return next(responses)
+
+    def read(*args):
+        ticks[0] += 200
+        return {"ok": True}
+
+    monkeypatch.setattr(agent_provider.ProviderClient, "complete", complete)
+    monkeypatch.setattr(local.tools, "run_read", read)
+    state = send(local, local.service.create()["id"])
+    assert state["last_error"] is None
+    assert state["messages"][-1]["content"] == "预检完成。"
+
+
+def test_local_budget_timeout_prevents_action_preparation(local, monkeypatch):
+    monkeypatch.setattr(agent_service, "LOCAL_SECONDS", 0)
+    job = queued_job(local)
+    provider_script(monkeypatch, model_response(("cancel_job", {"job_id": job["id"]})))
+    prepare = Mock(wraps=local.tools.prepare_action)
+    monkeypatch.setattr(local.tools, "prepare_action", prepare)
+    state = send(local, local.service.create()["id"])
+    assert "本地准备操作已达到时间上限" in state["last_error"]
+    assert state["actions"] == [] and local.store.get(job["id"])["status"] == "queued"
+    prepare.assert_not_called()
+
+
+def test_api_background_request_and_local_only_cancel(api, monkeypatch):
+    entered, release = threading.Event(), threading.Event()
+
+    def complete(*args, **kwargs):
+        entered.set()
+        assert release.wait(5)
+        return model_response(text="这条已取消的回复不能发布。")
+
+    monkeypatch.setattr(agent_provider.ProviderClient, "complete", complete)
+    session = api.client.post("/api/agent/sessions").json()["id"]
+    response = api.client.post(
+        f"/api/agent/sessions/{session}/messages",
+        headers={"Prefer": "respond-async"},
+        json={"message": "检查输入", "request_id": str(uuid4())},
+    )
+    assert response.status_code == 200 and response.json()["status"] == "running"
+    try:
+        assert entered.wait(5)
+        forbidden = api.client.post(f"/api/agent/sessions/{session}/cancel", headers={"Origin": "https://evil.example"})
+        assert forbidden.status_code == 403
+        response = api.client.post(f"/api/agent/sessions/{session}/cancel")
+        assert response.json()["operation"]["cancel_requested"]
+        release.set()
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline:
+            response = api.client.get(f"/api/agent/sessions/{session}")
+            if response.json()["status"] == "idle":
+                break
+            time.sleep(0.01)
+        assert response.json()["status"] == "idle"
+        assert "已取消" in response.json()["last_error"]
+        assert "这条已取消的回复" not in response.text
+    finally:
+        release.set()
+
+
+def test_executor_failure_releases_capacity_and_never_executes_approval(local, monkeypatch):
+    job, state = proposed_cancel(local, monkeypatch)
+    monkeypatch.setattr(local.service._executor, "submit", Mock(side_effect=RuntimeError("executor unavailable")))
+    execute = Mock(wraps=local.tools.execute_action)
+    monkeypatch.setattr(local.tools, "execute_action", execute)
+    result = local.service.decide(state["id"], state["actions"][0]["id"], "approve", local.tools, background=True)
+    assert result["status"] == "idle" and result["actions"][0]["status"] == "failed"
+    assert "后台操作无法启动" in result["last_error"]
+    assert not local.service._active and not local.service._operations
+    assert local.service._local_capacity.acquire(blocking=False)
+    assert local.service._local_capacity.acquire(blocking=False)
+    local.service._local_capacity.release()
+    local.service._local_capacity.release()
+    execute.assert_not_called()
+    assert local.store.get(job["id"])["status"] == "queued"

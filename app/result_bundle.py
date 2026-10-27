@@ -20,6 +20,7 @@ MAX_FILE_BYTES = 16 * 1024**2
 MAX_FILES = 500
 REPORT_NAMES = {
     "experiment-manifest.json",
+    "execution-manifest.json",
     "research-report.json",
     "sampling-summary.json",
     "structural-convergence.json",
@@ -75,7 +76,7 @@ def quality_summary(workdir: Path) -> list[dict]:
     for path in sorted(paths):
         if path.name not in REPORT_NAMES and not path.name.startswith("quality-"):
             continue
-        if path.name == "experiment-manifest.json":
+        if path.name in {"experiment-manifest.json", "execution-manifest.json"}:
             continue
         try:
             if path.is_symlink():

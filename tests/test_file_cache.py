@@ -1,3 +1,4 @@
+import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import Mock, patch
@@ -42,6 +43,28 @@ class FileListCacheTests(unittest.TestCase):
             store.get.return_value["step_index"] = 2
             main.job_files("job-2")
             self.assertEqual(scan.call_count, 2)
+
+    def test_active_files_refresh_after_ttl_without_step_change(self) -> None:
+        for status in ("running", "interrupted"):
+            with self.subTest(status=status):
+                self._assert_active_files_refresh(status)
+
+    def _assert_active_files_refresh(self, status: str) -> None:
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            trajectory = root / "md.xtc"
+            trajectory.write_bytes(b"frame")
+            store = Mock()
+            store.get.return_value = {"id": "active", "status": status, "step_index": 4, "workdir": folder}
+            with patch.object(main, "STORE", store), patch.object(main.time, "monotonic", return_value=10) as clock:
+                initial = main.job_files("active")
+                trajectory.write_bytes(b"frame" * 10)
+                (root / "md.cpt").write_bytes(b"checkpoint")
+                self.assertEqual(main.job_files("active"), initial)
+                clock.return_value += main.ACTIVE_FILE_CACHE_SECONDS
+                refreshed = {item["path"]: item for item in main.job_files("active")["files"]}
+            self.assertEqual(refreshed["md.xtc"]["size"], 50)
+            self.assertIn("md.cpt", refreshed)
 
 
 if __name__ == "__main__":

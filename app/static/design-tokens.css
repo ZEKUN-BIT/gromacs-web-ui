@@ -1,0 +1,121 @@
+/* Shared design tokens. Load before styles.css; theme values live only here. */
+@font-face {
+  font-family: "Inter";
+  font-style: normal;
+  font-weight: 100 900;
+  font-display: swap;
+  src: url("/static/fonts/inter-variable.woff2") format("woff2");
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+
+@font-face {
+  font-family: "JetBrains Mono";
+  font-style: normal;
+  font-weight: 100 800;
+  font-display: swap;
+  src: url("/static/fonts/jetbrains-mono-var-latin.woff2") format("woff2");
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+
+:root {
+  color-scheme: light dark;
+  --paper: #f5f7fa;
+  --panel: #ffffff;
+  --field: #f7f9fb;
+  --rail-background: #f0f3f6;
+  --ink: #202b3b;
+  --muted: #55657a;
+  --line: #e2e8f0;
+  --blue: #0b786f;
+  --green: #237951;
+  --amber: #936316;
+  --red: #b43e3e;
+  --violet: #625f91;
+  --on-accent: #ffffff;
+  --acid: #e5f2ed;
+  --acid-hover: #d6ebe3;
+  --acid-soft: #edf7f1;
+  --green-soft: #edf7f1;
+  --cyan-soft: #eaf5f2;
+  --coral-soft: #fff0ee;
+  --plot-text: var(--muted);
+  --plot-grid: #e5eaf0;
+  /* Scientific series colors are independent of UI text contrast tokens. */
+  --series-0: #087f8c;
+  --series-1: #e07a1f;
+  --series-2: #7259b5;
+  --series-3: #2f855a;
+  --series-4: #d14d72;
+  --series-5: #3578c4;
+  --series-6: #b18b16;
+  --series-7: #9b4dca;
+  --shadow: 0 12px 40px #172b4d14, 0 2px 8px #172b4d08;
+  --shadow-sm: 0 1px 3px #172b4d08;
+
+  --sans: "Inter", system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", "Noto Sans CJK SC", "Source Han Sans SC", sans-serif;
+  --display: var(--sans);
+  --mono: "JetBrains Mono", "Cascadia Mono", "IBM Plex Mono", "SFMono-Regular", Consolas, monospace;
+  --text-xs: 12px;
+  --text-sm: 13px;
+  --text-ui: 14px;
+  --text-body: 16px;
+  --text-section: 18px;
+  --text-title: 24px;
+  --text-title-mobile: 22px;
+  --leading-ui: 1.5;
+  --leading-body: 1.65;
+  --leading-chat: 1.75;
+
+  --space-2xs: 4px;
+  --space-xs: 6px;
+  --space-sm: 8px;
+  --space-md: 12px;
+  --space-lg: 16px;
+  --space-xl: 20px;
+  --space-2xl: 24px;
+  --radius-xs: 4px;
+  --radius-sm: 8px;
+  --radius: 12px;
+  --radius-lg: 14px;
+  --workspace-bar-height: 64px;
+
+  /* Semantic aliases used by diagnostics and existing component APIs. */
+  --accent: var(--green);
+  --danger: var(--red);
+  --surface: var(--panel);
+  --text: var(--ink);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    color-scheme: dark;
+    --paper: #151c24;
+    --panel: #1c2530;
+    --field: #222e3b;
+    --rail-background: #19222c;
+    --ink: #e6edf5;
+    --muted: #a3b2c4;
+    --line: #344353;
+    --blue: #85d6c6;
+    --green: #8bd4b0;
+    --amber: #e4ba73;
+    --red: #ee9b96;
+    --violet: #a39fd6;
+    --on-accent: #172c31;
+    --acid: #294650;
+    --acid-hover: #365866;
+    --acid-soft: #293d35;
+    --green-soft: #293d35;
+    --cyan-soft: #243e3b;
+    --coral-soft: #422e2c;
+    --plot-grid: #344353;
+    --series-0: #6fb3bd;
+    --series-1: #d99a4e;
+    --series-2: #a39fd6;
+    --series-3: #5cb184;
+    --series-4: #e08a7d;
+    --series-5: #9aa5a0;
+    --shadow: 0 8px 28px #0004;
+    --shadow-sm: 0 2px 6px #0003;
+  }
+}

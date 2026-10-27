@@ -1,5 +1,5 @@
-import { api, debounce, escapeHtml, state } from "./core.js?v=621bb939e2b97a80";
-import { drawPlot, plotTheme } from "./plots.js?v=621bb939e2b97a80";
+import { api, debounce, escapeHtml, state } from "./core.js?v=ed99335f08f47fd8";
+import { drawPlot, plotTheme } from "./plots.js?v=ed99335f08f47fd8";
 
 const labels = {
   ca_rmsd_nm: "C-alpha RMSD (nm)", ca_rg_nm: "C-alpha Rg (nm)",
@@ -7,6 +7,8 @@ const labels = {
   contact_residues: "接触残基数", pocket_retention: "初始口袋保持率 (%)",
 };
 let report = null, mode = "conformation", generation = 0, loadedJob = null;
+const reportCache = new Map(), residueViews = new Map();
+let researchController = null;
 let drawings = [];
 const observer = new ResizeObserver(() => redraw());
 const number = (value, digits = 3) => value == null ? "不可计算" : Number(value).toFixed(digits);
@@ -84,13 +86,21 @@ function residueTable(parent, residues, binding = false) {
   const section = document.createElement("section"); section.className = "research-residues";
   section.innerHTML = `<div class="research-table-tools"><label>残基筛选<input type="search" aria-label="筛选研究残基" placeholder="链 / 残基编号 / 名称" /></label><label>排序<select aria-label="研究残基排序"><option value="${binding ? "contact_occupancy" : "rmsf_nm"}">${binding ? "接触占有率" : "RMSF"}</option><option value="displacement_nm">前后段位移</option><option value="sequence">序列顺序</option></select></label></div><div class="research-residue-rows"></div><div class="research-pager"><button type="button" class="tool-button" data-page="prev">上一页</button><span role="status"></span><button type="button" class="tool-button" data-page="next">下一页</button></div>`;
   parent.append(section);
-  let page = 0;
+  const viewKey = `${loadedJob}:${binding}`;
+  if (!residueViews.has(viewKey)) {
+    if (residueViews.size >= 24) residueViews.delete(residueViews.keys().next().value);
+    residueViews.set(viewKey, { page: 0, search: "", sort: binding ? "contact_occupancy" : "rmsf_nm" });
+  }
+  const view = residueViews.get(viewKey);
+  let page = view.page;
   const search = section.querySelector("input"), sort = section.querySelector("select");
+  search.value = view.search; sort.value = view.sort;
   function render() {
     const query = search.value.trim().toLowerCase();
     const rows = residues.filter((row) => `${row.chain} ${row.resid}${row.icode || ""} ${row.resname}`.toLowerCase().includes(query));
     if (sort.value !== "sequence") rows.sort((a, b) => (b[sort.value] ?? -1) - (a[sort.value] ?? -1));
     const pages = Math.max(1, Math.ceil(rows.length / 50)); page = Math.min(page, pages - 1);
+    Object.assign(view, { page, search: search.value, sort: sort.value });
     section.querySelector(".research-residue-rows").innerHTML = table(
       ["链:残基", "名称", "RMSF (nm)", "前后段位移 (nm)", ...(binding ? ["接触占有率 (%)"] : [])],
       rows.slice(page * 50, (page + 1) * 50).map((row) => [`${row.chain}:${row.resid}${row.icode || ""}`, row.resname,
@@ -141,6 +151,11 @@ function renderResult() {
 
 export async function renderResearch(job) {
   const token = ++generation;
+  researchController?.abort();
+  researchController = new AbortController();
+  const cacheKey = JSON.stringify([job.id, job.status, job.updated_at, job.storage_revision || 0]);
+  const cached = job.status === "completed" ? reportCache.get(cacheKey) : null;
+  if (cached && loadedJob === job.id && report === cached) return;
   report = null;
   document.querySelector("#research-state").textContent = "正在读取研究报告…";
   document.querySelector("#create-research").disabled = job.status !== "completed" || Boolean(job.dry_run);
@@ -150,10 +165,14 @@ export async function renderResearch(job) {
     loadedJob = job.id;
   }
   renderResult();
-  const [result] = await Promise.allSettled([api(`/api/jobs/${encodeURIComponent(job.id)}/research`)]);
+  const [result] = await Promise.allSettled([cached || api(`/api/jobs/${encodeURIComponent(job.id)}/research`, { signal: researchController.signal })]);
   if (token !== generation || state.activeJobId !== job.id) return;
   if (result.status === "fulfilled") {
     report = result.value; document.querySelector("#research-state").textContent = "";
+    if (job.status === "completed") {
+      if (reportCache.size >= 8) reportCache.delete(reportCache.keys().next().value);
+      reportCache.set(cacheKey, report);
+    }
   } else document.querySelector("#research-state").textContent = result.reason.message;
   await refreshResearchCatalog();
   renderResult();
@@ -203,6 +222,11 @@ function bindResearchCatalog() {
 }
 
 export function bindResearch() {
+  for (const type of ["workspace-view-change", "detail-tab-change", "active-job-change"]) window.addEventListener(type, () => {
+    if (state.workspaceView !== "detail" || state.detailTab !== "research" || state.activeJobId !== loadedJob) {
+      generation += 1; researchController?.abort();
+    }
+  });
   bindResearchCatalog();
   document.addEventListener("storage-cleaned", (event) => {
     const removed = new Set(event.detail.deleted_jobs);

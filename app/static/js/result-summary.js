@@ -1,6 +1,6 @@
-import { state, api, toast, escapeHtml } from "./core.js?v=621bb939e2b97a80";
-import { applyJobDetail } from "./jobs.js?v=621bb939e2b97a80";
-import { product, loadProduct } from "./library.js?v=621bb939e2b97a80";
+import { state, api, toast, escapeHtml } from "./core.js?v=ed99335f08f47fd8";
+import { applyJobDetail } from "./jobs.js?v=ed99335f08f47fd8";
+import { product, loadProduct } from "./library.js?v=ed99335f08f47fd8";
 
 const DRAFT_PREFIX = "gromacs-organization-draft-v1:";
 const drafts = new Map();
@@ -132,7 +132,11 @@ async function renderResultSummary(job) {
   if (job.id !== state.activeJobId) return;
   if (!product.available) {
     document.querySelector("#download-result-bundle").hidden = true;
-    document.querySelector("#result-summary-content").textContent = "当前服务版本尚未启用结果摘要。现有日志、文件与分析仍可查看。";
+    document.querySelector("#result-summary-content").textContent = state.productStatus === "unsupported"
+      ? "当前服务版本尚未启用结果摘要。现有日志、文件与分析仍可查看。"
+      : state.productStatus === "error"
+        ? "结果摘要服务暂时无法连接，请稍后刷新页面。现有日志、文件与分析仍可查看。"
+        : "正在读取结果摘要服务，现有日志、文件与分析可继续查看。";
     return;
   }
   for (const field of form.elements) field.disabled = field.type === "submit" && Boolean(savingJobId);

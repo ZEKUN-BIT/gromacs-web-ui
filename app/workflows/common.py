@@ -16,6 +16,8 @@ from ..mdp import format_mdp_number
 from ..steps import Step, internal_step
 from ..workflow_parameters import bool_param, int_param, maxwarn_args, output_name_param, str_param
 
+MAX_REPLICAS = 16
+
 ALLOWED_SUBCOMMANDS = {
     "pdb2gmx",
     "editconf",
@@ -45,6 +47,11 @@ ALLOWED_SUBCOMMANDS = {
 
 
 def as_gmx(gmx_bin: str, args: list[str]) -> list[str]:
+    if args and args[0] == "grompp" and "-po" not in args and "-o" in args:
+        output_index = args.index("-o") + 1
+        if output_index < len(args):
+            processed_mdp = str(Path(args[output_index]).with_suffix(".mdout.mdp"))
+            args = [*args, "-po", processed_mdp]
     return [gmx_bin, *args]
 
 
@@ -172,8 +179,8 @@ def production_steps(
     equil_prefix: str = "npt",
 ) -> list[Step]:
     replicas = int_param(params, "replicas", 1)
-    if replicas < 1 or replicas > 16:
-        raise ValueError("replicas must be between 1 and 16")
+    if replicas < 1 or replicas > MAX_REPLICAS:
+        raise ValueError(f"replicas must be between 1 and {MAX_REPLICAS}")
     base = output_name_param(params, "production_deffnm", "md", "Production output prefix")
     steps: list[Step] = []
     outputs: list[str] = []

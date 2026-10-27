@@ -5,13 +5,15 @@ import shutil
 import sys
 import time
 from collections.abc import Callable
+from contextlib import nullcontext
 from pathlib import Path
 
-from .analysis.preflight import inspect_research_inputs
+from .analysis.preflight import inspect_research_inputs, inspect_research_inputs_cancellable
 from .files import ensure_under_root, relative_files
 from .gromacs import Step, _read_mdp_values, build_steps
 from .job_store import JobStore
 from .models import ExistingAnalysisRequest
+from .operations import OperationContext
 from .reproducibility import write_experiment_manifest
 from .workflows.analysis import _analysis_window_args
 
@@ -112,14 +114,25 @@ def _selected_inputs(root: Path, request: ExistingAnalysisRequest) -> dict[str, 
     return selected
 
 
-def preflight_existing_analysis(store: JobStore, job_id: str, request: ExistingAnalysisRequest, settings: dict) -> dict:
+def preflight_existing_analysis(
+    store: JobStore, job_id: str, request: ExistingAnalysisRequest, settings: dict, *, operation: OperationContext | None = None
+) -> dict:
     with store.job_files_lock(job_id):
         analysis_source(store, job_id)
         selected = _selected_inputs(store.job_dir(job_id), request)
         budget = analysis_disk_budget(selected, request)
         require_analysis_disk_space(store.jobs_root, budget)
-        research = inspect_research_inputs(selected, request, settings["gmx_bin"]) if request.do_research and not request.dry_run else None
+        research = (
+            _inspect_inputs(selected, request, settings["gmx_bin"], operation) if request.do_research and not request.dry_run else None
+        )
         return {"research": research, "storage": budget}
+
+
+def _inspect_inputs(selected: dict, request: ExistingAnalysisRequest, gmx_bin: str, operation: OperationContext | None):
+    if operation is None:
+        return inspect_research_inputs(selected, request, gmx_bin)
+    operation.report({"phase": "preflight", "message": "正在检查轨迹帧数、时间范围和蛋白规模…"})
+    return inspect_research_inputs_cancellable(selected, request, gmx_bin, operation)
 
 
 def _copy_analysis_input(source: Path, target: Path, on_bytes: Callable[[int], None]) -> dict:
@@ -142,18 +155,37 @@ def _copy_analysis_input(source: Path, target: Path, on_bytes: Callable[[int], N
 
 
 def create_existing_analysis(
-    store: JobStore, job_id: str, request: ExistingAnalysisRequest, settings: dict, *, progress: Callable[[dict], None] | None = None
+    store: JobStore,
+    job_id: str,
+    request: ExistingAnalysisRequest,
+    settings: dict,
+    *,
+    progress: Callable[[dict], None] | None = None,
+    operation: OperationContext | None = None,
 ) -> dict:
     # Keep source validation and every read/copy in the same reservation so
     # cleanup cannot remove a selected trajectory before staging finishes.
     with store.job_files_lock(job_id):
-        return _create_existing_analysis(store, job_id, request, settings, progress=progress)
+        return _create_existing_analysis(store, job_id, request, settings, progress=progress, operation=operation)
 
 
 def _create_existing_analysis(
-    store: JobStore, job_id: str, request: ExistingAnalysisRequest, settings: dict, *, progress: Callable[[dict], None] | None = None
+    store: JobStore,
+    job_id: str,
+    request: ExistingAnalysisRequest,
+    settings: dict,
+    *,
+    progress: Callable[[dict], None] | None = None,
+    operation: OperationContext | None = None,
 ) -> dict:
-    notify = progress or (lambda _: None)
+    def notify(value: dict):
+        if operation:
+            operation.report(value)
+        if progress:
+            progress(value)
+
+    if operation:
+        operation.checkpoint()
     source = analysis_source(store, job_id)
     if not any(getattr(request, key) for key in ("do_rmsd", "do_rg", "do_energy", "do_dssp", "do_hbond", "do_pca", "do_research")):
         raise ValueError("请至少选择一项分析指标。")
@@ -164,7 +196,7 @@ def _create_existing_analysis(
     preflight = None
     if request.do_research and not request.dry_run:
         notify({"phase": "preflight", "message": "正在检查轨迹帧数、时间范围和蛋白规模…"})
-        preflight = inspect_research_inputs(selected, request, settings["gmx_bin"])
+        preflight = _inspect_inputs(selected, request, settings["gmx_bin"], operation)
         notify({"phase": "preflight", "research": preflight, "message": preflight["message"] or "轨迹规模检查通过。"})
         if not preflight["valid"]:
             raise ValueError(preflight["message"])
@@ -288,6 +320,8 @@ def _create_existing_analysis(
             def report_copy(count: int, *, force: bool = False) -> None:
                 nonlocal copied, updated
                 copied += count
+                if operation:
+                    operation.checkpoint()
                 now = time.monotonic()
                 if force or now - updated >= 0.25:
                     updated = now
@@ -343,7 +377,8 @@ def _create_existing_analysis(
             store.append_log(created["id"], f"[web] analysis inputs copied from {job_id}\n")
             if store.get(created["id"])["status"] != "preparing":
                 raise RuntimeError("Analysis preparation was cancelled before inputs were ready.")
-            store.start(created["id"], steps, dry_run=request.dry_run)
+            with operation.commit() if operation else nullcontext():
+                store.start(created["id"], steps, dry_run=request.dry_run)
         except Exception as exc:
             # Keep cleanup in the reservation too: a user may have cancelled
             # during copying and must wait before deleting the target directory.

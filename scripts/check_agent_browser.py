@@ -166,6 +166,8 @@ def check(artifact_dir: Path | None = None):
                                         "status": "pending",
                                     },
                                 ]
+                        elif len(parts) > 5 and parts[5] == "cancel":
+                            payload["operation"].update(cancel_requested=True, message="正在停止…")
                         elif len(parts) > 5 and parts[5] == "actions":
                             action = next(item for item in payload["actions"] if item["id"] == parts[6])
                             action["status"] = "rejected" if body["decision"] == "reject" else "succeeded"
@@ -231,10 +233,19 @@ def check(artifact_dir: Path | None = None):
                 panel = page.locator("#agent-panel")
                 settings_dialog = page.locator("#agent-settings")
                 expect(page.locator("#open-agent")).to_be_in_viewport()
+                expect(panel).to_be_hidden()
+                expect(page.locator("#manual-compose")).to_be_visible()
+                assert not any(path.startswith("/api/agent/") for _, path, _ in calls), "Hidden AI must not initialize"
+                page.locator("#open-agent").click()
                 expect(panel).to_be_in_viewport()
                 expect(settings_dialog).to_be_hidden()
                 expect(page.locator("#agent-error")).to_contain_text("暂时无法读取")
                 expect(page.locator("#agent-send")).to_be_disabled()
+                page.locator("#agent-open-settings").click()
+                expect(settings_dialog).to_be_visible()
+                expect(page.locator("#agent-provider")).to_be_disabled()
+                expect(page.locator("#agent-settings-error")).to_contain_text("暂时无法读取")
+                page.locator("#agent-settings-close").click()
                 control["fail_config"] = False
                 page.locator("#agent-refresh").click()
                 expect(page.locator("#agent-error")).to_be_hidden()
@@ -394,6 +405,7 @@ def check(artifact_dir: Path | None = None):
                 saved_reload_start = len(calls)
                 writes_before_reload = len([path for method, path, _ in calls if method != "GET" and path.startswith("/api/agent/")])
                 page.reload(wait_until="networkidle")
+                page.locator("#open-agent").click()
                 expect(settings_dialog).to_be_hidden()
                 expect(page.locator("#agent-connection-status")).to_contain_text("设置已保存")
                 expect(page.locator("#agent-config-notice")).to_be_hidden()
@@ -483,6 +495,8 @@ def check(artifact_dir: Path | None = None):
                     artifact_dir.mkdir(parents=True, exist_ok=True)
                     page.screenshot(path=str(artifact_dir / f"agent-plans-{width}-{scheme}.png"))
                 page.get_by_role("button", name="应用草案到新任务表单").click()
+                expect(panel).to_be_hidden()
+                expect(page.locator("#manual-compose")).to_be_visible()
                 expect(page.locator('[name="mdp_temperature_k"]')).to_have_value("305")
                 expect(page.locator("#job-form")).to_be_in_viewport()
                 open_agent()
@@ -556,6 +570,29 @@ def check(artifact_dir: Path | None = None):
                 )
                 assert page.locator("#agent-message").get_attribute("maxlength") == "8000"
 
+                # Background preparation remains observable and can be cancelled
+                # without a second approval or blocking the entire chat request.
+                sessions[session_id]["status"] = "running"
+                sessions[session_id]["operation"] = {
+                    "phase": "copy",
+                    "copied_bytes": 1048576,
+                    "total_bytes": 2097152,
+                    "cancellable": True,
+                    "cancel_requested": False,
+                }
+                page.locator("#agent-refresh").click()
+                expect(page.locator("#agent-progress")).to_contain_text("1.0 / 2.0 MiB")
+                expect(page.locator("#agent-cancel")).to_be_enabled()
+                expect(page.locator("#agent-send")).to_be_disabled()
+                page.locator("#agent-cancel").click()
+                expect(page.locator("#agent-cancel")).to_contain_text("正在取消")
+                expect(page.locator("#agent-cancel")).to_be_disabled()
+                assert len([path for _, path, _ in calls if path.endswith(f"/{session_id}/cancel")]) == 1
+                sessions[session_id]["status"] = "idle"
+                sessions[session_id]["operation"] = None
+                page.locator("#agent-refresh").click()
+                expect(page.locator("#agent-cancel")).to_be_hidden()
+
                 # Updating a conversation keeps unchanged messages, action previews and scroll position.
                 page.evaluate("""() => {
                     window.agentFirstMessage = document.querySelector('#agent-messages .agent-message');
@@ -625,7 +662,8 @@ def check(artifact_dir: Path | None = None):
                 expect(page.locator("#agent-current-model")).to_have_text("本次对话：DeepSeek · deepseek-custom")
                 expect(settings_dialog).to_be_hidden()
 
-                # Background tabs and the detail workspace pause polling; returning resumes only GET synchronization.
+                # Background tabs and either non-chat workspace pause polling;
+                # returning to AI resumes only GET synchronization.
                 sessions[session_id]["status"] = "running"
                 page.locator("#agent-refresh").click()
                 expect(page.locator("#agent-status")).to_contain_text("助手正在处理")
@@ -647,16 +685,24 @@ def check(artifact_dir: Path | None = None):
                 expect(page.locator("#agent-status")).to_contain_text("助手正在处理")
                 expect(page.locator("#agent-refresh")).to_be_enabled()
                 expect(page.locator("#agent-message")).to_be_disabled()
+                page.locator('[data-workspace-view="compose"]').click()
+                expect(panel).to_be_hidden()
+                reads = len([path for method, path, _ in calls if method == "GET" and path == f"/api/agent/sessions/{session_id}"])
+                page.wait_for_timeout(1800)
+                assert reads == len([path for method, path, _ in calls if method == "GET" and path == f"/api/agent/sessions/{session_id}"])
+                page.locator("#open-agent").click()
+                expect(page.locator("#agent-refresh")).to_be_enabled()
                 page.locator('[data-workspace-view="detail"]').click()
                 reads = len([path for method, path, _ in calls if method == "GET" and path == f"/api/agent/sessions/{session_id}"])
                 page.wait_for_timeout(1800)
                 assert reads == len([path for method, path, _ in calls if method == "GET" and path == f"/api/agent/sessions/{session_id}"])
 
-                # A reload restores an in-flight conversation automatically using only its id, then polls.
+                # Reload preserves the task view; AI restores only when opened.
                 sessions[session_id]["status"] = "running"
                 writes_before_reload = len([path for method, path, _ in calls if method != "GET" and path.startswith("/api/agent/")])
                 page.reload(wait_until="networkidle")
-                expect(page.locator("#agent-messages")).to_contain_text("恢复发送")
+                expect(panel).to_be_hidden()
+                expect(page.locator("#detail-view")).to_be_visible()
                 expect(settings_dialog).to_be_hidden()
                 assert writes_before_reload == len(
                     [path for method, path, _ in calls if method != "GET" and path.startswith("/api/agent/")]

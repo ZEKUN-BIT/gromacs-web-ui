@@ -10,6 +10,7 @@ import sqlite3
 import threading
 import time
 import uuid
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
@@ -17,6 +18,7 @@ from pathlib import Path
 from pydantic import ValidationError
 
 from .agent_provider import AgentError, ProviderClient, ProviderConfig
+from .operations import OperationCancelled, OperationContext, OperationTimeout
 
 LOGGER = logging.getLogger(__name__)
 MAX_ROUNDS = 6
@@ -27,6 +29,7 @@ MAX_SESSIONS = 200
 MAX_CONTEXT_BYTES = 300 * 1024
 APPROVAL_SECONDS = 30 * 60
 TURN_SECONDS = 180
+LOCAL_SECONDS = 600
 
 INSTRUCTIONS = """你是本机 GROMACS 项目的 AI 调度助手。默认用中文回答。
 用工具核实任务、分析文件和运行状态，不得虚构任务 ID、文件、完成状态或科学结论。
@@ -58,6 +61,11 @@ class AgentService:
             raise AgentError("AI 对话数据库不能是符号链接。", 409)
         self._lock = threading.RLock()
         self._capacity = threading.BoundedSemaphore(2)
+        self._local_capacity = threading.BoundedSemaphore(2)
+        self._worker_capacity = threading.BoundedSemaphore(4)
+        self._executor = ThreadPoolExecutor(max_workers=4, thread_name_prefix="agent-operation")
+        self._operations: dict[str, tuple[OperationContext, dict]] = {}
+        self._closed = False
         self._active: set[str] = set()
         with self._connect() as connection:
             connection.execute(
@@ -99,6 +107,7 @@ class AgentService:
         changed = False
         if state["status"] == "running" and state["id"] not in self._active:
             state["status"] = "idle"
+            state["operation"] = None
             state["last_error"] = "上次操作被中断，请先查看任务状态。执行结果不确定的操作不会自动重试。"
             for action in state["actions"]:
                 if action["status"] == "running":
@@ -118,13 +127,14 @@ class AgentService:
             key: copy.deepcopy(state[key])
             for key in ("id", "provider", "model", "status", "messages", "last_error", "created_at", "updated_at")
         } | {
+            "operation": copy.deepcopy(state.get("operation")),
             "actions": [
                 {
                     key: copy.deepcopy(action.get(key))
                     for key in ("id", "tool", "title", "arguments", "preview", "status", "result", "error", "expires_at")
                 }
                 for action in state["actions"]
-            ]
+            ],
         }
 
     def create(self) -> dict:
@@ -135,6 +145,7 @@ class AgentService:
                 "provider": profile["provider"],
                 "model": profile["model"],
                 "status": "idle",
+                "operation": None,
                 "messages": [],
                 "actions": [],
                 "history": [],
@@ -230,7 +241,65 @@ class AgentService:
             message = "该工具无法完成：请检查参数、任务状态、输入文件及可用资源。"
         return {"error": message}
 
-    def send(self, session_id: str, message: str, request_id: str, context_job_id: str | None, tools) -> dict:
+    def close(self) -> None:
+        with self._lock:
+            self._closed = True
+            for operation, _ in self._operations.values():
+                operation.cancel()
+        self._executor.shutdown(wait=True)
+
+    def _operation(self, state: dict) -> OperationContext:
+        def progress(value: dict):
+            with self._lock:
+                previous = state.get("operation") or {}
+                if previous.get("phase") != value.get("phase"):
+                    previous = {key: previous[key] for key in ("cancel_requested", "job_id") if key in previous}
+                state["operation"] = self.config.sanitize({**previous, **value})
+                self._save(state)
+
+        operation = OperationContext(LOCAL_SECONDS, progress)
+        state["operation"] = {"phase": "starting", "message": "操作已接收，正在准备…", "cancellable": True, "cancel_requested": False}
+        self._operations[state["id"]] = (operation, state)
+        return operation
+
+    def cancel(self, session_id: str) -> dict:
+        with self._lock:
+            state = self._load(session_id)
+            self._recover(state)
+            active = self._operations.get(session_id)
+            if active:
+                operation, state = active
+                if operation.cancel():
+                    state["operation"].update(cancel_requested=True, message="正在停止尚未提交的操作…")
+                    self._save(state)
+            return self._public(state)
+
+    def _dispatch(self, function, state: dict, *args, capacity) -> dict:
+        # Claim, persistence and scheduling occur under one lock; polling cannot
+        # recover a request before its worker has been registered.
+        with self._lock:
+            public = self._public(state)
+            try:
+                self._executor.submit(function, state, *args)
+            except Exception:
+                state["status"] = "idle"
+                state["operation"] = None
+                state["last_error"] = "后台操作无法启动，尚未执行，请稍后重新规划。"
+                for action in state["actions"]:
+                    if action["status"] == "running":
+                        action.update(status="failed", error=state["last_error"])
+                self._message(state, "system", state["last_error"])
+                try:
+                    self._save(state)
+                finally:
+                    self._active.discard(state["id"])
+                    self._operations.pop(state["id"], None)
+                    capacity.release()
+                    self._worker_capacity.release()
+                return self._public(state)
+            return public
+
+    def send(self, session_id: str, message: str, request_id: str, context_job_id: str | None, tools, *, background: bool = False) -> dict:
         digest = hashlib.sha256(serialized([message, context_job_id]).encode()).hexdigest()
         with self._lock:
             state = self._load(session_id)
@@ -248,7 +317,10 @@ class AgentService:
             provider, model, key = self.config.credentials()
             if provider != state["provider"]:
                 raise AgentError("服务商已切换，请新建对话后继续。", 409)
+            if self._closed or not self._worker_capacity.acquire(blocking=False):
+                raise AgentError("AI 后台操作已满或正在关闭，请稍后再试。", 429)
             if not self._capacity.acquire(blocking=False):
+                self._worker_capacity.release()
                 raise AgentError("AI 正在处理其他请求，请稍后再试。", 429)
             client = ProviderClient(provider, model, key)
             state["model"] = model
@@ -262,20 +334,41 @@ class AgentService:
                 content += "\n\n当前界面选择的任务 ID（请先用工具核实）：" + context_job_id
             state["history"].append(client.user_message(self.config.sanitize(content)))
             self._active.add(session_id)
+            operation = self._operation(state)
             try:
                 self._save(state)
             except Exception:
                 self._active.discard(session_id)
+                self._operations.pop(session_id, None)
                 self._capacity.release()
+                self._worker_capacity.release()
                 raise
-        deadline, total_calls = time.monotonic() + TURN_SECONDS, 0
+            if background:
+                return self._dispatch(self._run_send, state, client, tools, operation, capacity=self._capacity)
+        return self._run_send(state, client, tools, operation)
+
+    def _run_send(self, state: dict, client, tools, operation: OperationContext) -> dict:
+        session_id = state["id"]
+        remaining, total_calls, model_claimed = TURN_SECONDS, 0, True
         try:
             history = copy.deepcopy(state["history"])
             for _ in range(MAX_ROUNDS):
-                remaining = deadline - time.monotonic()
+                operation.checkpoint()
                 if remaining <= 0:
                     raise AgentError("本轮调度已达到时间上限，请根据已读取的结果继续提问。", 504)
-                response = client.complete(self.config.sanitize(history), INSTRUCTIONS, tools.definitions(), timeout=min(60, remaining))
+                if not model_claimed:
+                    model_claimed = self._capacity.acquire(blocking=False)
+                    if not model_claimed:
+                        raise AgentError("AI 正在处理其他请求，已保存工具结果，请稍后继续。", 429)
+                operation.report({"phase": "model", "message": "正在等待模型回复…"})
+                started = time.monotonic()
+                try:
+                    response = client.complete(self.config.sanitize(history), INSTRUCTIONS, tools.definitions(), timeout=min(60, remaining))
+                finally:
+                    remaining -= time.monotonic() - started
+                    self._capacity.release()
+                    model_claimed = False
+                operation.checkpoint()
                 response = self.config.sanitize(response)
                 total_calls += len(response["calls"])
                 if total_calls > MAX_TOOL_CALLS:
@@ -290,7 +383,9 @@ class AgentService:
                         if tools.is_mutating(call["name"]):
                             if len(state["actions"]) + len(pending) >= MAX_ACTIONS or len(pending) >= 4:
                                 raise AgentError("本轮方案数量已达上限，请分批提出请求。")
-                            prepared = tools.prepare_action(call["name"], arguments)
+                            with self._local_tool(operation, call["name"]):
+                                prepared = tools.prepare_action(call["name"], arguments)
+                            operation.checkpoint()
                             if len(serialized(prepared).encode()) > 64 * 1024:
                                 raise AgentError("执行方案过大，请缩小请求范围。")
                             expiry = time.time() + APPROVAL_SECONDS
@@ -312,14 +407,19 @@ class AgentService:
                                 "preview": action["preview"],
                             }
                         else:
-                            result = tools.run_read(call["name"], arguments)
+                            with self._local_tool(operation, call["name"]):
+                                result = tools.run_read(call["name"], arguments)
+                            operation.checkpoint()
                             if len(serialized(result).encode()) > 24 * 1024:
                                 result = {"error": "查询结果过大，请缩小查询范围或指定单个任务。"}
+                    except (OperationCancelled, OperationTimeout):
+                        raise
                     except Exception as exc:
                         result = self._tool_error(exc)
                         LOGGER.info("AI tool rejected: %s (%s)", call["name"], type(exc).__name__)
                     history.append(client.tool_result(call["id"], self.config.sanitize(result)))
                 with self._lock:
+                    operation.checkpoint()
                     state["history"] = history
                     state["actions"].extend(pending)
                     if response["text"]:
@@ -335,20 +435,40 @@ class AgentService:
                 raise AgentError("本轮已达到 6 次模型调用上限，请缩小问题范围后继续。", 409)
         except Exception as exc:
             with self._lock:
-                state["last_error"] = str(exc) if isinstance(exc, AgentError) else "AI 请求失败，请检查配置或稍后重试。"
+                state["last_error"] = (
+                    str(exc)
+                    if isinstance(exc, (AgentError, OperationCancelled, OperationTimeout))
+                    else "AI 请求失败，请检查配置或稍后重试。"
+                )
                 self._message(state, "system", state["last_error"])
             LOGGER.info("AI turn ended with error (%s)", type(exc).__name__)
         finally:
             with self._lock:
                 state["status"] = "idle"
+                state["operation"] = None
                 try:
                     self._save(state)
                 finally:
                     self._active.discard(session_id)
-                    self._capacity.release()
+                    self._operations.pop(session_id, None)
+                    if model_claimed:
+                        self._capacity.release()
+                    self._worker_capacity.release()
         return self._public(state)
 
-    def decide(self, session_id: str, action_id: str, decision: str, tools) -> dict:
+    @contextmanager
+    def _local_tool(self, operation: OperationContext, name: str):
+        if not self._local_capacity.acquire(blocking=False):
+            raise AgentError("本地准备操作已满，请稍后重新规划。", 429)
+        try:
+            with operation.activate(), operation.local():
+                operation.report({"phase": "tool", "tool": name, "message": "正在检查本地任务和输入…"})
+                yield
+                operation.checkpoint()
+        finally:
+            self._local_capacity.release()
+
+    def decide(self, session_id: str, action_id: str, decision: str, tools, *, background: bool = False) -> dict:
         with self._lock:
             state = self._load(session_id)
             self._recover(state)
@@ -369,22 +489,36 @@ class AgentService:
                 return self._public(state)
             if decision != "approve":
                 raise AgentError("无效的确认操作。")
-            if not self._capacity.acquire(blocking=False):
-                raise AgentError("AI 正在处理其他操作，请稍后确认。", 429)
+            if self._closed or not self._worker_capacity.acquire(blocking=False):
+                raise AgentError("AI 后台操作已满或正在关闭，请稍后确认。", 429)
+            if not self._local_capacity.acquire(blocking=False):
+                self._worker_capacity.release()
+                raise AgentError("本地准备操作已满，请稍后确认。", 429)
             # Persist the irreversible claim before invoking any side effect.
             action["status"] = "running"
             state["status"] = "running"
             state["last_error"] = None
             self._active.add(session_id)
+            operation = self._operation(state)
             try:
                 self._save(state)
             except Exception:
                 self._active.discard(session_id)
-                self._capacity.release()
+                self._operations.pop(session_id, None)
+                self._local_capacity.release()
+                self._worker_capacity.release()
                 raise
+            if background:
+                return self._dispatch(self._run_action, state, action, tools, operation, capacity=self._local_capacity)
+        return self._run_action(state, action, tools, operation)
+
+    def _run_action(self, state: dict, action: dict, tools, operation: OperationContext) -> dict:
+        session_id, action_id = state["id"], action["id"]
         LOGGER.info("AI action approved: %s %s", action_id, action["tool"])
         try:
-            result = self.config.sanitize(tools.execute_action(action["tool"], action["arguments"], action["precondition"]))
+            with operation.activate(), operation.local():
+                operation.report({"phase": "tool", "tool": action["tool"], "message": "正在执行已确认操作…"})
+                result = self.config.sanitize(tools.execute_action(action["tool"], action["arguments"], action["precondition"]))
             with self._lock:
                 action["result"] = result
                 action["status"] = "succeeded"
@@ -395,8 +529,18 @@ class AgentService:
         except Exception as exc:
             with self._lock:
                 # A helper may have queued a task before an I/O failure; never replay.
-                action["status"] = "failed" if isinstance(exc, (ValueError, FileNotFoundError, AgentError)) else "uncertain"
-                action["error"] = "操作未完成或结果无法确认，请先检查任务列表和输入状态，再生成新方案；本次操作不会重复执行。"
+                action["status"] = (
+                    "cancelled"
+                    if isinstance(exc, OperationCancelled)
+                    else "failed"
+                    if isinstance(exc, (ValueError, FileNotFoundError, AgentError, OperationTimeout))
+                    else "uncertain"
+                )
+                action["error"] = (
+                    str(exc)
+                    if isinstance(exc, (OperationCancelled, OperationTimeout))
+                    else "操作未完成或结果无法确认，请先检查任务列表和输入状态，再生成新方案；本次操作不会重复执行。"
+                )
                 state["last_error"] = action["error"]
                 self._message(state, "system", action["error"])
                 state["history"].append(
@@ -406,9 +550,12 @@ class AgentService:
         finally:
             with self._lock:
                 state["status"] = "idle"
+                state["operation"] = None
                 try:
                     self._save(state)
                 finally:
                     self._active.discard(session_id)
-                    self._capacity.release()
+                    self._operations.pop(session_id, None)
+                    self._local_capacity.release()
+                    self._worker_capacity.release()
         return self._public(state)
