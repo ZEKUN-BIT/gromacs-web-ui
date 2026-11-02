@@ -44,10 +44,24 @@ jobs:
           python -m pip install --require-hashes --only-binary=:all: -r requirements/dev.lock
           python -m pip install --no-deps --no-build-isolation -e .
           python -m pip check
+      - name: Install Linux NSIS compiler
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends nsis
+          makensis -VERSION
       - name: Check Linux scripts and installer behavior
+        env:
+          GROMACS_REQUIRE_NSIS: '1'
         run: |
           bash -n packaging/windows/*.sh
-          python -m pytest tests/test_windows*.py -q
+          python -m pytest tests/test_windows*.py -q --junitxml=reports/windows-linux-tests.xml
+      - name: Preserve Linux installer test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-linux-test-results
+          path: reports/windows-linux-tests.xml
+          if-no-files-found: warn
   package:
     needs: linux-checks
     runs-on: windows-latest
@@ -114,9 +128,26 @@ jobs:
             if ($LASTEXITCODE -ne 0 -or $compilerVersion.Trim() -ne 'v3.13') {
               throw "Unexpected NSIS compiler version: $compilerVersion"
             }
+            Split-Path -Parent $compiler | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
           } finally {
             Remove-Item -LiteralPath $installer -Force -ErrorAction SilentlyContinue
           }
+      - name: Install NSIS test dependencies
+        shell: powershell
+        run: |
+          python -m pip install --only-binary=:all: pytest==9.1.1
+      - name: Test real UTF-8 and CP1252 installer text
+        shell: powershell
+        env:
+          GROMACS_REQUIRE_NSIS: '1'
+        run: python -m pytest tests/test_windows_nsis.py -q --junitxml=reports/windows-nsis-tests.xml
+      - name: Preserve Windows NSIS test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-nsis-test-results
+          path: reports/windows-nsis-tests.xml
+          if-no-files-found: warn
       - name: Build setup.exe and portable archive
         shell: powershell
         run: python packaging/windows/build.py --makensis "${env:ProgramFiles(x86)}\NSIS\makensis.exe"

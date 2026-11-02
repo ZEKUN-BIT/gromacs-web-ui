@@ -144,39 +144,6 @@ def test_installer_verification_rejects_invalid_archive(damage):
         builder._nsis_archive(bytes(archive), flags=0, max_decoded=1024)
 
 
-@pytest.mark.skipif(shutil.which("makensis") is None, reason="Real NSIS compiler is not installed")
-@pytest.mark.parametrize(
-    "charset",
-    [
-        "UTF8",
-        pytest.param("CP1252", marks=pytest.mark.skipif(sys.platform != "win32", reason="Linux iconv rejects undefined CP1252 bytes")),
-    ],
-)
-def test_real_nsis_compiled_chinese_text(tmp_path, charset):
-    builder.build(tmp_path)
-    installer = tmp_path / "compiled.exe"
-    compiler = shutil.which("makensis")
-    prefix = "/" if Path(compiler).suffix.lower() == ".exe" else "-"
-    subprocess.run(
-        [
-            compiler,
-            prefix + "INPUTCHARSET",
-            charset,
-            prefix + f"DPAYLOAD_DIR={tmp_path / 'windows-payload'}",
-            prefix + f"DOUTPUT_FILE={installer}",
-            prefix + "DAPP_VERSION=0.0.0",
-            str(builder.ASSETS / "installer.nsi"),
-        ],
-        check=True,
-        capture_output=True,
-    )
-    if charset == "UTF8":
-        builder.verify_installer_text(installer)
-    else:
-        with pytest.raises(ValueError, match="WelcomeTitle.*WelcomeText.*FinishText.*RunText.*KeepEnvironment"):
-            builder.verify_installer_text(installer)
-
-
 def test_windows_entrypoints_share_the_power_shell_host_selector():
     assets = ROOT / "packaging/windows"
     launcher = (assets / "Start.cmd").read_text(encoding="utf-8")
