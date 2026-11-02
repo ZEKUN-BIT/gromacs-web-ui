@@ -294,6 +294,38 @@ class ResearchComparisonTests(unittest.TestCase):
         self.assertEqual([item["metric"] for item in result["metrics"]], ["ca_rg_nm"])
         self.assertNotIn("contact_occupancy", result["residues"][0])
 
+    def test_comparison_preserves_source_quality_and_actual_sampling(self):
+        reference = comparison_fixture("reference-job")
+        reference.update(frames=25, window_ns=[10.5, 99.5], warnings=["取样少于 50 帧，分布和占有率估计可能不稳定。"])
+        comparison = comparison_fixture("comparison-job")
+        comparison.update(frames=100, warnings=["采样时间不均匀，占有率为帧比例，不代表驻留时间比例。"])
+        result = compare_reports([reference], [comparison])
+        self.assertEqual(result["sources"][0]["group"], "reference")
+        self.assertEqual(result["sources"][0]["frames"], 25)
+        self.assertEqual(result["sources"][0]["window_ns"], [10.5, 99.5])
+        self.assertEqual(result["sources"][1]["job"], comparison["job"])
+        self.assertTrue(any("reference-job" in warning and "少于 50 帧" in warning for warning in result["warnings"]))
+        self.assertTrue(any("comparison-job" in warning and "采样时间不均匀" in warning for warning in result["warnings"]))
+        self.assertEqual(reference["warnings"], ["取样少于 50 帧，分布和占有率估计可能不稳定。"])
+
+    def test_comparison_bounds_untrusted_source_text_and_marks_missing_sampling(self):
+        reference = comparison_fixture("reference")
+        reference["job"]["name"] = "title\u202e\x00\n" + "x" * 1000
+        reference.update(frames=True, window_ns=[0, float("inf")], warnings=["warning\x00\n" + "x" * 2000] * 20)
+        comparison = comparison_fixture("comparison")
+        comparison["warnings"] = {"unexpected": "object"}
+        result = compare_reports([reference], [comparison])
+        source = result["sources"][0]
+        self.assertLessEqual(len(source["job"]["name"]), 160)
+        self.assertNotIn("\u202e", source["job"]["name"])
+        self.assertNotIn("\x00", "".join(source["warnings"]))
+        self.assertEqual(len(source["warnings"]), 13)
+        self.assertTrue(all(len(warning) <= 500 for warning in source["warnings"]))
+        self.assertIsNone(source["frames"])
+        self.assertIsNone(source["window_ns"])
+        self.assertEqual(result["sources"][1]["warnings"], [])
+        self.assertIsNone(result["sources"][1]["frames"])
+
     def test_request_bounds_and_report_path_safety(self):
         for kwargs in ({"end_ns": 0}, {"research_stride": 0}, {"begin_ns": float("nan")}, {"contact_cutoff_nm": 3}):
             with self.assertRaises(ValidationError):

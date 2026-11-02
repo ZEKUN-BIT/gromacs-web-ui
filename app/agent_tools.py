@@ -18,6 +18,7 @@ from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from .agent_diagnostics import failure_diagnostics, quality_diagnostics
 from .catalog import list_templates
 from .existing_analysis import INPUT_SUFFIXES, analysis_inputs, create_existing_analysis, preflight_existing_analysis, source_file
 from .gromacs import WORKFLOWS
@@ -127,6 +128,7 @@ GMX_COMMANDS = frozenset(
         "anaeig",
         "sham",
         "make_ndx",
+        "select",
         "genrestr",
     }
 )
@@ -206,7 +208,7 @@ class Simulation(Arguments):
 TOOLS = {
     "workspace_summary": (Arguments, False, "查看任务数量、执行器状态和资源限制，不含本机路径或密钥。"),
     "list_jobs": (JobList, False, "分页查询任务摘要；search 可搜索名称、状态、工作流，project 为精确项目筛选。"),
-    "get_job": (Target, False, "查看任务状态、可用操作、科学参数和质量检查状态；不读取原始结构、轨迹或日志。"),
+    "get_job": (Target, False, "查看任务状态、可用操作、科学参数、失败步骤和白名单质量诊断；不读取原始结构、轨迹或日志。"),
     "analysis_inputs": (Target, False, "列出已完成任务可用于分析的相对文件名与大小。"),
     "available_workflows": (Arguments, False, "查看支持的科学工作流和协议模板摘要，用于准备模拟表单。"),
     "clone_job": (Clone, True, "建议复制已有安全工作流并加入运行队列；必须由用户批准后执行。"),
@@ -321,16 +323,16 @@ class AgentTools:
             return result
         meta = self.store.get(args["job_id"])
         safe = self._runnable(meta, raise_error=False)
-        quality = []
         with self.store.job_files_lock(meta["id"]):
-            for item in quality_summary(self.store.job_dir(meta["id"])):
-                if item["status"] in {"检查通过", "检查未通过", "需要复核", "PASS", "FAIL", "WARNING", "需阅读报告", "空报告"}:
-                    quality.append({"file": item["file"], "status": item["status"]})
+            reports = quality_summary(self.store.job_dir(meta["id"]))
+            quality = quality_diagnostics(reports)
         return {
             "job": _summary(meta),
             "parameters": _scientific_parameters(meta.get("params") or {}),
             "resources": self._resources(meta.get("params")),
             "quality": quality,
+            "quality_truncated": len(quality) < len(reports),
+            "diagnostics": failure_diagnostics(meta),
             "capabilities": {
                 "clone": safe and meta["status"] not in {"preparing", "running"},
                 "cancel": meta.get("workflow") in SAFE_WORKFLOWS and meta["status"] in {"preparing", "queued", "running", "interrupted"},

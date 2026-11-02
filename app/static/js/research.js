@@ -1,5 +1,5 @@
-import { api, debounce, escapeHtml, state } from "./core.js?v=ed99335f08f47fd8";
-import { drawPlot, plotTheme } from "./plots.js?v=ed99335f08f47fd8";
+import { api, debounce, escapeHtml, state } from "./core.js?v=a3c62023f9227a95";
+import { drawPlot, plotTheme } from "./plots.js?v=a3c62023f9227a95";
 
 const labels = {
   ca_rmsd_nm: "C-alpha RMSD (nm)", ca_rg_nm: "C-alpha Rg (nm)",
@@ -262,7 +262,11 @@ export function bindResearch() {
     try {
       const result = await api("/api/research/compare", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(request) });
       if (state.activeJobId !== jobId) return;
-      root.innerHTML = warningList(result.warnings) + '<p class="research-method">差值方向：对照组 − 参考组。组均值对每条轨迹等权，± 为轨迹均值之间的 SD。</p>' + table(
+      const sourceTable = (result.sources || []).length ? '<h4>来源轨迹与实际取样范围</h4>' + table(
+        ["分组", "任务", "任务 ID", "取样帧数", "首末取样时间 (ns)"], result.sources.map((source) => [
+          source.group === "reference" ? "参考组" : "对照组", source.job.name, source.job.id, source.frames ?? "未记录",
+          source.window_ns ? `${number(source.window_ns[0])}–${number(source.window_ns[1])}` : "未记录"])) : "";
+      root.innerHTML = warningList(result.warnings) + sourceTable + '<p class="research-method">差值方向：对照组 − 参考组。组均值对每条轨迹等权，± 为轨迹均值之间的 SD。</p>' + table(
         ["指标", `参考组 (n=${result.reference.length})`, `对照组 (n=${result.comparison.length})`, "差值"], result.metrics.map((row) => [labels[row.metric] || row.metric,
           `${valueLabel(row.metric, row.reference.mean)}${row.reference.sd == null ? "" : ` ± ${valueLabel(row.metric, row.reference.sd)}`}`,
           `${valueLabel(row.metric, row.comparison.mean)}${row.comparison.sd == null ? "" : ` ± ${valueLabel(row.metric, row.comparison.sd)}`}`,

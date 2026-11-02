@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import math
+import unicodedata
 from collections import defaultdict
 from statistics import fmean, stdev
 
@@ -76,6 +78,38 @@ def _replica_stats(values: list[float]) -> dict:
     return {"mean": fmean(values), "sd": stdev(values) if len(values) > 1 else None, "n": len(values), "values": values}
 
 
+def _display_text(value: object, limit: int) -> str:
+    """Reports are local, user-editable data; bound text and remove control characters."""
+    if not isinstance(value, str):
+        return ""
+    return "".join(character for character in value[: limit * 2] if not unicodedata.category(character).startswith("C"))[:limit]
+
+
+def _source_quality(report: dict, group: str) -> dict:
+    job = report.get("job") if isinstance(report.get("job"), dict) else {}
+    frames = report.get("frames")
+    window = report.get("window_ns")
+    valid_window = (
+        isinstance(window, list)
+        and len(window) == 2
+        and all(type(value) in {int, float} and 0 <= value <= 1e12 and math.isfinite(value) for value in window)
+        and window[1] >= window[0]
+    )
+    raw_warnings = report.get("warnings")
+    raw_warnings = raw_warnings if isinstance(raw_warnings, list) else []
+    warnings = [text for item in raw_warnings[:12] if (text := _display_text(item, 500))]
+    if len(raw_warnings) > 12:
+        warnings.append("来源报告还有其他警告，请查看完整研究报告。")
+    return {
+        "job": {"id": _display_text(job.get("id"), 255), "name": _display_text(job.get("name"), 160)},
+        "group": group,
+        "frames": frames if type(frames) is int and 0 < frames <= 1_000_000_000 else None,
+        # These are the actual first/last sampled times, not the requested window.
+        "window_ns": window if valid_window else None,
+        "warnings": warnings,
+    }
+
+
 def compare_reports(reference: list[dict], comparison: list[dict]) -> dict:
     all_reports = reference + comparison
     identities = []
@@ -91,6 +125,13 @@ def compare_reports(reference: list[dict], comparison: list[dict]) -> dict:
         "单条轨迹是一个取样单位；组内多条轨迹时提供轨迹均值的 SD，不进行逐帧显著性检验。文件去重不等于独立性验证。",
         "RMSD 相对于各自的起始构象，均值差不代表两种蛋白之间的结构 RMSD；独立 PCA 的坐标不可直接比较。",
     ]
+    sources = [
+        _source_quality(report, group) for group, reports in (("reference", reference), ("comparison", comparison)) for report in reports
+    ]
+    for source in sources:
+        job = source["job"]
+        label = f"{job['name']} ({job['id']})" if job["name"] else job["id"] or "未知任务"
+        warnings.extend(f"来源 {label}：{warning}" for warning in source["warnings"])
     if min(len(reference), len(comparison)) < 2:
         warnings.append("至少一组只有一个轨迹，本次为描述性对照，无法估计该组的副本间变异。")
     protocol_rows = []
@@ -149,8 +190,9 @@ def compare_reports(reference: list[dict], comparison: list[dict]) -> dict:
     except ValueError as exc:
         warnings.append(str(exc))
     return {
-        "reference": [item["job"] for item in reference],
-        "comparison": [item["job"] for item in comparison],
+        "reference": [item["job"] for item in sources if item["group"] == "reference"],
+        "comparison": [item["job"] for item in sources if item["group"] == "comparison"],
+        "sources": sources,
         "metrics": metrics,
         "residues": residues,
         "protocol": protocol_rows,
