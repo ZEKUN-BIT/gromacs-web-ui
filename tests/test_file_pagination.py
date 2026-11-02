@@ -2,6 +2,7 @@ from types import SimpleNamespace
 
 from fastapi.testclient import TestClient
 
+import app.job_file_listing as job_file_listing
 import app.main as main
 from app.files import relative_file_page
 
@@ -40,7 +41,7 @@ def test_page_api_validates_options_and_refreshes_active_files(tmp_path, monkeyp
     monkeypatch.setattr(main, "STORE", SimpleNamespace(get=lambda _: meta))
     main.FILE_PAGE_CACHE.clear()
     clock = [10.0]
-    monkeypatch.setattr(main.time, "monotonic", lambda: clock[0])
+    monkeypatch.setattr(job_file_listing.time, "monotonic", lambda: clock[0])
     (tmp_path / "one.xtc").write_text("one")
     client = TestClient(main.app)
     url = "/api/jobs/paged/files"

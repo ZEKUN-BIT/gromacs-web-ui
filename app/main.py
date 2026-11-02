@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import asyncio
 import fcntl
-import io
 import json
 import logging
 import math
@@ -11,10 +10,7 @@ import shutil
 import sqlite3
 import stat
 import tempfile
-import threading
-import time
-import zipfile
-from contextlib import ExitStack, asynccontextmanager
+from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Annotated
 from urllib.parse import urlsplit
@@ -32,6 +28,7 @@ from .agent_api import agent_router
 from .analysis.comparison import compare_research_jobs, load_research_report
 from .analysis_stream import analysis_preparation_events
 from .api_errors import error_advice
+from .benchmark import create_benchmark
 from .diagnostics import environment_diagnostics, host_information
 from .existing_analysis import analysis_inputs, analysis_source, create_existing_analysis, preflight_existing_analysis, source_file
 from .files import (
@@ -41,15 +38,12 @@ from .files import (
     _rewrite_uploaded_file_references,
     ensure_under_root,
     read_log_chunk,
-    relative_file_page,
-    relative_files,
     stage_uploads,
     validate_uploaded_file_references,
 )
 from .gromacs import (
     WORKFLOWS,
     JobStore,
-    Step,
     apply_mdp_overrides,
     apply_stdin_overrides,
     build_steps,
@@ -68,6 +62,15 @@ from .gromacs import (
     write_missing_mdp_files,
     xvg_plots,
 )
+from .job_file_listing import (  # noqa: F401 - caches and limits are re-exported for tests
+    ACTIVE_FILE_CACHE_SECONDS,
+    FILE_LIST_CACHE,
+    FILE_PAGE_CACHE,
+    MAX_FILE_LIST_ITEMS,
+    forget_file_lists,
+    list_job_files,
+    xvg_archive,
+)
 from .models import BenchmarkRequest, ExistingAnalysisRequest, ProtocolPreviewRequest, ResearchComparisonRequest, SimulationParams
 from .product_api import product_router
 from .progress import enrich_progress
@@ -85,13 +88,7 @@ STORE = JobStore(
 )
 
 
-FILE_LIST_CACHE: dict[tuple[int, str], tuple[str, list[dict], bool, float]] = {}
-FILE_LIST_CACHE_LOCK = threading.Lock()
-FILE_PAGE_CACHE: dict[tuple, tuple[str, dict, float]] = {}
-ACTIVE_FILE_CACHE_SECONDS = 5.0
-MAX_FILE_CACHE_ENTRIES = 256
 WEB_PROCESS_LOCK = None
-MAX_FILE_LIST_ITEMS = 1000
 SSE_LOG_CHUNK_BYTES = 64 * 1024
 
 app = FastAPI(title="GROMACS Web UI", version="0.2.10")
@@ -350,9 +347,7 @@ def storage_cleanup(request: CleanupRequest, http_request: Request) -> dict:
         result = execute_cleanup(STORE, request)
     except (OSError, RuntimeError, ValueError) as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
-    with FILE_LIST_CACHE_LOCK:
-        for job_id in [*result["deleted_jobs"], *result["cleaned_jobs"]]:
-            FILE_LIST_CACHE.pop((id(STORE), job_id), None)
+    forget_file_lists(STORE, [*result["deleted_jobs"], *result["cleaned_jobs"]])
     return result
 
 
@@ -404,6 +399,13 @@ def protocol_preview(request: ProtocolPreviewRequest) -> dict:
         return {"stages": preview_protocol(request.model_dump(exclude={"uploaded_mdp"}), BASE_DIR, request.uploaded_mdp)}
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+def _job_or_404(job_id: str) -> dict:
+    try:
+        return STORE.get(job_id)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="Job not found") from exc
 
 
 @app.get("/api/jobs")
@@ -741,117 +743,16 @@ def clone_job(job_id: str, request: CloneRequest | None = None) -> dict:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 
-def _benchmark_tpr(meta: dict) -> Path:
-    workdir = STORE.job_dir(str(meta["id"]))
-    argument_sets = [list(meta.get("process_args") or [])]
-    argument_sets.extend([list(command.get("args") or []) for command in reversed(meta.get("commands") or [])])
-    names = []
-    for args in argument_sets:
-        args = [str(arg) for arg in args]
-        if "-s" in args and args.index("-s") + 1 < len(args):
-            names.append(args[args.index("-s") + 1])
-        if "-deffnm" in args and args.index("-deffnm") + 1 < len(args):
-            names.append(f"{args[args.index('-deffnm') + 1]}.tpr")
-    for name in names:
-        candidate = ensure_under_root(workdir / name, workdir)
-        if candidate.suffix.lower() == ".tpr" and candidate.is_file():
-            return candidate
-    candidates = sorted(workdir.glob("*.tpr"), key=lambda path: path.stat().st_mtime, reverse=True)
-    if not candidates:
-        raise RuntimeError("No generated TPR is available in this task yet.")
-    return candidates[0]
-
-
 @app.post("/api/jobs/{job_id}/benchmark")
 def benchmark_job(job_id: str, request: BenchmarkRequest | None = None) -> dict:
-    request = request or BenchmarkRequest()
     try:
-        with ExitStack() as locks:
-            locks.enter_context(STORE.job_files_lock(job_id))
-            source = STORE.get(job_id)
-            if source.get("deletion_pending") or source.get("maintenance_pending"):
-                raise RuntimeError("Source task files are under maintenance.")
-            source_tpr = _benchmark_tpr(source)
-            host = host_information()
-            physical = int(host["physical_core_count"])
-            logical = int(host["cpu_count"])
-            threads = list(dict.fromkeys(request.threads)) or sorted({physical, max(physical, (physical + logical + 1) // 2), logical})
-            if any(isinstance(value, bool) or value < 1 or value > logical for value in threads):
-                raise ValueError(f"Benchmark thread counts must be between 1 and {logical}.")
-            profiles = []
-            steps = []
-            gmx_bin = str((source.get("params") or {}).get("gmx_bin") or current_settings()["gmx_bin"])
-            for ntomp in threads:
-                stem = f"benchmark-1x{ntomp}"
-                args = [
-                    gmx_bin,
-                    "mdrun",
-                    "-s",
-                    "benchmark.tpr",
-                    "-deffnm",
-                    stem,
-                    "-ntmpi",
-                    "1",
-                    "-ntomp",
-                    str(ntomp),
-                    "-nsteps",
-                    str(request.nsteps),
-                    "-noconfout",
-                    "-pin",
-                    request.pin,
-                ]
-                if request.gpu:
-                    args.extend(["-nb", "gpu"])
-                profiles.append({"ntmpi": 1, "ntomp": ntomp, "log": f"{stem}.log"})
-                steps.append(Step(f"Benchmark 1×{ntomp}", args, outputs=[f"{stem}.log"]))
-            steps.append(
-                Step(
-                    "Summarize benchmark",
-                    ["internal", "summarize_benchmarks"],
-                    outputs=["benchmark-results.json", "benchmark-report.txt"],
-                    kind="internal",
-                    operation="summarize_benchmarks",
-                    data={
-                        "profiles": profiles,
-                        "nsteps": request.nsteps,
-                        "json_output": "benchmark-results.json",
-                        "text_output": "benchmark-report.txt",
-                    },
-                )
-            )
-            params = {
-                "workflow": "benchmark",
-                "source_job_id": job_id,
-                "ntmpi": 1,
-                "ntomp": max(threads),
-                "benchmark_threads": threads,
-                "benchmark_nsteps": request.nsteps,
-                "gpu": request.gpu,
-                "pin": request.pin,
-            }
-            created = STORE.create(f"{source.get('name') or 'GROMACS'} benchmark", params, ["benchmark.tpr"], steps)
-            try:
-                locks.enter_context(STORE.job_files_lock(created["id"]))
-                if STORE.get(created["id"])["status"] != "preparing":
-                    return STORE.get(created["id"])
-                shutil.copy2(source_tpr, STORE.job_dir(created["id"]) / "benchmark.tpr")
-                prepared = STORE.get(created["id"])
-                manifest = write_experiment_manifest(prepared)
-                STORE.update(
-                    created["id"],
-                    benchmark_source_job=job_id,
-                    experiment_manifest="experiment-manifest.json",
-                    input_hashes=manifest["input_files"],
-                )
-                if STORE.get(created["id"])["status"] != "preparing":
-                    return STORE.get(created["id"])
-                STORE.start(created["id"], steps)
-                return STORE.get(created["id"])
-            except Exception as exc:
-                if STORE.get(created["id"])["status"] == "cancelled":
-                    return STORE.get(created["id"])
-                STORE.update(created["id"], status="failed", error=f"Failed to prepare benchmark: {exc}")
-                raise
+        return create_benchmark(
+            STORE,
+            job_id,
+            request or BenchmarkRequest(),
+            host=host_information(),
+            default_gmx_bin=current_settings()["gmx_bin"],
+        )
     except FileNotFoundError as exc:
         raise HTTPException(status_code=404, detail="Job or TPR not found") from exc
     except (OSError, RuntimeError, ValueError) as exc:
@@ -946,8 +847,7 @@ def delete_job(job_id: str) -> dict:
         raise HTTPException(status_code=404, detail="Job not found") from exc
     except RuntimeError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
-    with FILE_LIST_CACHE_LOCK:
-        FILE_LIST_CACHE.pop((id(STORE), job_id), None)
+    forget_file_lists(STORE, [job_id])
     return {"deleted": True, "job": meta}
 
 
@@ -958,10 +858,7 @@ def job_log(
     offset: Annotated[int | None, Query(ge=0)] = None,
     limit: Annotated[int, Query(ge=1, le=MAX_LOG_TAIL_BYTES)] = SSE_LOG_CHUNK_BYTES,
 ):
-    try:
-        STORE.get(job_id)
-    except FileNotFoundError as exc:
-        raise HTTPException(status_code=404, detail="Job not found") from exc
+    _job_or_404(job_id)
     path = STORE.log_path(job_id)
     if offset is not None:
         return read_log_chunk(path, offset, limit)
@@ -1056,38 +953,8 @@ def job_files(
     offset: Annotated[int, Query(ge=0, le=1_000_000)] = 0,
     search: Annotated[str, Query(max_length=256)] = "",
 ) -> dict:
-    try:
-        meta = STORE.get(job_id)
-    except FileNotFoundError as exc:
-        raise HTTPException(status_code=404, detail="Job not found") from exc
-    cache_key = f"{meta['workdir']}:{meta.get('status')}:{meta.get('step_index')}:{meta.get('storage_revision', 0)}"
-    entry_key = (id(STORE), job_id)
-    active = meta.get("status") in {"preparing", "queued", "running", "interrupted"}
-    now = time.monotonic()
-    if limit is not None:
-        page_key = (id(STORE), job_id, search, offset, limit)
-        with FILE_LIST_CACHE_LOCK:
-            cached_page = FILE_PAGE_CACHE.get(page_key)
-            if cached_page and cached_page[0] == cache_key and (not active or now - cached_page[2] < ACTIVE_FILE_CACHE_SECONDS):
-                return cached_page[1]
-        page = relative_file_page(Path(meta["workdir"]), search=search, offset=offset, limit=limit)
-        with FILE_LIST_CACHE_LOCK:
-            if len(FILE_PAGE_CACHE) >= MAX_FILE_CACHE_ENTRIES:
-                FILE_PAGE_CACHE.pop(next(iter(FILE_PAGE_CACHE)))
-            FILE_PAGE_CACHE[page_key] = (cache_key, page, now)
-        return page
-    with FILE_LIST_CACHE_LOCK:
-        cached = FILE_LIST_CACHE.get(entry_key)
-        if cached and cached[0] == cache_key and (not active or now - cached[3] < ACTIVE_FILE_CACHE_SECONDS):
-            return {"files": cached[1], "truncated": cached[2]}
-    scanned = relative_files(Path(meta["workdir"]), max_files=MAX_FILE_LIST_ITEMS + 1)
-    truncated = len(scanned) > MAX_FILE_LIST_ITEMS
-    files = scanned[:MAX_FILE_LIST_ITEMS]
-    with FILE_LIST_CACHE_LOCK:
-        if len(FILE_LIST_CACHE) >= MAX_FILE_CACHE_ENTRIES:
-            FILE_LIST_CACHE.pop(next(iter(FILE_LIST_CACHE)))
-        FILE_LIST_CACHE[entry_key] = (cache_key, files, truncated, now)
-    return {"files": files, "truncated": truncated}
+    meta = _job_or_404(job_id)
+    return list_job_files(STORE, job_id, meta, limit=limit, offset=offset, search=search)
 
 
 @app.get("/api/jobs/{job_id}/plots")
@@ -1098,10 +965,7 @@ def job_plots(
     begin_ns: float | None = None,
     end_ns: float | None = None,
 ) -> dict:
-    try:
-        meta = STORE.get(job_id)
-    except FileNotFoundError as exc:
-        raise HTTPException(status_code=404, detail="Job not found") from exc
+    meta = _job_or_404(job_id)
     if replica is not None and not 1 <= replica <= 16:
         raise HTTPException(status_code=400, detail="Replica must be between 1 and 16")
     for value in (begin_ns, end_ns):
@@ -1114,36 +978,13 @@ def job_plots(
 
 @app.get("/api/jobs/{job_id}/plots/download")
 def download_plot_data(job_id: str) -> Response:
-    try:
-        meta = STORE.get(job_id)
-    except FileNotFoundError as exc:
-        raise HTTPException(status_code=404, detail="Job not found") from exc
-    workdir = Path(meta["workdir"]).resolve()
-    files = []
-    total_bytes = 0
-    for candidate in sorted(workdir.rglob("*.xvg")):
-        if len(files) >= 100:
-            break
-        try:
-            path = ensure_under_root(candidate, workdir)
-            if path.is_symlink() or not path.is_file():
-                continue
-            size = path.stat().st_size
-        except OSError:
-            continue
-        if total_bytes + size > 100 * 1024 * 1024:
-            break
-        files.append(path)
-        total_bytes += size
-    if not files:
+    meta = _job_or_404(job_id)
+    content = xvg_archive(Path(meta["workdir"]))
+    if content is None:
         raise HTTPException(status_code=404, detail="No XVG plot data found for this job")
-    archive = io.BytesIO()
-    with zipfile.ZipFile(archive, "w", compression=zipfile.ZIP_DEFLATED) as bundle:
-        for path in files:
-            bundle.write(path, path.relative_to(workdir).as_posix())
     filename = f"{meta.get('directory_name') or job_id}-xvg.zip"
     return Response(
-        content=archive.getvalue(),
+        content=content,
         media_type="application/zip",
         headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )
@@ -1151,10 +992,7 @@ def download_plot_data(job_id: str) -> Response:
 
 @app.get("/api/jobs/{job_id}/download")
 def download_file(job_id: str, path: str) -> FileResponse:
-    try:
-        meta = STORE.get(job_id)
-    except FileNotFoundError as exc:
-        raise HTTPException(status_code=404, detail="Job not found") from exc
+    meta = _job_or_404(job_id)
     workdir = Path(meta["workdir"])
     try:
         target = ensure_under_root(workdir / path, workdir)

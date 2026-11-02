@@ -233,7 +233,7 @@ def test_benchmark_preparation_locks_source_and_cancelled_target(tmp_path, monke
         return result
 
     monkeypatch.setattr(main.shutil, "copy2", slow_copy)
-    monkeypatch.setattr(main, "write_experiment_manifest", slow_manifest)
+    monkeypatch.setattr("app.benchmark.write_experiment_manifest", slow_manifest)
     job = asyncio.run(scenario())
     assert job["status"] == "cancelled"
     assert store.get(source["id"])["status"] == "completed"

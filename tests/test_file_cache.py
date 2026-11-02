@@ -3,6 +3,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import Mock, patch
 
+import app.job_file_listing as job_file_listing
 import app.main as main
 
 
@@ -20,7 +21,7 @@ class FileListCacheTests(unittest.TestCase):
         }
         files = [{"path": "result.xtc", "size": 10, "modified": "now"}]
 
-        with patch.object(main, "STORE", store), patch.object(main, "relative_files", return_value=files) as scan:
+        with patch.object(main, "STORE", store), patch.object(job_file_listing, "relative_files", return_value=files) as scan:
             first = main.job_files("job-1")
             second = main.job_files("job-1")
 
@@ -36,7 +37,7 @@ class FileListCacheTests(unittest.TestCase):
             "workdir": "/tmp/job-2",
         }
 
-        with patch.object(main, "STORE", store), patch.object(main, "relative_files", return_value=[]) as scan:
+        with patch.object(main, "STORE", store), patch.object(job_file_listing, "relative_files", return_value=[]) as scan:
             main.job_files("job-2")
             main.job_files("job-2")
             scan.assert_called_once_with(Path("/tmp/job-2"), max_files=main.MAX_FILE_LIST_ITEMS + 1)
@@ -56,7 +57,7 @@ class FileListCacheTests(unittest.TestCase):
             trajectory.write_bytes(b"frame")
             store = Mock()
             store.get.return_value = {"id": "active", "status": status, "step_index": 4, "workdir": folder}
-            with patch.object(main, "STORE", store), patch.object(main.time, "monotonic", return_value=10) as clock:
+            with patch.object(main, "STORE", store), patch.object(job_file_listing.time, "monotonic", return_value=10) as clock:
                 initial = main.job_files("active")
                 trajectory.write_bytes(b"frame" * 10)
                 (root / "md.cpt").write_bytes(b"checkpoint")

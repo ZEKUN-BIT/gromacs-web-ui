@@ -3,6 +3,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
+import app.benchmark as benchmark
 import app.main as main
 from app.execution import WorkerEngine
 from app.gromacs import Step
@@ -35,7 +36,7 @@ class BenchmarkTests(unittest.TestCase):
                 patch.object(main, "STORE", store),
                 patch.object(main, "current_settings", return_value={"gmx_bin": str(fake_gmx)}),
                 patch.object(main, "host_information", return_value={"physical_core_count": 4, "cpu_count": 8}),
-                patch.object(main, "write_experiment_manifest", return_value={"input_files": {}}),
+                patch.object(benchmark, "write_experiment_manifest", return_value={"input_files": {}}),
             ):
                 created = main.benchmark_job(
                     source["id"],
