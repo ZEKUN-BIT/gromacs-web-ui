@@ -1,6 +1,6 @@
-import { els, state, FILE_FIELD_NAMES, api, toast, confirmDialog, showWorkspaceView, showDetailTab } from "./core.js?v=ed99335f08f47fd8";
-import { refreshJobs, selectJob } from "./jobs.js?v=ed99335f08f47fd8";
-import { product, loadProduct, bindLibrary, downloadJson } from "./library.js?v=ed99335f08f47fd8";
+import { els, state, FILE_FIELD_NAMES, api, toast, confirmDialog, showWorkspaceView, showDetailTab } from "./core.js?v=a3c62023f9227a95";
+import { refreshJobs, selectJob } from "./jobs.js?v=a3c62023f9227a95";
+import { product, loadProduct, bindLibrary, downloadJson } from "./library.js?v=a3c62023f9227a95";
 
 let diagnostics = null;
 let diagnosticsGeneration = 0;

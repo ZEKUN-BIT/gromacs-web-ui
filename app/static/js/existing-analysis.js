@@ -1,5 +1,5 @@
-import { api, state, toast } from "./core.js?v=ed99335f08f47fd8";
-import { refreshJobs, selectJob } from "./jobs.js?v=ed99335f08f47fd8";
+import { api, state, toast } from "./core.js?v=a3c62023f9227a95";
+import { refreshJobs, selectJob } from "./jobs.js?v=a3c62023f9227a95";
 
 export async function readAnalysisPreparation(response, onProgress) {
   if (!response.ok) {
