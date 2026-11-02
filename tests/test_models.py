@@ -12,11 +12,13 @@ class UnifiedRequestModelTests(unittest.TestCase):
         self.assertTrue(parsed.dry_run)
         self.assertFalse(parsed.do_fit)
 
-    def test_create_job_multipart_has_only_params_and_files(self) -> None:
+    def test_create_job_multipart_preserves_params_and_files_with_optional_submission_id(self) -> None:
         schema = app.openapi()
         request_schema = schema["paths"]["/api/jobs"]["post"]["requestBody"]["content"]["multipart/form-data"]["schema"]
         component = schema["components"]["schemas"][request_schema["$ref"].rsplit("/", 1)[-1]]
-        self.assertEqual(set(component["properties"]), {"params", "files"})
+        self.assertEqual(set(component["properties"]), {"params", "files", "submission_id"})
+        self.assertNotIn("submission_id", component.get("required", []))
+        self.assertIn({"type": "null"}, component["properties"]["submission_id"]["anyOf"])
 
     def test_cpu_pinning_mode_is_strictly_validated(self) -> None:
         self.assertEqual(SimulationParams.model_validate({"pin": "on"}).pin, "on")

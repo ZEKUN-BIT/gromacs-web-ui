@@ -65,6 +65,7 @@ class JobStore:
         self._analysis_parallel = max(1, min(16, int(analysis_parallel)))
         self._initialize_database()
         self._migrate_json_jobs()
+        self._initialize_process_registry()
         self._index_existing_research_reports()
         self._recover_maintenance_jobs()
 
@@ -98,6 +99,7 @@ class JobStore:
                     version INTEGER NOT NULL DEFAULT 0
                 );
                 CREATE INDEX IF NOT EXISTS jobs_status_created_idx ON jobs(status, created_at);
+                CREATE INDEX IF NOT EXISTS jobs_pending_action_idx ON jobs(created_at) WHERE desired_action IS NOT NULL;
                 CREATE INDEX IF NOT EXISTS jobs_pinned_created_id_idx
                     ON jobs(coalesce(json_extract(meta_json,'$.pinned'),0) DESC,created_at DESC,id DESC);
                 CREATE TABLE IF NOT EXISTS jobs_revision (
@@ -144,6 +146,42 @@ class JobStore:
                 END;
                 """
             )
+
+    def _initialize_process_registry(self) -> None:
+        """Index identities needing verification without rescanning terminal history.
+
+        Keep historical identities in metadata for audits. Triggers also track
+        writes by older workers, which do not know about this registry.
+        """
+        with self._connect() as connection:
+            connection.executescript(
+                """
+                CREATE TABLE IF NOT EXISTS active_job_processes (
+                    job_id TEXT PRIMARY KEY REFERENCES jobs(id) ON DELETE CASCADE
+                );
+                CREATE TRIGGER IF NOT EXISTS job_process_insert AFTER INSERT ON jobs
+                WHEN json_extract(NEW.meta_json,'$.process_pid') IS NOT NULL
+                  OR json_array_length(json_extract(NEW.meta_json,'$.process_identities')) > 0
+                BEGIN INSERT OR IGNORE INTO active_job_processes VALUES(NEW.id); END;
+                CREATE TRIGGER IF NOT EXISTS job_process_update AFTER UPDATE OF meta_json ON jobs
+                WHEN json_extract(NEW.meta_json,'$.process_pid') IS NOT json_extract(OLD.meta_json,'$.process_pid')
+                  OR json_extract(NEW.meta_json,'$.process_pgid') IS NOT json_extract(OLD.meta_json,'$.process_pgid')
+                  OR json_extract(NEW.meta_json,'$.process_cwd') IS NOT json_extract(OLD.meta_json,'$.process_cwd')
+                  OR json_extract(NEW.meta_json,'$.process_started_ticks') IS NOT json_extract(OLD.meta_json,'$.process_started_ticks')
+                  OR json_extract(NEW.meta_json,'$.process_command_fingerprint') IS NOT json_extract(OLD.meta_json,'$.process_command_fingerprint')
+                  OR json_extract(NEW.meta_json,'$.process_identities') IS NOT json_extract(OLD.meta_json,'$.process_identities')
+                BEGIN INSERT OR IGNORE INTO active_job_processes VALUES(NEW.id); END;
+                """
+            )
+            connection.execute("BEGIN IMMEDIATE")
+            if not connection.execute("SELECT 1 FROM store_migrations WHERE name='process_registry_v1'").fetchone():
+                connection.execute(
+                    "INSERT OR IGNORE INTO active_job_processes SELECT id FROM jobs "
+                    "WHERE json_extract(meta_json,'$.process_pid') IS NOT NULL "
+                    "OR json_array_length(json_extract(meta_json,'$.process_identities')) > 0"
+                )
+                connection.execute("INSERT INTO store_migrations VALUES('process_registry_v1', ?)", (utc_now(),))
+            connection.commit()
 
     def _migrate_json_jobs(self) -> None:
         with self._connect() as connection:
@@ -396,9 +434,12 @@ class JobStore:
                 return "A later step requires these outputs; correct the cause and retry."
         return None
 
-    def list(self) -> list[dict]:
+    def list(self, *, status: str | None = None) -> list[dict]:
         with self._connect() as connection:
-            rows = connection.execute("SELECT * FROM jobs ORDER BY created_at DESC").fetchall()
+            where = " WHERE status=?" if status is not None else ""
+            rows = connection.execute(
+                "SELECT * FROM jobs" + where + " ORDER BY created_at DESC", (status,) if status is not None else ()
+            ).fetchall()
         return [self._decode(row) for row in rows]
 
     @staticmethod
@@ -537,7 +578,7 @@ class JobStore:
                 connection.rollback()
                 raise
 
-    def create(self, name: str, params: dict, uploaded_files: list[str], steps: list[Step]) -> dict:
+    def create(self, name: str, params: dict, uploaded_files: list[str], steps: list[Step], *, submission_id: str | None = None) -> dict:
         job_id = f"{datetime.now().strftime('%Y%m%d-%H%M%S')}-{directory_slug(name)}-{uuid4().hex[:8]}"
         workdir = self.job_dir(job_id)
         workdir.mkdir(parents=True, exist_ok=False)
@@ -565,12 +606,21 @@ class JobStore:
             "error": None,
         }
         try:
+            self.log_path(job_id).write_text("", encoding="utf-8")
             with self._connect() as connection:
+                connection.execute("BEGIN IMMEDIATE")
                 connection.execute(
                     "INSERT INTO jobs(id,status,created_at,updated_at,meta_json) VALUES(?,?,?,?,?)",
                     (job_id, "preparing", now, now, json.dumps(meta, ensure_ascii=False)),
                 )
-            self.log_path(job_id).write_text("", encoding="utf-8")
+                if submission_id is not None:
+                    bound = connection.execute(
+                        "UPDATE upload_submissions SET job_id=? WHERE request_id=? AND state='pending' AND job_id IS NULL",
+                        (job_id, submission_id),
+                    )
+                    if bound.rowcount != 1:
+                        raise RuntimeError("Upload submission was cancelled or already bound to a task.")
+                connection.commit()
             return meta
         except Exception:
             shutil.rmtree(workdir, ignore_errors=True)
@@ -780,17 +830,21 @@ class JobStore:
             try:
                 running_rows = connection.execute("SELECT * FROM jobs WHERE status='running'").fetchall()
                 reserved_rows = connection.execute(
-                    "SELECT * FROM jobs WHERE (status IN ('queued','interrupted','failed','cancelled','completed') OR desired_action='cancel') AND "
-                    "(json_extract(meta_json,'$.process_pid') IS NOT NULL OR json_array_length(json_extract(meta_json,'$.process_identities')) > 0)"
+                    "SELECT j.* FROM active_job_processes p CROSS JOIN jobs j ON j.id=p.job_id WHERE j.status <> 'running'"
                 ).fetchall()
                 live_reserved = {}
                 for item in reserved_rows:
                     meta = self._decode(item)
                     if live_process_identities(meta, self.job_dir(item["id"])):
                         live_reserved[item["id"]] = meta
+                    else:
+                        # The writer lock prevents a new identity registration
+                        # racing this verified removal. Audit metadata stays intact.
+                        connection.execute("DELETE FROM active_job_processes WHERE job_id=?", (item["id"],))
                 rows = connection.execute(
-                    "SELECT * FROM jobs WHERE (desired_action IN ('run','resume','adopt') AND status IN ('queued','interrupted')) "
-                    "OR (desired_action='cancel' AND status <> 'running') ORDER BY created_at"
+                    "SELECT * FROM jobs WHERE desired_action IS NOT NULL AND "
+                    "((desired_action IN ('run','resume','adopt') AND status IN ('queued','interrupted')) "
+                    "OR (desired_action='cancel' AND status <> 'running')) ORDER BY created_at"
                 ).fetchall()
                 # Re-adoption and cancellation control an existing process;
                 # they must not wait behind limits intended for new launches.

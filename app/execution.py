@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import codecs
 import hashlib
 import json
 import logging
@@ -9,11 +10,14 @@ import shlex
 import shutil
 import signal
 import sqlite3
+import stat
 import subprocess
+import tempfile
 import threading
 import time
-from contextlib import ExitStack
+from contextlib import ExitStack, contextmanager
 from pathlib import Path
+from typing import BinaryIO, Callable
 
 from . import reproducibility
 from .files import ensure_under_root
@@ -192,6 +196,49 @@ def _mdrun_total_steps(workdir: Path, args: list[str], commands: list[dict]) -> 
     return max(1, int(value)) if value is not None else None
 
 
+def _native_log_path(workdir: Path, args: list[str]) -> Path:
+    def option(flag: str, default: str) -> str:
+        return args[args.index(flag) + 1] if flag in args and args.index(flag) + 1 < len(args) else default
+
+    return ensure_under_root(workdir / option("-g", option("-deffnm", "md") + ".log"), workdir)
+
+
+def _native_log_snapshot(workdir: Path, args: list[str]) -> dict | None:
+    if "mdrun" not in args:
+        return None
+    path = _native_log_path(workdir, args)
+    snapshot = {"path": str(path.relative_to(workdir.resolve()))}
+    try:
+        info = path.stat()
+    except FileNotFoundError:
+        return snapshot
+    return {**snapshot, "inode": info.st_ino, "size": info.st_size, "mtime_ns": info.st_mtime_ns}
+
+
+def _mdrun_completed(meta: dict, workdir: Path) -> bool:
+    """Read a bounded tail of this invocation, excluding an earlier run's marker."""
+    if meta.get("process_step_index", meta.get("step_index")) != meta.get("step_index"):
+        return False
+    path = _native_log_path(workdir, [str(arg) for arg in meta.get("process_args") or []])
+    try:
+        descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    except FileNotFoundError:
+        return False
+    with os.fdopen(descriptor, "rb") as reader:
+        info = os.fstat(reader.fileno())
+        if not stat.S_ISREG(info.st_mode):
+            return False
+        before = meta.get("process_native_log") or {}
+        start = 0
+        if before.get("inode") == info.st_ino:
+            if before.get("mtime_ns") == info.st_mtime_ns and before.get("size") == info.st_size:
+                return False
+            if info.st_size >= int(before.get("size") or 0):
+                start = int(before.get("size") or 0)
+        reader.seek(max(start, info.st_size - 128 * 1024))
+        return b"Finished mdrun" in reader.read(128 * 1024)
+
+
 class WorkerEngine:
     def __init__(self, store: JobStore, worker_id: str):
         self.store = store
@@ -254,6 +301,7 @@ class WorkerEngine:
             try:
                 if live_process_identities(meta, self.store.job_dir(job_id)):
                     raise RuntimeError("Execution manifest deferred because a verified computation process is still active.")
+                self._cleanup_consumed_output(meta)
                 manifest = write_execution_manifest(meta, software=self._software)
                 self.store.update(
                     job_id,
@@ -332,9 +380,14 @@ class WorkerEngine:
                 return
         raise RuntimeError("A verified job process is still active after cancellation; its files and resource reservation were retained.")
 
-    def _cancel_job(self, meta: dict) -> None:
+    def _cancel_job(self, meta: dict, *, drain_output: bool = True) -> None:
         try:
             self._terminate_leftover(self.store.get(meta["id"]))
+            output = meta.get("process_output") or {}
+            workdir = self.store.job_dir(meta["id"])
+            if drain_output and output.get("path") and ensure_under_root(workdir / output["path"], workdir).is_file():
+                with self._open_saved_output(workdir, output) as (path, reader):
+                    self._tail_output(meta["id"], reader, lambda: False, lambda _: None, output=output)
         except Exception as error:
             status = meta["status"] if meta["status"] in {"completed", "failed", "cancelled"} else "interrupted"
             self._finalize_job(meta["id"], status=status, desired_action=None, worker_id=None, error=str(error))
@@ -362,7 +415,7 @@ class WorkerEngine:
         return commands, 0
 
     def recover_orphaned_jobs(self, job_ids: set[str] | None = None) -> None:
-        jobs = self.store.list() if job_ids is None else [self.store.get(job_id) for job_id in job_ids]
+        jobs = self.store.list(status="running") if job_ids is None else [self.store.get(job_id) for job_id in job_ids]
         for meta in jobs:
             if meta.get("status") != "running":
                 continue
@@ -372,13 +425,20 @@ class WorkerEngine:
             workdir = self.store.job_dir(meta["id"])
             step = self._current_step(meta)
             if self._is_mdrun_step(step) and not (step or {}).get("parallel_group"):
-                if identity_matches(meta, workdir):
+                output = meta.get("process_output") or {}
+                same_step = meta.get("process_step_index", meta.get("step_index")) == meta.get("step_index")
+                saved_output = (
+                    output.get("step_index") == meta.get("step_index")
+                    and bool(output.get("path"))
+                    and ensure_under_root(workdir / output["path"], workdir).is_file()
+                )
+                if same_step and (identity_matches(meta, workdir) or saved_output):
                     self.store.update(
                         meta["id"],
                         status="interrupted",
                         desired_action="adopt",
                         worker_id=None,
-                        error="Worker restarted; verified process identity and queued re-adoption.",
+                        error="Worker restarted; queued process verification and durable output recovery.",
                     )
                 else:
                     self._finalize_job(
@@ -677,17 +737,35 @@ class WorkerEngine:
         with self._launch_lock:
             if self._launch_stopped:
                 raise SystemExit("Execution worker is stopping")
-            proc = subprocess.Popen(
-                step.args,
-                cwd=workdir,
-                env=self._command_environment(step),
-                text=True,
-                stdin=subprocess.PIPE if step.stdin_text else subprocess.DEVNULL,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT,
-                bufsize=1,
-                start_new_session=True,
-            )
+            step_index = self.store.get(job_id).get("step_index", 0)
+            native_log = _native_log_snapshot(workdir, step.args)
+            # A pipe reader belongs to the worker: its death would give the
+            # calculation EPIPE/SIGPIPE. The child owns a regular-file descriptor
+            # which remains writable across worker exits and re-adoption.
+            output_fd, output_name = tempfile.mkstemp(prefix=".worker-output-", suffix=".log", dir=workdir)
+            output_path = Path(output_name)
+            with os.fdopen(output_fd, "wb") as output:
+                try:
+                    reader = os.fdopen(os.open(output_path, os.O_RDONLY | os.O_NOFOLLOW), "rb")
+                    proc = subprocess.Popen(
+                        step.args,
+                        cwd=workdir,
+                        env=self._command_environment(step),
+                        text=True,
+                        stdin=subprocess.PIPE if step.stdin_text else subprocess.DEVNULL,
+                        stdout=output,
+                        stderr=subprocess.STDOUT,
+                        bufsize=1,
+                        start_new_session=True,
+                    )
+                except BaseException:
+                    if "reader" in locals():
+                        reader.close()
+                    output_path.unlink(missing_ok=True)
+                    raise
+            # Keep the familiar Popen reader lifetime, with bounded file tailing
+            # below instead of blocking on a pipe.
+            proc.stdout = reader
             identity = wait_process_identity(proc.pid)
             if identity is None:
                 identity = {
@@ -700,7 +778,15 @@ class WorkerEngine:
                 }
             identities.append(identity)
             try:
-                self.store.update(job_id, process_started_at=utc_now(), process_identities=list(identities), **identity)
+                self.store.update(
+                    job_id,
+                    process_started_at=utc_now(),
+                    process_identities=list(identities),
+                    process_output={"path": output_path.name, "offset": 0, "step_index": step_index} if not step.parallel_group else None,
+                    process_step_index=step_index,
+                    process_native_log=native_log,
+                    **identity,
+                )
             except BaseException:
                 try:
                     self._terminate_leftover({"id": job_id, "process_identities": list(identities)})
@@ -712,7 +798,89 @@ class WorkerEngine:
                             if stream is not None and not stream.closed:
                                 stream.close()
                 raise
-            return proc, identity
+            return proc, {**identity, "output_file": output_path.name, "output_step_index": step_index}
+
+    @staticmethod
+    @contextmanager
+    def _open_saved_output(workdir: Path, output: dict):
+        path = ensure_under_root(workdir / output["path"], workdir)
+        descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+        with os.fdopen(descriptor, "rb") as reader:
+            if not stat.S_ISREG(os.fstat(reader.fileno()).st_mode):
+                raise ValueError("Saved process output must be a regular file")
+            reader.seek(max(0, int(output.get("offset") or 0)))
+            yield path, reader
+
+    def _cleanup_consumed_output(self, meta: dict) -> None:
+        """Retire a fully copied spool only after the next state is durable."""
+        output = meta.get("process_output") or {}
+        name = output.get("path") or ""
+        if not re.fullmatch(r"\.worker-output-[A-Za-z0-9_-]+\.log", name):
+            return
+        workdir = self.store.job_dir(meta["id"])
+        if live_process_identities(meta, workdir):
+            return
+        try:
+            path = ensure_under_root(workdir / name, workdir)
+            if path.stat().st_size <= int(output.get("offset") or 0):
+                path.unlink()
+        except FileNotFoundError:
+            pass
+        except OSError:
+            LOGGER.warning("Could not remove consumed process output for %s", meta["id"], exc_info=True)
+
+    def _tail_output(
+        self,
+        job_id: str,
+        reader: BinaryIO,
+        is_running: Callable[[], bool],
+        on_line: Callable[[str], None],
+        *,
+        output: dict | None = None,
+        on_poll: Callable[[], None] | None = None,
+    ) -> None:
+        """Drain bounded chunks; a saved cursor permits replay after a crash.
+
+        Cursor persistence is throttled. A crash may replay the last second of
+        console output, but never loses output written while the worker is down.
+        """
+        pending = b""
+        decoder = codecs.getincrementaldecoder("utf-8")(errors="replace")
+        last_saved = time.monotonic()
+        offset = reader.tell()
+        while True:
+            if on_poll:
+                on_poll()
+            data = reader.readline(65536)
+            if data:
+                pending += data
+                if pending.endswith(b"\n") or len(pending) >= 65536:
+                    line = decoder.decode(pending)
+                    self.store.append_log(job_id, line)
+                    on_line(line)
+                    pending = b""
+                    # Do not commit a cursor in the middle of a UTF-8 sequence;
+                    # a replacement worker starts with a fresh decoder.
+                    offset = reader.tell() - len(decoder.getstate()[0])
+                if output is not None and time.monotonic() - last_saved >= 1:
+                    self.store.update(job_id, process_output={**output, "offset": offset})
+                    last_saved = time.monotonic()
+                continue
+            if not is_running():
+                # The process can write between our EOF and its exit. Recheck
+                # the file once after observing exit before publishing success.
+                final = reader.read(65536)
+                if final:
+                    reader.seek(-len(final), os.SEEK_CUR)
+                    continue
+                line = decoder.decode(pending, final=True)
+                if line:
+                    self.store.append_log(job_id, line)
+                    on_line(line)
+                if output is not None:
+                    self.store.update(job_id, process_output={**output, "offset": reader.tell()})
+                return
+            time.sleep(0.05)
 
     def _run_sequential_step(self, job_id: str, workdir: Path, meta: dict, step: Step, index: int, step_count: int, dry_run: bool) -> bool:
         """Run a single step (command or internal). Returns True to continue, False to stop."""
@@ -728,13 +896,14 @@ class WorkerEngine:
             "status": "running",
         }
         step_runs.append(step_run)
-        self.store.update(
+        updated = self.store.update(
             job_id,
             current_step=step.title,
             step_index=index,
             step_runs=step_runs,
             progress_percent=round(((index - 1) / step_count) * 100, 2),
         )
+        self._cleanup_consumed_output(updated)
         command_text = " ".join(shlex.quote(arg) for arg in step.args)
         self.store.append_log(job_id, f"\n$ {command_text}\n")
         if step.stdin_text:
@@ -769,10 +938,18 @@ class WorkerEngine:
                 proc.stdin.close()
             assert proc.stdout is not None
             with proc.stdout:
-                for line in proc.stdout:
-                    self.store.append_log(job_id, line)
+
+                def record(line: str) -> None:
                     self._record_seed_message(step_run, line)
                     self._record_progress(job_id, line, index, step_count, total_steps, dt_ps)
+
+                self._tail_output(
+                    job_id,
+                    proc.stdout,
+                    lambda: proc.poll() is None,
+                    record,
+                    output={"path": identity["output_file"], "step_index": identity["output_step_index"]},
+                )
             exit_code = proc.wait()
         except BaseException:
             try:
@@ -837,13 +1014,14 @@ class WorkerEngine:
             step_runs.append(
                 {"index": start_index + offset, "title": step.title, "args": step.args, "started_at": started_at, "status": "running"}
             )
-        self.store.update(
+        updated = self.store.update(
             job_id,
             current_step=" + ".join(step.title for step in steps),
             step_index=start_index + len(steps) - 1,
             step_runs=step_runs,
             progress_percent=round(((start_index - 1) / step_count) * 100, 2),
         )
+        self._cleanup_consumed_output(updated)
         for step in steps:
             self.store.append_log(job_id, f"\n$ {' '.join(shlex.quote(arg) for arg in step.args)}\n")
             if step.stdin_text:
@@ -865,15 +1043,19 @@ class WorkerEngine:
         disk_state: dict = {}
         results: dict[int, dict] = {}
 
-        def drain(proc: subprocess.Popen, offset: int) -> None:
+        def drain(proc: subprocess.Popen, offset: int, output_file: str) -> None:
             exit_code = None
             try:
                 assert proc.stdout is not None
                 with proc.stdout:
-                    for line in proc.stdout:
-                        self.store.append_log(job_id, line)
-                        self._record_seed_message(step_runs[len(step_runs) - len(steps) + offset], line)
+                    self._tail_output(
+                        job_id,
+                        proc.stdout,
+                        lambda: proc.poll() is None,
+                        lambda line: self._record_seed_message(step_runs[len(step_runs) - len(steps) + offset], line),
+                    )
                 exit_code = proc.wait()
+                (workdir / output_file).unlink(missing_ok=True)
             except Exception as error:
                 results[offset] = {"error": str(error)}
                 reader_error.set()
@@ -899,9 +1081,9 @@ class WorkerEngine:
 
         try:
             for offset, step in enumerate(steps):
-                proc, _ = self._spawn_command(job_id, workdir, step, identities)
+                proc, identity = self._spawn_command(job_id, workdir, step, identities)
                 procs.append(proc)
-                reader = threading.Thread(target=drain, args=(proc, offset), daemon=True)
+                reader = threading.Thread(target=drain, args=(proc, offset, identity["output_file"]), daemon=True)
                 readers.append(reader)
                 reader.start()
                 if step.stdin_text and proc.stdin:
@@ -1061,7 +1243,15 @@ class WorkerEngine:
             commands, step_index = self._reinclude_current_step(current)
             self._run_job(current, self.steps_from_commands(commands), step_index)
             return
-        if not identity_matches(current, workdir):
+        output = current.get("process_output") or {}
+        same_step = current.get("process_step_index", current.get("step_index")) == current.get("step_index")
+        saved_output = (
+            output.get("step_index") == current.get("step_index")
+            and bool(output.get("path"))
+            and ensure_under_root(workdir / output["path"], workdir).is_file()
+        )
+        live = same_step and identity_matches(current, workdir)
+        if not live and not saved_output:
             self._finalize_job(
                 job_id,
                 status="interrupted",
@@ -1071,24 +1261,54 @@ class WorkerEngine:
             )
             return
         pid = int(current["process_pid"])
-        self.store.append_log(job_id, f"\n[worker] re-adopted verified process pid={pid} pgid={current['process_pgid']}\n")
+        message = f"re-adopted verified process pid={pid} pgid={current['process_pgid']}" if live else "recovering output of exited process"
+        self.store.append_log(job_id, f"\n[worker] {message}\n")
         disk_state: dict = {"process_identities": registered_process_identities(current)}
         disk_sample = None
-        while identity_matches(self.store.get(job_id), workdir):
+        cancelled = False
+        last_control = 0.0
+
+        def monitor() -> None:
+            nonlocal disk_sample, cancelled, last_control
+            if time.monotonic() - last_control < 0.25:
+                return
+            last_control = time.monotonic()
             if disk_sample is None or time.monotonic() - disk_sample[0] >= DISK_CHECK_INTERVAL_SECONDS:
                 disk_sample = self._inspect_running_disk(job_id, disk_state, disk_sample)
             if self._cancel_requested(job_id):
-                self._cancel_job(self.store.get(job_id))
-                return
-            time.sleep(1)
+                self._cancel_job(self.store.get(job_id), drain_output=False)
+                cancelled = True
+
+        output = current.get("process_output")
+        if isinstance(output, dict) and output.get("path"):
+            with self._open_saved_output(workdir, output) as (output_path, reader):
+                commands = list(current.get("commands") or [])
+                args = [str(arg) for arg in (step or {}).get("args") or []]
+                index = int(current.get("step_index") or 1)
+                count = int(current.get("step_count") or 1)
+                total_steps = _mdrun_total_steps(workdir, args, commands)
+                dt_ps = _mdrun_mdp_number(workdir, args, commands, "dt")
+                self._tail_output(
+                    job_id,
+                    reader,
+                    lambda: identity_matches(current, workdir),
+                    lambda line: self._record_progress(job_id, line, index, count, total_steps, dt_ps),
+                    output=output,
+                    on_poll=monitor,
+                )
+        else:
+            # Older workers had no durable output file. Preserve their native
+            # log based adoption without claiming their pipe can be recovered.
+            while identity_matches(current, workdir):
+                monitor()
+                time.sleep(0.25)
+        if cancelled:
+            self._cleanup_consumed_output(self.store.get(job_id))
+            return
         if self._finish_disk_stop(job_id, disk_state):
             return
         current = self.store.get(job_id)
-        args = [str(arg) for arg in current.get("process_args") or []]
-        deffnm = args[args.index("-deffnm") + 1] if "-deffnm" in args and args.index("-deffnm") + 1 < len(args) else None
-        gromacs_log = ensure_under_root(workdir / f"{deffnm}.log", workdir) if deffnm else None
-        log_text = gromacs_log.read_text(encoding="utf-8", errors="replace") if gromacs_log and gromacs_log.is_file() else ""
-        if "Finished mdrun" not in log_text:
+        if not _mdrun_completed(current, workdir):
             self._finalize_job(
                 job_id,
                 status="interrupted",
@@ -1109,4 +1329,13 @@ class WorkerEngine:
         if remaining:
             self._run_job(current, remaining, completed_index)
         else:
-            self._finalize_job(job_id, status="completed", desired_action=None, worker_id=None, current_step=None, completed_at=utc_now())
+            self._finalize_job(
+                job_id,
+                status="completed",
+                desired_action=None,
+                worker_id=None,
+                current_step=None,
+                completed_at=utc_now(),
+                progress_percent=100.0,
+                exit_code=0,
+            )
