@@ -491,8 +491,17 @@ def build_steps(
                 [
                     Step(
                         ligand_title(ligand, "Create ligand heavy-atom index", "Create ligand {key} heavy-atom index"),
-                        as_gmx(gmx_bin, ["make_ndx", "-f", ligand["work_gro"], "-o", ligand["index_lig"]]),
-                        stdin_text=selection_text("0 & ! a H*", "q"),
+                        # make_ndx keeps the name "System" when there are no H
+                        # atoms to exclude. A named selection is stable for both
+                        # all-atom and united-atom ligands. Custom selections keep
+                        # the legacy default groups and numbering.
+                        as_gmx(
+                            gmx_bin,
+                            ["select", "-s", ligand["work_gro"], "-on", ligand["index_lig"], "-select", '"System_&_!H*" not name "H*"']
+                            if ligand_heavy_group == "System_&_!H*"
+                            else ["make_ndx", "-f", ligand["work_gro"], "-o", ligand["index_lig"]],
+                        ),
+                        stdin_text="" if ligand_heavy_group == "System_&_!H*" else selection_text("0 & ! a H*", "q"),
                         outputs=[ligand["index_lig"]],
                     ),
                     Step(

@@ -431,6 +431,15 @@ class MultiLigandWorkflowTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "PDB residue name"):
             build_steps(params, ["complex.pdb", "a.gro", "a.itp", "b.gro", "b.itp"])
 
+    def test_custom_ligand_restraint_group_keeps_legacy_index_numbering(self) -> None:
+        for group in ("System", "2"):
+            steps = build_steps({**self.MULTI_PARAMS, "ligand_heavy_group": group}, ["complex.pdb", "atp.gro", "atp.itp"])
+            indices = [step for step in steps if "heavy-atom index" in step.title]
+            restraints = [step for step in steps if "position restraints" in step.title]
+            self.assertEqual(len(indices), 2)
+            self.assertTrue(all(step.args[1] == "make_ndx" and step.stdin_text == "0 & ! a H*\nq\n" for step in indices))
+            self.assertTrue(all(step.stdin_text == f"{group}\n" for step in restraints))
+
     def test_multi_ligand_without_split_uses_prepared_files(self) -> None:
         params = {
             "workflow": "protein_ligand_md",

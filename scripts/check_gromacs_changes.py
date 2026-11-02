@@ -12,6 +12,8 @@ PATTERNS = (
     "tests/*.py",
     "tests/fixtures/*",
     "forcefields/*",
+    "mdp/*",
+    "sample_mdp/*",
     "app/static/examples/files/*",
     ".github/workflows/*",
     "requirements.txt",
