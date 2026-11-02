@@ -6,14 +6,14 @@ external service or real 45-second wait is required.
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from check_product_browser import check_viewport
 from playwright.sync_api import expect, sync_playwright
 
 
 def configure(page):
-    now = datetime(2026, 10, 26, 0, 0, tzinfo=timezone.utc)
+    now = datetime(2026, 10, 26, 0, 0, tzinfo=UTC)
     page.clock.install(time=now)
     page.clock.pause_at(now)
 

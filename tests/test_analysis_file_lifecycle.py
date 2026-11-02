@@ -13,8 +13,8 @@ from app.models import ExistingAnalysisRequest
 @pytest.fixture
 def source(tmp_path, monkeypatch):
     monkeypatch.setattr("app.reproducibility.detect_gromacs", lambda *_: {})
-    monkeypatch.setattr("app.reproducibility.host_information", lambda: {})
-    monkeypatch.setattr("app.reproducibility.gpu_information", lambda: {})
+    monkeypatch.setattr("app.reproducibility.host_information", dict)
+    monkeypatch.setattr("app.reproducibility.gpu_information", dict)
     monkeypatch.setattr(existing_analysis, "require_analysis_disk_space", lambda *_: None)
     store = JobStore(tmp_path / "runtime")
     meta = store.create("source", {"workflow": "protein_md"}, [], [])

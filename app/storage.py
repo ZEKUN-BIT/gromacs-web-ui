@@ -10,7 +10,7 @@ import shutil
 import stat
 import threading
 import time
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Literal
 
@@ -404,7 +404,7 @@ def preview_cleanup(store, request: CleanupRequest) -> dict:
         }
     return {
         "preview_token": token,
-        "expires_at": datetime.fromtimestamp(now + PREVIEW_TTL_SECONDS, timezone.utc).isoformat(),
+        "expires_at": datetime.fromtimestamp(now + PREVIEW_TTL_SECONDS, UTC).isoformat(),
         "total_bytes": sum(job["bytes"] for job in jobs),
         "file_count": len(files),
         "jobs": jobs,

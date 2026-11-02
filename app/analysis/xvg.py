@@ -115,7 +115,7 @@ def xvg_plots(
             series_names = [data["legends"].get(index, f"Series {index + 1}") for index in range(len(data["points"]))]
             if series_names == ["Series 1"] and "rmsd" in safe_path.stem.lower():
                 series_names = ["RMSD"]
-            for index, (series_name, points) in enumerate(zip(series_names, data["points"])):
+            for index, (series_name, points) in enumerate(zip(series_names, data["points"], strict=True)):
                 if len(plots) >= max_plots:
                     skipped_files.append({**metadata, "code": "plot_limit", "reason": "此文件的部分序列达到展示数量上限；请下载完整 XVG。"})
                     truncated = True

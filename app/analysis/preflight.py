@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import ctypes
 import json
 import math
@@ -71,10 +72,8 @@ def inspect_research_inputs_cancellable(
         return result["result"]
     finally:
         if process.poll() is None:
-            try:
+            with contextlib.suppress(ProcessLookupError):
                 os.killpg(process.pid, signal.SIGKILL)
-            except ProcessLookupError:
-                pass
         process.wait()
         if process.stdin:
             process.stdin.close()
@@ -87,7 +86,7 @@ def _topology(path: Path, gmx_bin: str):
 
     try:
         return mda.Universe(str(path))
-    except (ValueError, OSError, NotImplementedError):
+    except (ValueError, OSError, NotImplementedError) as mda_error:
         # New GROMACS TPR versions can precede support in MDAnalysis. Let the
         # installed GROMACS decode its own topology without touching the source.
         with tempfile.TemporaryDirectory(prefix="gromacs-preflight-") as directory:
@@ -109,7 +108,7 @@ def _topology(path: Path, gmx_bin: str):
             except (OSError, subprocess.TimeoutExpired) as exc:
                 raise ValueError("无法预检 TPR，请检查 GROMACS 路径和拓扑文件。") from exc
             if result.returncode or not reference.is_file():
-                raise ValueError("无法读取 TPR，请确认拓扑有效且与当前 GROMACS 兼容。")
+                raise ValueError("无法读取 TPR，请确认拓扑有效且与当前 GROMACS 兼容。") from mda_error
             return mda.Universe(str(reference))
 
 
@@ -146,7 +145,7 @@ def inspect_research_inputs(selected: dict[str, Path], request: ExistingAnalysis
                 while left < right:
                     middle = (left + right) // 2
                     time = frame_time(middle)
-                    if time < value - 1e-8 or upper and time <= value + 1e-8:
+                    if time < value - 1e-8 or (upper and time <= value + 1e-8):
                         left = middle + 1
                     else:
                         right = middle

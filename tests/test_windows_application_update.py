@@ -195,7 +195,7 @@ def test_disk_preflight_uses_branch_budget_and_reports_linux_location(installati
     usage = shutil.disk_usage(root)
     monkeypatch.setattr(updater.shutil, "disk_usage", lambda _: usage._replace(free=512 * 1024**2))
     assert updater.check_space(root, payload, app_only=True) == 128 * 1024**2
-    with pytest.raises(RuntimeError, match="Insufficient Linux disk space.*application"):
+    with pytest.raises(RuntimeError, match=r"Insufficient Linux disk space.*application"):
         updater.check_space(root, payload, app_only=False, backend="CPU")
     monkeypatch.setattr(updater.shutil, "disk_usage", lambda _: usage._replace(free=5 * 1024**3))
     assert updater.check_space(root, payload, app_only=False, backend="CPU") < updater.check_space(
@@ -216,5 +216,5 @@ def test_application_only_runtime_gate_detects_missing_executable_and_native_lib
     gmx.chmod(0o755)
     updater.check_runtime(root)
     gmx.write_text('#!/bin/sh\necho "libgromacs.so: cannot open shared object file" >&2\nexit 127\n')
-    with pytest.raises(RuntimeError, match="libgromacs.so"):
+    with pytest.raises(RuntimeError, match=r"libgromacs\.so"):
         updater.check_runtime(root)

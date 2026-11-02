@@ -9,7 +9,7 @@ from __future__ import annotations
 import argparse
 import json
 import statistics
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 import numpy as np
@@ -65,7 +65,7 @@ def run(artifact_dir: Path, update: bool, visual: bool = True) -> None:
     pending_baselines = []
 
     def configure(page):
-        page.clock.set_fixed_time(datetime(2026, 10, 26, tzinfo=timezone.utc))
+        page.clock.set_fixed_time(datetime(2026, 10, 26, tzinfo=UTC))
         page.add_init_script("""window.qaLongTasks=[];
           window.qaLongTaskObserver = new PerformanceObserver(list => window.qaLongTasks.push(...list.getEntries().map(e => e.duration)));
           window.qaLongTaskObserver.observe({type:'longtask', buffered:true});""")

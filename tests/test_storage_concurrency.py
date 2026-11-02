@@ -14,8 +14,8 @@ from app.steps import Step
 @pytest.fixture
 def store(tmp_path, monkeypatch):
     monkeypatch.setattr("app.reproducibility.detect_gromacs", lambda *_: {})
-    monkeypatch.setattr("app.reproducibility.host_information", lambda: {})
-    monkeypatch.setattr("app.reproducibility.gpu_information", lambda: {})
+    monkeypatch.setattr("app.reproducibility.host_information", dict)
+    monkeypatch.setattr("app.reproducibility.gpu_information", dict)
     return JobStore(tmp_path / "runtime")
 
 

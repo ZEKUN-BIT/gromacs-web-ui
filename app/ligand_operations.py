@@ -274,7 +274,7 @@ def restore_ligand_pose_coordinates(workdir: Path, data: dict) -> None:
     if len(gro_atoms) != len(pose_atoms):
         raise ValueError(f"ACPYPE coordinate atom count ({len(gro_atoms)}) does not match the bound ligand pose ({len(pose_atoms)})")
     restored: list[str] = []
-    for line, atom in zip(gro_atoms, pose_atoms):
+    for line, atom in zip(gro_atoms, pose_atoms, strict=True):
         x, y, z = (coordinate / 10.0 for coordinate in atom["xyz"])
         restored.append(f"{line[:20]}{x:8.3f}{y:8.3f}{z:8.3f}{line[44:]}")
     gro_path.write_text("\n".join([title, str(len(restored)), *restored, box]) + "\n", encoding="utf-8")
@@ -338,7 +338,7 @@ def merge_ligand_atomtypes(workdir: Path, data: dict) -> None:
     blocks_by_path = {path: itp_sections(path) for path in paths}
     merge_sections = ("atomtypes", "nonbond_params", "pairtypes")
     merged: dict[str, dict[str, str]] = {section: {} for section in merge_sections}
-    found: dict[str, int] = {section: 0 for section in merge_sections}
+    found: dict[str, int] = dict.fromkeys(merge_sections, 0)
 
     for path in paths:
         for name, lines in blocks_by_path[path]:

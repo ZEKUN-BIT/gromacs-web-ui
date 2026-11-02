@@ -18,7 +18,7 @@ def _analysis_window_args(params: dict, time_unit: str, *, include_begin: bool =
     begin = float(params.get("begin_ns", 0))
     end = params.get("end_ns")
     end = float(end) if end is not None else None
-    if not math.isfinite(begin) or begin < 0 or end is not None and (not math.isfinite(end) or end <= begin):
+    if not math.isfinite(begin) or begin < 0 or (end is not None and (not math.isfinite(end) or end <= begin)):
         raise ValueError("Invalid analysis time window.")
     args = ["-b", f"{begin * scale:g}"] if include_begin else []
     if end is not None:

@@ -25,7 +25,7 @@ pytestmark = pytest.mark.skipif(sys.platform != "linux", reason="Process identit
 def isolate_manifest_environment_probes(monkeypatch):
     # These tests count and signal simulation children. Environment inspection
     # has its own subprocesses, unrelated to the process ownership under test.
-    monkeypatch.setattr("app.reproducibility.execution_software", lambda: {})
+    monkeypatch.setattr("app.reproducibility.execution_software", dict)
     monkeypatch.setattr("app.reproducibility.detect_gromacs", lambda _: {})
 
 
@@ -342,7 +342,7 @@ def test_parallel_cleanup_uses_local_owned_registry_when_database_fails_after_sp
     monkeypatch.setattr(store, "get" if fault == "read" else "update", fail_after_spawn)
     try:
         with patch("app.execution.subprocess.Popen", remember):
-            with pytest.raises((sqlite3.OperationalError, RuntimeError), match="database unavailable|could not be saved"):
+            with pytest.raises((sqlite3.OperationalError, RuntimeError), match=r"database unavailable|could not be saved"):
                 WorkerEngine(store, "worker")._run_parallel_batch(job["id"], store.job_dir(job["id"]), steps, 1, 1, False)
         assert len(children) == 1 and children[0].poll() is not None
         assert children[0].stdout.closed

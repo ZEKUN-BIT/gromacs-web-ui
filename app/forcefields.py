@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import os
 import shutil
+from collections.abc import Iterable
 from pathlib import Path
-from typing import Iterable
 
 from .files import ensure_under_root
 from .steps import Step
@@ -34,7 +34,7 @@ def parse_watermodels(path: Path) -> list[dict]:
     models: list[dict] = []
     for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
         stripped = line.strip()
-        if not stripped or stripped.startswith(";") or stripped.startswith("#"):
+        if not stripped or stripped.startswith((";", "#")):
             continue
         parts = stripped.split(None, 2)
         name = parts[0]

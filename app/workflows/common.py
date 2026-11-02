@@ -453,8 +453,8 @@ def ion_args(gmx_bin: str, params: dict, tpr: str, output: str, topology: str = 
     if ion_conc:
         try:
             concentration = float(ion_conc)
-        except ValueError:
-            raise ValueError("ion_concentration must be a number between 0 and 5 mol/L")
+        except ValueError as exc:
+            raise ValueError("ion_concentration must be a number between 0 and 5 mol/L") from exc
         if not 0 <= concentration <= 5:
             raise ValueError("ion_concentration must be between 0 and 5 mol/L")
         args.extend(["-conc", format_mdp_number(concentration)])

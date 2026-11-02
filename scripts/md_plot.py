@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import argparse
 import ast
+import itertools
 import json
 import math
 import os
@@ -18,7 +19,7 @@ import tempfile
 from pathlib import Path
 
 COLORS = ["#0072B2", "#D55E00", "#009E73", "#CC79A7"]
-_DARK_COLORS = dict(zip(["#67899c", "#b58b72", "#829b8c", "#a18a9e"], COLORS))
+_DARK_COLORS = dict(zip(["#67899c", "#b58b72", "#829b8c", "#a18a9e"], COLORS, strict=True))
 _DARK_COLORS["#35a8d1"] = COLORS[0]
 _TIME_TO_NS = {"ps": 0.001, "ns": 1.0, "us": 1000.0, "µs": 1000.0, "μs": 1000.0,
                "ms": 1e6, "s": 1e9}
@@ -40,7 +41,7 @@ def full_resolution_plot_points(workdir: Path, plot: dict, y_column: int | None 
         generic = re.fullmatch(r"Series (\d+)", label)
         y_column = matches[0] if matches else int(generic[1]) if generic else 1
     xs, ys = read_xvg(path, y_column=y_column)
-    return [list(point) for point in zip(xs, ys)]
+    return [list(point) for point in zip(xs, ys, strict=True)]
 
 
 def centered_trend(xs, ys, width: float, window_points: int | None = None):
@@ -63,10 +64,9 @@ def centered_trend(xs, ys, width: float, window_points: int | None = None):
     if window < (3 if window_points is None else 2):
         return [], [], {"reason": "fewer than three samples in the smoothing window"}
     # Missing observations, reversed axes and unequal sampling start new segments.
-    cuts = [0] + (np.flatnonzero(~np.isclose(steps, dt, rtol=0.002, atol=1e-12)
-                                | ~finite[:-1] | ~finite[1:]) + 1).tolist() + [len(xs)]
+    cuts = [0, *(np.flatnonzero(~np.isclose(steps, dt, rtol=0.002, atol=1e-12) | ~finite[:-1] | ~finite[1:]) + 1).tolist(), len(xs)]
     tx, ty = [], []
-    for start, end in zip(cuts, cuts[1:]):
+    for start, end in itertools.pairwise(cuts):
         if end - start < window or not np.all(finite[start:end]):
             continue
         values = ys[start:end]
@@ -345,7 +345,7 @@ def generate_directory(
             breaks.extend(i for i in range(1, len(points)) if points[i][0] < points[i - 1][0])
         breaks.append(len(points))
         for series_index, label in enumerate(plot.get("series") or ["Value"]):
-            for block, (start, end) in enumerate(zip(breaks, breaks[1:])):
+            for block, (start, end) in enumerate(itertools.pairwise(breaks)):
                 ax.plot(
                     [row[0] for row in points[start:end]],
                     [row[series_index + 1] for row in points[start:end]],
@@ -454,7 +454,7 @@ def plot_heatmap(args) -> None:
     atoms = list(dict.fromkeys(atom for _, atoms, _ in parsed for atom in atoms))
     fig, axes = plt.subplots(1, len(parsed), figsize=args.figsize, squeeze=False, sharey=True)
     image = None
-    for ax, (label, _, values) in zip(axes[0], parsed, strict=True):
+    for ax, (_label, _, values) in zip(axes[0], parsed, strict=True):
         matrix = np.array([[values.get((residue, atom), 0.0) for atom in atoms] for residue in residues])
         image = ax.imshow(matrix, vmin=args.vmin, vmax=args.vmax, cmap=args.cmap, aspect="auto", interpolation="nearest")
         ax.set_xticks(range(len(atoms)), atoms, rotation=90)

@@ -62,7 +62,25 @@ line-length = 140
 extend-exclude = ["runtime", "forcefields"]
 
 [tool.ruff.lint]
-select = ["E4", "E7", "E9", "F", "I"]
+select = ["E4", "E7", "E9", "F", "I", "B", "C4", "PERF", "PIE", "RUF", "SIM", "UP"]
+ignore = [
+    # Chinese UI text intentionally uses full-width punctuation.
+    "RUF001", "RUF002", "RUF003",
+    # FastAPI declares parameters with Query()/File()/Depends() defaults.
+    "B008",
+    # Closures in loops here are invoked immediately (thread pool, Playwright routes).
+    "B023",
+    # Nested `with` blocks are kept where they mirror lock/resource ordering.
+    "SIM117",
+    # Explicit append loops are kept where they read more clearly.
+    "PERF401",
+]
+
+[tool.ruff.lint.per-file-ignores]
+# FastAPI copies list defaults per request.
+"app/main.py" = ["B006"]
+# Test fixtures use class-level constant dictionaries.
+"tests/**" = ["RUF012"]
 
 [tool.ruff.format]
 quote-style = "double"

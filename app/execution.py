@@ -15,9 +15,10 @@ import subprocess
 import tempfile
 import threading
 import time
-from contextlib import ExitStack, contextmanager
+from collections.abc import Callable
+from contextlib import ExitStack, contextmanager, suppress
 from pathlib import Path
-from typing import BinaryIO, Callable
+from typing import BinaryIO
 
 from . import reproducibility
 from .files import ensure_under_root
@@ -169,9 +170,8 @@ def _mdrun_mdp_path(workdir: Path, args: list[str], commands: list[dict]) -> Pat
     mdp_name = None
     for candidate in commands:
         candidate_args = [str(arg) for arg in candidate.get("args") or []]
-        if all(flag in candidate_args for flag in ("grompp", "-o", "-f")):
-            if candidate_args[candidate_args.index("-o") + 1] == tpr:
-                mdp_name = candidate_args[candidate_args.index("-f") + 1]
+        if all(flag in candidate_args for flag in ("grompp", "-o", "-f")) and candidate_args[candidate_args.index("-o") + 1] == tpr:
+            mdp_name = candidate_args[candidate_args.index("-f") + 1]
     if not mdp_name:
         return None
     return workdir / mdp_name
@@ -386,7 +386,7 @@ class WorkerEngine:
             output = meta.get("process_output") or {}
             workdir = self.store.job_dir(meta["id"])
             if drain_output and output.get("path") and ensure_under_root(workdir / output["path"], workdir).is_file():
-                with self._open_saved_output(workdir, output) as (path, reader):
+                with self._open_saved_output(workdir, output) as (_path, reader):
                     self._tail_output(meta["id"], reader, lambda: False, lambda _: None, output=output)
         except Exception as error:
             status = meta["status"] if meta["status"] in {"completed", "failed", "cancelled"} else "interrupted"
@@ -530,10 +530,8 @@ class WorkerEngine:
 
     def _watch_resources(self, job_id: str, proc: subprocess.Popen, stop: threading.Event, usage: dict) -> None:
         while not stop.wait(0.25) and proc.poll() is None:
-            try:
+            with suppress(OSError, sqlite3.OperationalError):
                 self._refresh_owned_process(job_id, proc)
-            except (OSError, sqlite3.OperationalError):
-                pass
             peak_rss, cpu_seconds = _process_resources(proc.pid)
             usage["peak_rss_bytes"] = max(int(usage.get("peak_rss_bytes") or 0), peak_rss)
             usage["cpu_seconds"] = max(float(usage.get("cpu_seconds") or 0), cpu_seconds)
@@ -551,10 +549,8 @@ class WorkerEngine:
                 birth_fields = ("process_pid", "process_pgid", "process_started_ticks", "process_cwd")
                 if current and any(all(current[key] == record.get(key) for key in birth_fields) for record in records):
                     state["process_identities"] = [record for record in records if record["process_pid"] != proc.pid] + [current]
-                try:
+                with suppress(OSError, sqlite3.Error):
                     self._refresh_owned_process(job_id, proc)
-                except (OSError, sqlite3.Error):
-                    pass
             try:
                 previous = self._inspect_running_disk(job_id, state, previous)
             except (OSError, sqlite3.Error) as error:
@@ -1281,7 +1277,7 @@ class WorkerEngine:
 
         output = current.get("process_output")
         if isinstance(output, dict) and output.get("path"):
-            with self._open_saved_output(workdir, output) as (output_path, reader):
+            with self._open_saved_output(workdir, output) as (_output_path, reader):
                 commands = list(current.get("commands") or [])
                 args = [str(arg) for arg in (step or {}).get("args") or []]
                 index = int(current.get("step_index") or 1)

@@ -8,9 +8,10 @@ import os
 import re
 import stat
 from collections import OrderedDict
+from collections.abc import Iterator
 from pathlib import Path
 from threading import Lock
-from typing import BinaryIO, Iterator
+from typing import BinaryIO
 
 MAX_XVG_BYTES = 512 * 1024**2
 MAX_LINE_BYTES = 64 * 1024

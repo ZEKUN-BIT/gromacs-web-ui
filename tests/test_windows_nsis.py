@@ -56,5 +56,5 @@ def test_real_nsis_compiled_chinese_text(tmp_path, nsis_compiler, charset):
     else:
         # FinishTitle's short text also occurs in NSIS's standard language table,
         # so searching the complete header cannot distinguish its corrupt copy.
-        with pytest.raises(ValueError, match="WelcomeTitle.*WelcomeText.*FinishText.*RunText.*KeepEnvironment"):
+        with pytest.raises(ValueError, match=r"WelcomeTitle.*WelcomeText.*FinishText.*RunText.*KeepEnvironment"):
             builder.verify_installer_text(installer)

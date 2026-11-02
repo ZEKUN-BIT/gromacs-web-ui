@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import importlib.metadata
 import json
@@ -29,7 +30,7 @@ def sha256_file(path: Path) -> str:
 
 def write_experiment_manifest(meta: dict, *, prepared_hashes: dict[str, dict] | None = None) -> dict:
     workdir = Path(meta["workdir"])
-    selected_names = set(str(name) for name in meta.get("uploaded_files") or [])
+    selected_names = {str(name) for name in meta.get("uploaded_files") or []}
     if any(Path(name).name.lower() in {"experiment-manifest.json", "execution-manifest.json"} for name in selected_names):
         raise ValueError("experiment-manifest.json and execution-manifest.json are reserved for generated manifests.")
     selected_names.update(path.name for path in workdir.glob("*.mdp") if path.is_file())
@@ -197,10 +198,8 @@ def write_execution_manifest(meta: dict, software: dict | None = None) -> dict:
         except (OSError, ValueError):
             unavailable.append({"path": name, "reason": "Missing, unsafe, unreadable or changed during capture"})
     original = None
-    try:
+    with contextlib.suppress(OSError, ValueError):
         original = _protocol_record(workdir, "experiment-manifest.json")
-    except (OSError, ValueError):
-        pass
     manifest = {
         "schema_version": 1,
         "generated_at": utc_now(),

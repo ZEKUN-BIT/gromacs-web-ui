@@ -49,7 +49,7 @@ jobs:
           python -m pip install --require-hashes --only-binary=:all: -r requirements/dev.lock
           python -m pip install --no-deps --no-build-isolation -e .
           python -m pip check
-      - run: ruff check app tests
+      - run: ruff check app scripts tests
       - run: ruff format --check app tests
       - run: python scripts/sync_frontend_assets.py --check
       - run: pytest -m "not gromacs_integration" --cov=app --cov-report=term

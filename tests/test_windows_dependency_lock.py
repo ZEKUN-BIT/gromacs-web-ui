@@ -93,7 +93,7 @@ def test_generator_accepts_older_cpython_abi3_wheel(lock_inputs):
 def test_generator_requires_target_environment(lock_inputs, key, value):
     report, source, assets = lock_inputs
     report["environment"][key] = value
-    with pytest.raises(ValueError, match="Linux x64 / Python 3.12"):
+    with pytest.raises(ValueError, match=r"Linux x64 / Python 3\.12"):
         lock_generator.render_lock(report, source, assets)
 
 

@@ -24,8 +24,8 @@ from app.workflows.common import as_gmx
 def isolated_environment(monkeypatch):
     monkeypatch.setattr("app.reproducibility.detect_gromacs", lambda _: {"version": "test GROMACS"})
     monkeypatch.setattr("app.reproducibility.execution_software", lambda: {"source": {"revision": "test revision"}})
-    monkeypatch.setattr("app.reproducibility.host_information", lambda: {})
-    monkeypatch.setattr("app.reproducibility.gpu_information", lambda: {})
+    monkeypatch.setattr("app.reproducibility.host_information", dict)
+    monkeypatch.setattr("app.reproducibility.gpu_information", dict)
 
 
 def create_job(tmp_path, steps):

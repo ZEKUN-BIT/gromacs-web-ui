@@ -296,7 +296,7 @@ def test_failure_never_leaves_success_marker(fake_setup, monkeypatch, failure_st
         if "--dry-run" in command:
             return subprocess.CompletedProcess(command, 1, "", "")
         is_install = "pip" in command
-        if failure_stage == "install" and is_install or failure_stage == "smoke" and not is_install:
+        if (failure_stage == "install" and is_install) or (failure_stage == "smoke" and not is_install):
             raise subprocess.CalledProcessError(1, command)
         return subprocess.CompletedProcess(command, 0, "", "")
 

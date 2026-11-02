@@ -13,7 +13,7 @@ import stat
 import threading
 import time
 from collections import OrderedDict
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 from .files import ensure_under_root
@@ -146,7 +146,7 @@ def enrich_progress(meta: dict) -> dict:
 
     now = time.time()
     age = max(0, now - info.st_mtime)
-    simulation["updated_at"] = datetime.fromtimestamp(info.st_mtime, timezone.utc).isoformat()
+    simulation["updated_at"] = datetime.fromtimestamp(info.st_mtime, UTC).isoformat()
     simulation["source"] = path.name
     sample_key = (str(path), info.st_ino, meta.get("process_started_at"), meta.get("step_index"))
     with _lock:

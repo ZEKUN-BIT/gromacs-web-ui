@@ -105,7 +105,7 @@ def test_missing_lapack_stops_before_ligand_conversion_with_repair_hint(tmp_path
         )
 
     monkeypatch.setattr(science.subprocess, "run", missing_library)
-    with pytest.raises(RuntimeError, match="liblapack.so.3") as failure:
+    with pytest.raises(RuntimeError, match=r"liblapack\.so\.3") as failure:
         science.verify_science_tools(tmp_path, require_dssp=False)
     assert "liblapack3, libblas3 and libgfortran5" in str(failure.value)
     assert len(commands) == 1

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import contextlib
 import fcntl
 import hashlib
 import json
@@ -9,11 +10,11 @@ import sqlite3
 import stat
 import threading
 from collections import OrderedDict
-from collections.abc import Iterator
-from contextlib import ExitStack, contextmanager, nullcontext
+from collections.abc import Callable, Iterator
+from contextlib import ExitStack, contextmanager, nullcontext, suppress
 from datetime import datetime
 from pathlib import Path
-from typing import TYPE_CHECKING, Callable
+from typing import TYPE_CHECKING
 from uuid import uuid4
 
 from .files import ensure_under_root
@@ -294,10 +295,8 @@ class JobStore:
         flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
         root_fd = os.open(self.runtime_root, flags)
         try:
-            try:
+            with suppress(FileExistsError):
                 os.mkdir("job-locks", mode=0o700, dir_fd=root_fd)
-            except FileExistsError:
-                pass
             locks_fd = os.open("job-locks", flags, dir_fd=root_fd)
         finally:
             os.close(root_fd)
@@ -949,11 +948,9 @@ class JobStore:
             try:
                 result = operation(meta, workdir)
             except BaseException as exc:
-                try:
+                # The durable marker can be recovered once storage is writable.
+                with contextlib.suppress(Exception):
                     self._finish_maintenance(job_id, error=str(exc))
-                except Exception:
-                    # The durable marker can be recovered once storage is writable.
-                    pass
                 raise
             self._finish_maintenance(job_id, result=result)
             return result

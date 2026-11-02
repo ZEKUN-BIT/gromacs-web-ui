@@ -227,7 +227,7 @@ def proxy_for(host: str) -> tuple[str, int, dict] | None:
             password = unquote(parsed.password or "", errors="strict")
             if ":" in username or re.search(r"[\x00-\x1f\x7f]", username + password):
                 raise ValueError
-            credentials = base64.b64encode(f"{username}:{password}".encode("utf-8")).decode("ascii")
+            credentials = base64.b64encode(f"{username}:{password}".encode()).decode("ascii")
             headers["Proxy-Authorization"] = f"Basic {credentials}"
         return parsed.hostname, port, headers
     except (ValueError, UnicodeError):

@@ -120,7 +120,7 @@ def failure_diagnostics(meta: dict) -> dict | None:
     exit_code = exit_code if type(exit_code) is int and -255 <= exit_code <= 255 else None
     error = meta.get("error")
     error = error[:2048] if isinstance(error, str) else ""
-    if meta.get("disk_stop") or error.startswith("Low disk space:") or error.startswith("磁盘空间不足，已请求受控停止。"):
+    if meta.get("disk_stop") or error.startswith(("Low disk space:", "磁盘空间不足，已请求受控停止。")):
         code, message = "storage_insufficient", "磁盘空间保护触发；释放空间后检查 checkpoint 和任务状态。"
     elif operation in {"validate_stage_log", "validate_thermodynamics", "structure_preflight"}:
         code, message = "quality_check_failed", "质量检查未通过；请结合对应报告处理原因，再决定是否重试。"

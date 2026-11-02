@@ -48,7 +48,7 @@ def test_manifest_capture_invalidates_a_terminal_file_list_cached_before_write(t
     job = store.create("manifest visibility", {"workflow": "custom"}, [], [])
     monkeypatch.setattr(main, "STORE", store)
     monkeypatch.setattr(main, "FILE_LIST_CACHE", {})
-    monkeypatch.setattr(reproducibility, "execution_software", lambda: {})
+    monkeypatch.setattr(reproducibility, "execution_software", dict)
     monkeypatch.setattr(reproducibility, "detect_gromacs", lambda _: {})
 
     def capture(meta, **kwargs):

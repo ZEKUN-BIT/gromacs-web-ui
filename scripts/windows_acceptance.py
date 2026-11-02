@@ -13,7 +13,7 @@ import json
 import platform
 import re
 import subprocess
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 CASES = {
@@ -73,7 +73,7 @@ def collect(installer: Path, output: Path, *, case: str, tester: str, version: s
         "source_commit": source_commit.lower(),
         "installer_sha256": installer_hash,
         "tester": tester,
-        "tested_at": datetime.now(timezone.utc).isoformat(),
+        "tested_at": datetime.now(UTC).isoformat(),
         "os": {"system": platform.system(), "release": platform.release(), "version": platform.version(), "machine": platform.machine()},
         "distro": distro,
         "hardware": "",

@@ -28,7 +28,7 @@ def completed_job(store, name="研究任务", **params):
 
 
 def test_template_versions_strip_machine_paths_files_and_confirmations(product_api):
-    client, store = product_api
+    client, _store = product_api
     request = {
         "name": "实验室协议",
         "source": "lab-v1",

@@ -381,7 +381,7 @@ def preview(request: PreviewRequest) -> dict:
         mdp_overrides = preview_mdp_overrides(params)
         steps = apply_stdin_overrides(build_steps(params, request.files, BASE_DIR), params)
     except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     return {
         "mdp_overrides": mdp_overrides,
         "commands": [
@@ -403,7 +403,7 @@ def protocol_preview(request: ProtocolPreviewRequest) -> dict:
     try:
         return {"stages": preview_protocol(request.model_dump(exclude={"uploaded_mdp"}), BASE_DIR, request.uploaded_mdp)}
     except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @app.get("/api/jobs")
@@ -455,8 +455,8 @@ def get_job(job_id: str) -> dict:
         if detail.get("error"):
             detail["failure_advice"] = error_advice(detail["error"])
         return detail
-    except FileNotFoundError:
-        raise HTTPException(status_code=404, detail="Job not found")
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="Job not found") from exc
 
 
 @app.post("/api/jobs")
@@ -470,7 +470,7 @@ async def create_job(
     try:
         request = SimulationParams.model_validate_json(params or "{}")
     except ValidationError as exc:
-        raise HTTPException(status_code=422, detail=exc.errors())
+        raise HTTPException(status_code=422, detail=exc.errors()) from exc
 
     if submission_id:
         previous = await run_in_threadpool(submission_status, STORE, submission_id)
@@ -537,7 +537,7 @@ def _prepare_uploaded_job(
                 )
     except ValueError as exc:
         shutil.rmtree(temp_dir, ignore_errors=True)
-        raise HTTPException(status_code=400, detail=str(exc))
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     except Exception:
         shutil.rmtree(temp_dir, ignore_errors=True)
         raise
@@ -564,14 +564,14 @@ def _prepare_uploaded_job(
                     (temp_dir / filename).replace(workdir / filename)
             except OSError as exc:
                 STORE.update(meta["id"], status="failed", error=f"Failed to stage uploaded files: {exc}")
-                raise HTTPException(status_code=500, detail="Failed to stage uploaded files.")
+                raise HTTPException(status_code=500, detail="Failed to stage uploaded files.") from exc
             finally:
                 shutil.rmtree(temp_dir, ignore_errors=True)
             try:
                 written_mdp_templates = write_missing_mdp_files(workdir, BASE_DIR, job_params.get("workflow"))
             except (OSError, ValueError) as exc:
                 STORE.update(meta["id"], status="failed", error=f"Failed to prepare MDP templates: {exc}")
-                raise HTTPException(status_code=500, detail="Failed to prepare MDP templates.")
+                raise HTTPException(status_code=500, detail="Failed to prepare MDP templates.") from exc
             if written_mdp_templates:
                 STORE.update(meta["id"], mdp_templates=written_mdp_templates)
                 for template in written_mdp_templates:
@@ -580,7 +580,7 @@ def _prepare_uploaded_job(
                 applied_mdp_overrides = apply_mdp_overrides(workdir, job_params)
             except (OSError, ValueError) as exc:
                 STORE.update(meta["id"], status="failed", error=f"Failed to apply MDP overrides: {exc}")
-                raise HTTPException(status_code=400, detail=f"Failed to apply MDP overrides: {exc}")
+                raise HTTPException(status_code=400, detail=f"Failed to apply MDP overrides: {exc}") from exc
             if applied_mdp_overrides:
                 STORE.update(meta["id"], mdp_overrides=applied_mdp_overrides)
                 for item in applied_mdp_overrides:
@@ -593,7 +593,7 @@ def _prepare_uploaded_job(
                 )
             except OSError as exc:
                 STORE.update(meta["id"], status="failed", error=f"Failed to copy local force field: {exc}")
-                raise HTTPException(status_code=500, detail=f"Failed to copy local force field: {exc}")
+                raise HTTPException(status_code=500, detail=f"Failed to copy local force field: {exc}") from exc
             if copied_force_fields:
                 STORE.update(meta["id"], local_force_fields=copied_force_fields)
                 for force_field in copied_force_fields:
@@ -635,10 +635,10 @@ def resolve_submission(request_id: str) -> dict:
 def research_report(job_id: str) -> dict:
     try:
         return load_research_report(STORE, job_id)
-    except FileNotFoundError:
-        raise HTTPException(status_code=404, detail="尚无研究分析报告，请先创建研究分析任务。")
-    except (OSError, ValueError):
-        raise HTTPException(status_code=409, detail="研究报告尚未就绪或文件无效。")
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="尚无研究分析报告，请先创建研究分析任务。") from exc
+    except (OSError, ValueError) as exc:
+        raise HTTPException(status_code=409, detail="研究报告尚未就绪或文件无效。") from exc
 
 
 @app.get("/api/research/jobs")
@@ -655,22 +655,22 @@ def research_jobs(
 def research_comparison(request: ResearchComparisonRequest) -> dict:
     try:
         return compare_research_jobs(STORE, request)
-    except FileNotFoundError:
-        raise HTTPException(status_code=404, detail="所选任务尚无研究分析报告。")
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="所选任务尚无研究分析报告。") from exc
     except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
-    except OSError:
-        raise HTTPException(status_code=409, detail="无法读取研究分析报告。")
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except OSError as exc:
+        raise HTTPException(status_code=409, detail="无法读取研究分析报告。") from exc
 
 
 @app.get("/api/jobs/{job_id}/analysis-inputs")
 def existing_analysis_inputs(job_id: str) -> dict:
     try:
         return analysis_inputs(STORE, job_id)
-    except FileNotFoundError:
-        raise HTTPException(status_code=404, detail="Job not found")
-    except (OSError, RuntimeError, ValueError):
-        raise HTTPException(status_code=409, detail="无法读取分析输入，请确认来源任务已完成且文件可用。")
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="Job not found") from exc
+    except (OSError, RuntimeError, ValueError) as exc:
+        raise HTTPException(status_code=409, detail="无法读取分析输入，请确认来源任务已完成且文件可用。") from exc
 
 
 @app.get("/api/jobs/{job_id}/analysis-index-groups")
@@ -690,36 +690,36 @@ def analysis_index_groups(job_id: str, file: Annotated[str, Query(min_length=1, 
             elif line and groups:
                 groups[-1]["atoms"] += len(line.split())
         return {"groups": groups}
-    except FileNotFoundError:
-        raise HTTPException(status_code=404, detail="来源任务或索引文件不存在。")
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="来源任务或索引文件不存在。") from exc
     except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
-    except OSError:
-        raise HTTPException(status_code=409, detail="无法读取索引文件。")
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except OSError as exc:
+        raise HTTPException(status_code=409, detail="无法读取索引文件。") from exc
 
 
 @app.post("/api/jobs/{job_id}/analysis")
 def analyze_existing_job(job_id: str, request: ExistingAnalysisRequest) -> dict:
     try:
         return create_existing_analysis(STORE, job_id, request, current_settings())
-    except FileNotFoundError:
-        raise HTTPException(status_code=404, detail="Job or analysis input not found")
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="Job or analysis input not found") from exc
     except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
-    except (OSError, RuntimeError):
-        raise HTTPException(status_code=409, detail="无法准备分析输入，请检查文件及可用磁盘空间。")
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except (OSError, RuntimeError) as exc:
+        raise HTTPException(status_code=409, detail="无法准备分析输入，请检查文件及可用磁盘空间。") from exc
 
 
 @app.post("/api/jobs/{job_id}/analysis-preflight")
 def analysis_preflight(job_id: str, request: ExistingAnalysisRequest) -> dict:
     try:
         return preflight_existing_analysis(STORE, job_id, request, current_settings())
-    except FileNotFoundError:
-        raise HTTPException(status_code=404, detail="来源任务或分析输入不存在。")
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="来源任务或分析输入不存在。") from exc
     except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
-    except (OSError, RuntimeError):
-        raise HTTPException(status_code=409, detail="无法预检分析输入，请确认来源任务已完成且文件可用。")
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except (OSError, RuntimeError) as exc:
+        raise HTTPException(status_code=409, detail="无法预检分析输入，请确认来源任务已完成且文件可用。") from exc
 
 
 @app.post("/api/jobs/{job_id}/analysis-stream")
@@ -735,10 +735,10 @@ def analyze_existing_job_stream(job_id: str, request: ExistingAnalysisRequest) -
 def clone_job(job_id: str, request: CloneRequest | None = None) -> dict:
     try:
         return STORE.clone(job_id, request.name if request else None)
-    except FileNotFoundError:
-        raise HTTPException(status_code=404, detail="Job not found")
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="Job not found") from exc
     except (OSError, RuntimeError, ValueError) as exc:
-        raise HTTPException(status_code=409, detail=str(exc))
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 
 def _benchmark_tpr(meta: dict) -> Path:
@@ -852,10 +852,10 @@ def benchmark_job(job_id: str, request: BenchmarkRequest | None = None) -> dict:
                     return STORE.get(created["id"])
                 STORE.update(created["id"], status="failed", error=f"Failed to prepare benchmark: {exc}")
                 raise
-    except FileNotFoundError:
-        raise HTTPException(status_code=404, detail="Job or TPR not found")
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="Job or TPR not found") from exc
     except (OSError, RuntimeError, ValueError) as exc:
-        raise HTTPException(status_code=409, detail=str(exc))
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 
 def _flatten_params(value: object, prefix: str = "") -> dict[str, object]:
@@ -873,8 +873,8 @@ def compare_jobs(job_id: str, other_job_id: str) -> dict:
     try:
         left = STORE.get(job_id)
         right = STORE.get(other_job_id)
-    except FileNotFoundError:
-        raise HTTPException(status_code=404, detail="Job not found")
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="Job not found") from exc
     left_params = _flatten_params(left.get("params") or {})
     right_params = _flatten_params(right.get("params") or {})
     keys = sorted(set(left_params) | set(right_params))
@@ -894,58 +894,58 @@ def compare_jobs(job_id: str, other_job_id: str) -> dict:
 def cancel_job(job_id: str) -> dict:
     try:
         return STORE.cancel(job_id)
-    except FileNotFoundError:
-        raise HTTPException(status_code=404, detail="Job not found")
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="Job not found") from exc
 
 
 @app.post("/api/jobs/{job_id}/adopt")
 def adopt_job(job_id: str) -> dict:
     try:
         return STORE.adopt(job_id)
-    except FileNotFoundError:
-        raise HTTPException(status_code=404, detail="Job not found")
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="Job not found") from exc
     except RuntimeError as exc:
-        raise HTTPException(status_code=409, detail=str(exc))
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 
 @app.post("/api/jobs/{job_id}/resume-checkpoint")
 def resume_job_from_checkpoint(job_id: str) -> dict:
     try:
         return STORE.resume_from_checkpoint(job_id)
-    except FileNotFoundError:
-        raise HTTPException(status_code=404, detail="Job not found")
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="Job not found") from exc
     except RuntimeError as exc:
-        raise HTTPException(status_code=409, detail=str(exc))
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 
 @app.post("/api/jobs/{job_id}/retry-step")
 def retry_failed_step(job_id: str) -> dict:
     try:
         return STORE.retry_failed_step(job_id)
-    except FileNotFoundError:
-        raise HTTPException(status_code=404, detail="Job not found")
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="Job not found") from exc
     except RuntimeError as exc:
-        raise HTTPException(status_code=409, detail=str(exc))
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 
 @app.post("/api/jobs/{job_id}/skip-step")
 def skip_failed_step(job_id: str) -> dict:
     try:
         return STORE.skip_failed_step(job_id)
-    except FileNotFoundError:
-        raise HTTPException(status_code=404, detail="Job not found")
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="Job not found") from exc
     except RuntimeError as exc:
-        raise HTTPException(status_code=409, detail=str(exc))
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 
 @app.delete("/api/jobs/{job_id}")
 def delete_job(job_id: str) -> dict:
     try:
         meta = STORE.delete(job_id)
-    except FileNotFoundError:
-        raise HTTPException(status_code=404, detail="Job not found")
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="Job not found") from exc
     except RuntimeError as exc:
-        raise HTTPException(status_code=409, detail=str(exc))
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     with FILE_LIST_CACHE_LOCK:
         FILE_LIST_CACHE.pop((id(STORE), job_id), None)
     return {"deleted": True, "job": meta}
@@ -960,8 +960,8 @@ def job_log(
 ):
     try:
         STORE.get(job_id)
-    except FileNotFoundError:
-        raise HTTPException(status_code=404, detail="Job not found")
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="Job not found") from exc
     path = STORE.log_path(job_id)
     if offset is not None:
         return read_log_chunk(path, offset, limit)
@@ -985,8 +985,8 @@ async def job_events(
     if job_id:
         try:
             await run_in_threadpool(STORE.get, job_id)
-        except FileNotFoundError:
-            raise HTTPException(status_code=404, detail="Job not found")
+        except FileNotFoundError as exc:
+            raise HTTPException(status_code=404, detail="Job not found") from exc
 
     async def stream():
         jobs_signature = ""
@@ -1058,8 +1058,8 @@ def job_files(
 ) -> dict:
     try:
         meta = STORE.get(job_id)
-    except FileNotFoundError:
-        raise HTTPException(status_code=404, detail="Job not found")
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="Job not found") from exc
     cache_key = f"{meta['workdir']}:{meta.get('status')}:{meta.get('step_index')}:{meta.get('storage_revision', 0)}"
     entry_key = (id(STORE), job_id)
     active = meta.get("status") in {"preparing", "queued", "running", "interrupted"}
@@ -1100,8 +1100,8 @@ def job_plots(
 ) -> dict:
     try:
         meta = STORE.get(job_id)
-    except FileNotFoundError:
-        raise HTTPException(status_code=404, detail="Job not found")
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="Job not found") from exc
     if replica is not None and not 1 <= replica <= 16:
         raise HTTPException(status_code=400, detail="Replica must be between 1 and 16")
     for value in (begin_ns, end_ns):
@@ -1116,8 +1116,8 @@ def job_plots(
 def download_plot_data(job_id: str) -> Response:
     try:
         meta = STORE.get(job_id)
-    except FileNotFoundError:
-        raise HTTPException(status_code=404, detail="Job not found")
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="Job not found") from exc
     workdir = Path(meta["workdir"]).resolve()
     files = []
     total_bytes = 0
@@ -1153,13 +1153,13 @@ def download_plot_data(job_id: str) -> Response:
 def download_file(job_id: str, path: str) -> FileResponse:
     try:
         meta = STORE.get(job_id)
-    except FileNotFoundError:
-        raise HTTPException(status_code=404, detail="Job not found")
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="Job not found") from exc
     workdir = Path(meta["workdir"])
     try:
         target = ensure_under_root(workdir / path, workdir)
-    except ValueError:
-        raise HTTPException(status_code=400, detail="Invalid path")
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="Invalid path") from exc
     if not target.exists() or not target.is_file():
         raise HTTPException(status_code=404, detail="File not found")
     return FileResponse(target, filename=target.name)

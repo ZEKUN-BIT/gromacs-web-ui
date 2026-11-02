@@ -4,8 +4,9 @@ from __future__ import annotations
 
 import platform
 import re
+from collections.abc import Callable
 from pathlib import Path
-from typing import Annotated, Callable
+from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import FileResponse, StreamingResponse

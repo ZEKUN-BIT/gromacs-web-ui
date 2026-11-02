@@ -245,12 +245,12 @@ def test_build_preserves_unicode_and_script_newlines_with_windows_text_defaults(
     shutil.copytree(builder.ASSETS, assets)
     launcher = (assets / "Start.cmd").read_bytes().replace(b"\r\n", b"\n")
     (assets / "Start.cmd").write_bytes(launcher.replace(b"\n", launcher_newline))
-    html = '<p>中文数据</p><link href="/static/例子.css">'.encode("utf-8")
-    css = "/* 中文数据 */ body { color: green; }".encode("utf-8")
+    html = '<p>中文数据</p><link href="/static/例子.css">'.encode()
+    css = "/* 中文数据 */ body { color: green; }".encode()
     (root / "app/static/说明.html").write_bytes(html)
     (root / "app/static/例子.css").write_bytes(css)
     project = root / "pyproject.toml"
-    project.write_bytes(project.read_bytes() + "\n# 中文数据\n".encode("utf-8"))
+    project.write_bytes(project.read_bytes() + "\n# 中文数据\n".encode())
     original_open = Path.open
 
     def windows_text_open(path, mode="r", buffering=-1, encoding=None, errors=None, newline=None):
@@ -485,7 +485,7 @@ def test_build_rejects_unshipped_static_reference(tmp_path, monkeypatch):
     for name in ("requirements.txt", "run.sh", "scripts/__init__.py", "scripts/md_plot.py"):
         (root / name).write_text("", encoding="utf-8")
     (root / "app/page.html").write_text('<img src="/static/missing.png">', encoding="utf-8")
-    with pytest.raises(ValueError, match="missing.png"):
+    with pytest.raises(ValueError, match=r"missing\.png"):
         builder.write_payload(root, tmp_path / "bad.tar.gz")
 
 

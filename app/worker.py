@@ -8,8 +8,8 @@ import signal
 import socket
 import sqlite3
 import threading
+from collections.abc import Callable
 from pathlib import Path
-from typing import Callable
 from uuid import uuid4
 
 from .execution import WorkerEngine

@@ -2,18 +2,19 @@
 # Compatibility facade: moved symbols remain importable by existing integrations.
 from __future__ import annotations
 
+import itertools
 import json
 import math
 import os
 import re
 import shutil
 import subprocess
-from datetime import datetime, timezone
+from datetime import UTC, datetime, timezone
 from pathlib import Path
 from statistics import fmean, stdev
 
 from .files import ensure_under_root
-from .forcefields import (  # noqa: F401 - preserve legacy gromacs imports
+from .forcefields import (
     KNOWN_WATER_MENU_SELECTIONS as KNOWN_WATER_MENU_SELECTIONS,
 )
 from .forcefields import (
@@ -52,7 +53,7 @@ from .forcefields import (
 from .forcefields import (
     unconfirmed_acpype_ligands as unconfirmed_acpype_ligands,
 )
-from .ligand_operations import (  # noqa: F401 - preserve legacy gromacs imports
+from .ligand_operations import (
     _COVALENT_RADII as _COVALENT_RADII,
 )
 from .ligand_operations import (
@@ -112,7 +113,7 @@ from .ligand_operations import (
 from .ligand_operations import (
     write_ligand_smiles as _write_ligand_smiles,
 )
-from .mdp import (  # noqa: F401 - preserve legacy gromacs imports
+from .mdp import (
     MDP_ALL_PREP_STAGES as MDP_ALL_PREP_STAGES,
 )
 from .mdp import (
@@ -190,13 +191,13 @@ from .mdp import (
 from .mdp import (
     write_missing_mdp_files as write_missing_mdp_files,
 )
-from .steps import (  # noqa: F401 - preserve legacy gromacs imports
+from .steps import (
     Step as Step,
 )
 from .steps import (
     internal_step as _internal_step,
 )
-from .structure import (  # noqa: F401 - preserve legacy gromacs imports
+from .structure import (
     PDB_ION_RESIDUES as PDB_ION_RESIDUES,
 )
 from .structure import (
@@ -250,7 +251,7 @@ from .structure import (
 from .structure import (
     write_pdb_subset as _write_pdb_subset,
 )
-from .workflow_parameters import (  # noqa: F401 - preserve legacy gromacs imports
+from .workflow_parameters import (
     bool_param as _bool_param,
 )
 from .workflow_parameters import (
@@ -283,7 +284,7 @@ from .workflow_parameters import (
 from .workflow_parameters import (
     topology_file as _topology,
 )
-from .workflows.common import (  # noqa: F401 - preserve legacy gromacs imports
+from .workflows.common import (
     ALLOWED_SUBCOMMANDS as ALLOWED_SUBCOMMANDS,
 )
 from .workflows.common import (
@@ -348,7 +349,7 @@ TERMINAL_STATES = {"completed", "failed", "cancelled", "interrupted"}
 
 
 def utc_now() -> str:
-    return datetime.now(timezone.utc).isoformat()
+    return datetime.now(UTC).isoformat()
 
 
 def write_json(path: Path, data: dict) -> None:
@@ -576,7 +577,7 @@ def _series_stats(values: list[float]) -> dict[str, float]:
     # Integer division previously dropped remainder samples from SEM. These
     # contiguous blocks cover every value, with sizes differing by at most one.
     boundaries = [index * count // block_count for index in range(block_count + 1)]
-    blocks = [fmean(values[begin:end]) for begin, end in zip(boundaries, boundaries[1:])]
+    blocks = [fmean(values[begin:end]) for begin, end in itertools.pairwise(boundaries)]
     sem = stdev(blocks) / math.sqrt(len(blocks)) if len(blocks) > 1 else 0.0
     quarter = max(1, count // 4)
     drift = fmean(values[-quarter:]) - fmean(values[:quarter])

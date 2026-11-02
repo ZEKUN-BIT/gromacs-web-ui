@@ -12,7 +12,7 @@ import time
 import uuid
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 from pydantic import ValidationError
@@ -46,7 +46,7 @@ INSTRUCTIONS = """你是本机 GROMACS 项目的 AI 调度助手。默认用中�
 
 
 def now() -> str:
-    return datetime.now(timezone.utc).isoformat()
+    return datetime.now(UTC).isoformat()
 
 
 def serialized(value) -> str:
@@ -395,7 +395,7 @@ class AgentService:
                                 **prepared,
                                 "status": "pending",
                                 "expires_epoch": expiry,
-                                "expires_at": datetime.fromtimestamp(expiry, timezone.utc).isoformat(),
+                                "expires_at": datetime.fromtimestamp(expiry, UTC).isoformat(),
                                 "result": None,
                                 "error": None,
                             }

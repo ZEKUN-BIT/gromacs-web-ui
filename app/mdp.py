@@ -260,8 +260,8 @@ def optional_float(params: dict, key: str, label: str, positive: bool = True) ->
         return None
     try:
         value = float(raw)
-    except (TypeError, ValueError):
-        raise ValueError(f"{label} must be a number.")
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"{label} must be a number.") from exc
     if positive and value <= 0:
         raise ValueError(f"{label} must be greater than 0.")
     if not positive and value < 0:

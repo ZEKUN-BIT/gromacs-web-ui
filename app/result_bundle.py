@@ -110,7 +110,7 @@ def quality_summary(workdir: Path) -> list[dict]:
 
 
 def build_result_bundle(store, job_id: str):
-    archive = tempfile.SpooledTemporaryFile(max_size=8 * 1024**2, mode="w+b")
+    archive = tempfile.SpooledTemporaryFile(max_size=8 * 1024**2, mode="w+b")  # noqa: SIM115 - returned to the caller
     try:
         with store.job_files_lock(job_id):
             meta = store.get(job_id)
@@ -174,7 +174,7 @@ def build_result_bundle(store, job_id: str):
                             break
                         path = Path(directory) / name
                         relative = path.relative_to(workdir).as_posix()
-                        allowed = name in REPORT_NAMES or name.startswith("quality-") and path.suffix in {".json", ".txt"}
+                        allowed = name in REPORT_NAMES or (name.startswith("quality-") and path.suffix in {".json", ".txt"})
                         allowed = allowed or path.suffix.lower() in {".xvg", ".png", ".pdf", ".tsv", ".mdp"}
                         if not allowed:
                             continue

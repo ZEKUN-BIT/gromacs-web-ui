@@ -182,7 +182,7 @@ def test_stall_retries_are_explicit_bounded_and_resume_only_current_download(mon
 
     monkeypatch.setattr(gpu.subprocess, "Popen", transfer)
     monkeypatch.setattr(gpu, "DOWNLOAD_RETRY_DELAY", 0)
-    with pytest.raises(RuntimeError, match="failed after 4 attempt.*stalled"):
+    with pytest.raises(RuntimeError, match=r"failed after 4 attempt.*stalled"):
         gpu.download_verified(gpu.CUFFT_URL, "0" * 64, target)
     assert len(attempts) == 4
     assert all(command[command.index("--continue-at") + 1] == "-" for command in attempts)
@@ -288,7 +288,7 @@ def test_stalled_real_downloader_cleans_all_parallel_packages_and_preserves_pref
     monkeypatch.setattr(gpu.subprocess, "Popen", transfer)
     monkeypatch.setattr(gpu, "DOWNLOAD_RETRY_DELAY", 0)
     monkeypatch.setattr(gpu, "extract_gromacs", lambda *args: pytest.fail("A stalled package must prevent all extraction"))
-    with pytest.raises(RuntimeError, match="failed after 4 attempt.*stalled"):
+    with pytest.raises(RuntimeError, match=r"failed after 4 attempt.*stalled"):
         gpu.install(prefix, work, {"devices": [{"index": 0}]})
     assert len(attempts) == 4
     assert not list(work.iterdir())
@@ -658,7 +658,7 @@ def test_later_failed_download_cancels_only_owned_processes_and_cleans_after_wor
     monkeypatch.setattr(gpu, "extract_gromacs", lambda *args: pytest.fail("A failed hash must prevent extraction"))
     started = time.monotonic()
     try:
-        with pytest.raises(ValueError, match="SHA-256 mismatch for cufft.whl"):
+        with pytest.raises(ValueError, match=r"SHA-256 mismatch for cufft\.whl"):
             gpu.install(prefix, work, {"devices": [{"index": 0}]})
         assert time.monotonic() - started < 5, "The first submitted slow download must not hide a later failed hash"
         assert len(processes) == 4
@@ -767,7 +767,7 @@ def test_gpu_smoke_still_exercises_nonbonded_pme_and_fft_with_time_limits(monkey
 
     monkeypatch.setattr(gpu.subprocess, "run", command)
     gpu.validate_runtime(tmp_path, tmp_path, 2)
-    simulation, options = calls[-1]
+    simulation, _options = calls[-1]
     assert simulation[1] == "mdrun"
     assert all(simulation[simulation.index(flag) + 1] == "gpu" for flag in ("-nb", "-pme", "-pmefft"))
     assert simulation[simulation.index("-gpu_id") + 1] == "2"

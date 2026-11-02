@@ -402,7 +402,7 @@ class AgentTools:
         result = {}
         for role, suffixes in INPUT_SUFFIXES.items():
             name = options[role]
-            if not name or role == "edr_file" and not options["do_energy"]:
+            if not name or (role == "edr_file" and not options["do_energy"]):
                 continue
             info = source_file(root, name, suffixes).stat()
             result[role] = [name, info.st_size, info.st_mtime_ns, info.st_ino]

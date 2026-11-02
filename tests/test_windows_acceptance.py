@@ -79,7 +79,7 @@ def test_passed_step_requires_actual_text(record, actual):
 
 
 @pytest.mark.parametrize(
-    "updates", [{"os": []}, {"steps": []}, {"evidence": [None]}, {"steps": {name: None for name in acceptance.CASES["win10-fresh-cpu"]}}]
+    "updates", [{"os": []}, {"steps": []}, {"evidence": [None]}, {"steps": dict.fromkeys(acceptance.CASES["win10-fresh-cpu"])}]
 )
 def test_malformed_record_containers_are_rejected(record, updates):
     with pytest.raises(ValueError):
