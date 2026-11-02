@@ -52,6 +52,11 @@ jobs:
       - run: ruff check app scripts tests
       - run: ruff format --check app tests
       - run: python scripts/sync_frontend_assets.py --check
+      - name: Lint frontend modules
+        if: matrix.python-version == '3.12'
+        run: |
+          npm ci --no-audit --no-fund
+          npm run lint
       - run: pytest -m "not gromacs_integration" --cov=app --cov-report=term
       - name: Install browser test tools
         if: matrix.python-version == '3.12'

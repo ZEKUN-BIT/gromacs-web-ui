@@ -1,0 +1,14 @@
+{
+  "name": "gromacs-web-ui-frontend-tools",
+  "private": true,
+  "description": "Development-only tooling for linting the browser modules; the app ships no npm dependencies.",
+  "type": "module",
+  "scripts": {
+    "lint": "eslint app/static/js scripts/*.mjs"
+  },
+  "devDependencies": {
+    "@eslint/js": "10.0.1",
+    "eslint": "10.14.0",
+    "globals": "17.14.0"
+  }
+}

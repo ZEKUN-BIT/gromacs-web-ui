@@ -1,7 +1,7 @@
 // 多配体编辑与 PDB 配体识别。
 
-import { els, escapeHtml, toast } from "./core.js?v=b2667498e9955f71";
-import { selectedUploadFiles } from "./form-files.js?v=b2667498e9955f71";
+import { els, escapeHtml, toast } from "./core.js?v=6cd8594e2b063155";
+import { selectedUploadFiles } from "./form-files.js?v=6cd8594e2b063155";
 
 const PDB_WATER_RESIDUES = new Set(["HOH", "WAT", "SOL", "H2O", "TIP3", "TIP3P", "TIP4P", "OPC", "OPC3"]);
 const PDB_ION_RESIDUES = new Set([
@@ -198,7 +198,7 @@ export async function detectLigandsFromPdb() {
     toast("先在右侧上传复合物 PDB，并让「蛋白文件」指向它", "error");
     return;
   }
-  let text = "";
+  let text;
   try {
     text = await file.text();
   } catch {

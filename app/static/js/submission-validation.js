@@ -1,5 +1,5 @@
 // Persistent, field-linked validation. Server messages are always plain text.
-import { els, showWorkspaceView } from "./core.js?v=b2667498e9955f71";
+import { els, showWorkspaceView } from "./core.js?v=6cd8594e2b063155";
 
 const markedFields = new Map();
 

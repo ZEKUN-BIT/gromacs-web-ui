@@ -1,7 +1,7 @@
 // Shareable task locations and browser history; form contents never enter URLs.
-import { state, els, showWorkspaceView, showDetailTab, toast } from "./core.js?v=b2667498e9955f71";
-import { refreshJobs, selectJob } from "./jobs.js?v=b2667498e9955f71";
-import { connectEventStream } from "./event-stream.js?v=b2667498e9955f71";
+import { state, els, showWorkspaceView, showDetailTab, toast } from "./core.js?v=6cd8594e2b063155";
+import { refreshJobs, selectJob } from "./jobs.js?v=6cd8594e2b063155";
+import { connectEventStream } from "./event-stream.js?v=6cd8594e2b063155";
 
 export function bindNavigation() {
   let ready = false, restoring = false, queued = false;

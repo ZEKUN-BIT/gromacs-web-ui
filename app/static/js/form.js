@@ -10,24 +10,24 @@ import {
   toast,
   api,
   replaySwapAnimation,
-} from "./core.js?v=b2667498e9955f71";
+} from "./core.js?v=6cd8594e2b063155";
 
 import {
   hasFile, fileNameEndsWith, fileParamEndsWith, uploadedNames, selectedUploadFiles,
-} from "./form-files.js?v=b2667498e9955f71";
+} from "./form-files.js?v=6cd8594e2b063155";
 import {
   ligandCards, addLigandRow, ensureDefaultLigandRow, readLigandPayload, refreshRowMode, setLigandCardField,
   removeLigandRow as removeLigandEditorRow, detectLigandsFromPdb as detectPdbLigands,
-} from "./form-ligands.js?v=b2667498e9955f71";
+} from "./form-ligands.js?v=6cd8594e2b063155";
 import {
   setMdpPanelExpanded, updateMdpPanelState, refreshProtocolPreview, renderMdpPreview,
-} from "./form-parameters.js?v=b2667498e9955f71";
+} from "./form-parameters.js?v=6cd8594e2b063155";
 import {
   renderForceFieldSource, renderWaterModelOptions, refreshHealth, updateResourceAdvice,
   applyHardwareRecommendation as applyHardwareDefaults,
   renderReadiness,
-} from "./form-environment.js?v=b2667498e9955f71";
-import { apiSubmissionIssues, clearSubmissionIssues, showSubmissionIssues } from "./submission-validation.js?v=b2667498e9955f71";
+} from "./form-environment.js?v=6cd8594e2b063155";
+import { apiSubmissionIssues, clearSubmissionIssues, showSubmissionIssues } from "./submission-validation.js?v=6cd8594e2b063155";
 
 export {
   hasFile, fileNameEndsWith, fileParamEndsWith, uploadedNames, selectedUploadFiles,
@@ -232,13 +232,6 @@ function setAutoFileField(name, value, selectedNames, changed) {
   field.classList.add("auto-filled");
   window.setTimeout(() => field.classList.remove("auto-filled"), 900);
   changed.push(`${field.closest("label")?.childNodes[0]?.textContent?.trim() || name}: ${value}`);
-}
-
-function clearAutoFileField(name, changed) {
-  const field = els.jobForm.querySelector(`[name='${name}']`);
-  if (!field || field.dataset.autoUpload !== "true" || !field.value) return;
-  field.value = "";
-  changed.push(name);
 }
 
 export function syncFileFieldsFromUploads({ notify = false } = {}) {

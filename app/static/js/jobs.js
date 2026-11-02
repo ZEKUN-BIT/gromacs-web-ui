@@ -5,7 +5,6 @@ import {
   WORKFLOW_LABELS,
   ACTIVE_STATES,
   MAX_LOG_CHARS,
-  $,
   els,
   state,
   escapeHtml,
@@ -16,9 +15,9 @@ import {
   replaySwapAnimation,
   showWorkspaceView,
   showDetailTab,
-} from "./core.js?v=b2667498e9955f71";
-import { renderPlots, resetPlotFilters, updatePlotOptions } from "./plots.js?v=b2667498e9955f71";
-import { renderResearch } from "./research.js?v=b2667498e9955f71";
+} from "./core.js?v=6cd8594e2b063155";
+import { renderPlots, resetPlotFilters, updatePlotOptions } from "./plots.js?v=6cd8594e2b063155";
+import { renderResearch } from "./research.js?v=6cd8594e2b063155";
 import {
   captureSubmissionSnapshot,
   isSubmissionSnapshotReady,
@@ -26,9 +25,9 @@ import {
   submitWarnings,
   friendlyPreviewError,
   refreshPreview,
-} from "./form.js?v=b2667498e9955f71";
-import { apiSubmissionIssues, clearSubmissionIssues, showSubmissionIssues } from "./submission-validation.js?v=b2667498e9955f71";
-import { uploadJob, bindUploadRecovery } from "./submission-upload.js?v=b2667498e9955f71";
+} from "./form.js?v=6cd8594e2b063155";
+import { apiSubmissionIssues, clearSubmissionIssues, showSubmissionIssues } from "./submission-validation.js?v=6cd8594e2b063155";
+import { uploadJob, bindUploadRecovery } from "./submission-upload.js?v=6cd8594e2b063155";
 
 /* ---------- 任务列表（签名对比，按需渲染 + 事件委托） ---------- */
 

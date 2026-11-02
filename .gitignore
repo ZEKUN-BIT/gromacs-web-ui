@@ -47,3 +47,6 @@ mdout.mdp
 /docs/*OPTIMIZATION*.md
 /docs/windows-*-python-audit.json
 /docs/windows-*-release-verification.json
+
+# Development-only frontend lint tooling.
+node_modules/
