@@ -10,24 +10,24 @@ import {
   toast,
   api,
   replaySwapAnimation,
-} from "./core.js?v=ed99335f08f47fd8";
+} from "./core.js?v=a3c62023f9227a95";
 
 import {
   hasFile, fileNameEndsWith, fileParamEndsWith, uploadedNames, selectedUploadFiles,
-} from "./form-files.js?v=ed99335f08f47fd8";
+} from "./form-files.js?v=a3c62023f9227a95";
 import {
   ligandCards, addLigandRow, ensureDefaultLigandRow, readLigandPayload, refreshRowMode, setLigandCardField,
   removeLigandRow as removeLigandEditorRow, detectLigandsFromPdb as detectPdbLigands,
-} from "./form-ligands.js?v=ed99335f08f47fd8";
+} from "./form-ligands.js?v=a3c62023f9227a95";
 import {
   setMdpPanelExpanded, updateMdpPanelState, refreshProtocolPreview, renderMdpPreview,
-} from "./form-parameters.js?v=ed99335f08f47fd8";
+} from "./form-parameters.js?v=a3c62023f9227a95";
 import {
   renderForceFieldSource, renderWaterModelOptions, refreshHealth, updateResourceAdvice,
   applyHardwareRecommendation as applyHardwareDefaults,
   renderReadiness,
-} from "./form-environment.js?v=ed99335f08f47fd8";
-import { apiSubmissionIssues, clearSubmissionIssues, showSubmissionIssues } from "./submission-validation.js?v=ed99335f08f47fd8";
+} from "./form-environment.js?v=a3c62023f9227a95";
+import { apiSubmissionIssues, clearSubmissionIssues, showSubmissionIssues } from "./submission-validation.js?v=a3c62023f9227a95";
 
 export {
   hasFile, fileNameEndsWith, fileParamEndsWith, uploadedNames, selectedUploadFiles,

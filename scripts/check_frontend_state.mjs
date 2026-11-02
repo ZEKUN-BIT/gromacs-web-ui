@@ -2,6 +2,7 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import vm from "node:vm";
+import { webcrypto } from "node:crypto";
 
 const source = readFileSync(new URL("../app/static/js/jobs.js", import.meta.url), "utf8");
 const start = source.indexOf("let jobsRequestGeneration = 0;");
@@ -49,9 +50,7 @@ console.log("An old detail 404 cannot replace the latest search results.");
 
 // Exercise the actual upload implementation with explicitly dispatched XHR
 // events, including upload completion before the server finishes preparing.
-const uploadStart = source.indexOf("function uploadJob(data, button) {");
-const uploadEnd = source.indexOf("export async function submitJob()", uploadStart);
-assert(uploadStart >= 0 && uploadEnd > uploadStart);
+const uploadSource = readFileSync(new URL("../app/static/js/submission-upload.js", import.meta.url), "utf8");
 const coreSource = readFileSync(new URL("../app/static/js/core.js", import.meta.url), "utf8");
 const formatStart = coreSource.indexOf("export function formatApiError(detail) {");
 const formatEnd = coreSource.indexOf("let confirmDialogResolver", formatStart);
@@ -66,6 +65,9 @@ class FakeEvents {
   emit(type, event = {}) {
     for (const callback of this.listeners.get(type) || []) callback(event);
   }
+  removeEventListener(type, callback) {
+    this.listeners.set(type, (this.listeners.get(type) || []).filter(item => item !== callback));
+  }
 }
 
 class ControlledXHR extends FakeEvents {
@@ -77,21 +79,33 @@ class ControlledXHR extends FakeEvents {
   }
   open(method, url) { this.method = method; this.url = url; }
   send(data) { this.data = data; }
+  abort() { this.aborted = true; this.emit("abort"); }
 }
 
+const uploadElements = new Map(["upload-status", "upload-message", "cancel-upload", "resolve-upload"].map(id => [id, new FakeEvents()]));
+const uploadStorage = new Map();
+const uploadTimers = new Set();
+let uploadTime = 0;
 const uploads = {
   XMLHttpRequest: ControlledXHR,
   updateText(element, value) { element.textContent = value; },
+  document: { querySelector(selector) { return uploadElements.get(selector.slice(1)); } },
+  sessionStorage: { getItem: key => uploadStorage.get(key), setItem: (key, value) => uploadStorage.set(key, value), removeItem: key => uploadStorage.delete(key) },
+  setInterval(callback) { uploadTimers.add(callback); return callback; },
+  clearInterval(callback) { uploadTimers.delete(callback); },
+  Date: { now: () => uploadTime },
+  crypto: webcrypto,
+  api: async () => ({ state: "cancelled" }),
 };
 vm.createContext(uploads);
 vm.runInContext(coreSource.slice(formatStart, formatEnd).replaceAll("export ", ""), uploads);
-vm.runInContext(source.slice(uploadStart, uploadEnd), uploads);
+vm.runInContext(uploadSource.replace(/^import .*;\n/, "").replaceAll("export ", ""), uploads);
 
-function startUpload() {
-  const data = { params: "synthetic upload; never sent to a server" };
+function startUpload(recover = false) {
+  const data = new Map([["params", "synthetic upload; never sent to a server"]]);
   const label = { textContent: "正在上传…" };
   const button = { querySelector(selector) { assert.equal(selector, ".button-label"); return label; } };
-  const pending = uploads.uploadJob(data, button);
+  const pending = recover ? uploads.uploadJob(data, button) : uploads.sendUpload(data, button);
   const request = ControlledXHR.requests.at(-1);
   assert.equal(request.method, "POST");
   assert.equal(request.url, "/api/jobs");
@@ -132,14 +146,56 @@ for (const failure of [
 }
 
 for (const [type, message] of [
-  ["error", "连接中断，请检查服务，并先查看任务列表确认是否已提交。"],
-  ["abort", "上传已取消。"],
+  ["error", "连接中断，正在核对提交结果。"],
+  ["abort", "上传已中断。"],
 ]) {
   const { pending, request } = startUpload();
   request.emit(type);
   await assert.rejects(pending, (error) => error.message === message && error.status === undefined);
 }
 console.log("Real upload progress, preparation wait, 2xx success, validation/HTTP failure, network error and abort handling passed.");
+
+{
+  const { pending, request } = startUpload();
+  uploadTime += 120_001;
+  for (const callback of uploadTimers) callback();
+  await assert.rejects(pending, /连续 2 分钟没有进展/);
+  assert.equal(request.aborted, true);
+}
+{
+  const { pending, request } = startUpload();
+  request.upload.emit("load");
+  uploadTime += 600_000;
+  for (const callback of uploadTimers) callback();
+  assert.equal(request.aborted, undefined, "Long server preparation must remain usable");
+  assert.match(uploadElements.get("upload-message").textContent, /准备耗时较长/);
+  uploadElements.get("cancel-upload").emit("click");
+  await assert.rejects(pending, /已停止等待/);
+}
+{
+  const existingJob = { id: "already-created", status: "queued" };
+  uploads.api = async () => ({ state: "submitted", job: existingJob });
+  const { pending, request } = startUpload(true);
+  assert.match(request.data.get("submission_id"), /^[a-f0-9]{32}$/);
+  request.emit("error");
+  assert.equal(await pending, existingJob, "A lost success response must resolve the original task");
+  assert.equal(uploadStorage.size, 0);
+}
+{
+  uploads.api = async () => { throw new Error("offline"); };
+  const { pending, request } = startUpload(true);
+  request.emit("error");
+  await assert.rejects(pending, /连接中断/);
+  assert.equal(uploadStorage.size, 1, "Unknown outcome must survive reload in this tab");
+  const count = ControlledXHR.requests.length;
+  await assert.rejects(uploads.uploadJob(new Map(), {}), /offline/);
+  assert.equal(ControlledXHR.requests.length, count, "Do not send another upload while outcome is unknown");
+  uploads.api = async () => ({ state: "submitted", job: { id: "recovered-after-offline" } });
+  assert.equal((await uploads.uploadJob(new Map(), {})).id, "recovered-after-offline");
+  assert.equal(ControlledXHR.requests.length, count);
+}
+assert.equal(uploadTimers.size, 0, "Every settled upload must release watchdog timers");
+console.log("Upload inactivity, preparation patience, cancellation, lost-response resolution and ambiguous retry protection passed.");
 
 // Run the real organization form against a small DOM and controlled PATCH calls.
 // Drafts must survive task switches, reloads, storage failure and saves in flight.

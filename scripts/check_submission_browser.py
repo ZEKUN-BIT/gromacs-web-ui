@@ -24,6 +24,9 @@ def check_submission(artifact_dir: Path | None = None) -> None:
     held = set()
     failures = {}
     submissions = []
+    upload_mode = {"value": "validation", "resolutions": 0}
+    pending_uploads = []
+    recovered_job = {"id": "recovered-upload", "name": "恢复的上传任务", "status": "queued", "workflow": "run_tpr", "step_count": 1}
     errors = []
     source = (APP / "static/js/main.js").read_text()
     version = re.search(r"core\.js\?([^\"]+)", source).group(1)
@@ -52,9 +55,25 @@ def check_submission(artifact_dir: Path | None = None) -> None:
             return
         if path == "/api/jobs" and method == "POST":
             submissions.append(route.request.post_data_buffer)
+            if upload_mode["value"] == "hold":
+                pending_uploads.append(route)
+                return
+            if upload_mode["value"] == "lost-response":
+                route.abort("failed")
+                return
             fulfill(
                 route, {"detail": [{"loc": ["body", "params", "name"], "msg": "<img src=x onerror=window.xss=true> 服务端字段错误"}]}, 422
             )
+            return
+        if path.startswith("/api/submissions/") and path.endswith("/resolve"):
+            upload_mode["resolutions"] += 1
+            if upload_mode["value"] == "lost-response":
+                fulfill(route, {"state": "submitted", "job": recovered_job})
+            else:
+                fulfill(route, {"state": "cancelled"})
+            return
+        if path == "/api/jobs/recovered-upload":
+            fulfill(route, recovered_job)
             return
         payloads = {
             "/api/health": {"settings": {"gmx_bin": "gmx", "max_parallel": 1}, "gromacs": {"available": False}, "diagnostics": {}},
@@ -269,6 +288,36 @@ def check_submission(artifact_dir: Path | None = None) -> None:
             page.evaluate("window.finishPdbRead('END\\n')")
             expect(page.locator("#submit-job")).to_be_enabled()
 
+            # Cancellation seals the upload identity, preserves form/files, and
+            # allows retry only after the server confirms no task was created.
+            configure()
+            upload_mode["value"] = "hold"
+            page.locator("#submit-job").click()
+            expect(page.locator("#cancel-upload")).to_be_visible()
+            page.wait_for_timeout(100)
+            assert pending_uploads
+            assert b'name="submission_id"' in submissions[-1]
+            page.locator("#cancel-upload").click()
+            expect(page.locator("#upload-message")).to_contain_text("参数和已选文件已保留")
+            expect(page.locator("#submit-job")).to_be_enabled()
+            assert upload_mode["resolutions"] == 1
+            assert page.locator("#files").evaluate("input => input.files.length") == 1
+            expect(page.locator("#job-name")).to_have_value("隔离提交测试")
+            for route in pending_uploads:
+                route.abort("aborted")
+            pending_uploads.clear()
+
+            # A lost success response opens the original task instead of
+            # uploading again, with a durable request ID carried in FormData.
+            upload_mode["value"] = "lost-response"
+            count = len(submissions)
+            page.locator("#submit-job").click()
+            expect(page.locator("#active-job-title")).to_have_text(recovered_job["name"])
+            expect(page.locator("#detail-view")).to_be_visible()
+            assert len(submissions) == count + 1
+            assert upload_mode["resolutions"] == 2
+            assert page.evaluate("sessionStorage.getItem('gromacs.pending-submission')") is None
+
             # Progress announces known, out-of-range, unknown and reset states.
             for value, expected in ((42.5, "42.5"), (130, "100"), (-8, "0"), (None, None), ("bad", None)):
                 page.evaluate(
@@ -290,11 +339,22 @@ def check_submission(artifact_dir: Path | None = None) -> None:
             expect(page.locator("#job-progress")).to_have_attribute("aria-valuenow", "0")
             expect(page.locator("#job-progress")).to_have_attribute("aria-valuetext", "未选择任务")
             expect(page.locator("#job-progress")).to_have_attribute("data-unknown", "false")
+            # Background status changes preserve the keyboard target, falling
+            # back to this task's selection button if its action disappears.
+            page.evaluate("""() => {
+                const {core, jobs} = window.modules;
+                core.state.jobs = [{id:'focus-job',name:'焦点测试',status:'running',workflow:'run_tpr'}];
+                jobs.renderJobs();
+                document.querySelector('[data-job-id="focus-job"] [data-action="cancel"]').focus();
+                core.state.jobsBusy = true;
+                jobs.renderJobs();
+            }""")
+            expect(page.locator('[data-job-id="focus-job"] [data-action="cancel"]')).to_be_focused()
+            page.evaluate("window.modules.core.state.jobs[0].status = 'completed'; window.modules.jobs.renderJobs()")
+            expect(page.locator('[data-job-id="focus-job"] .job-select')).to_be_focused()
             assert not errors, errors
             assert not any(pending.values()), "Held requests must all be released"
-            print(
-                "PASS field navigation, safe persistent 422 errors, preview races/failures, file identity, modal edits, asynchronous autofill and progress ARIA"
-            )
+            print("PASS field navigation, preview races, safe errors, upload cancellation/recovery, keyboard focus and progress ARIA")
         except Exception:
             print(
                 page.evaluate("""() => ({active:document.activeElement?.tagName + '#' + document.activeElement?.id,

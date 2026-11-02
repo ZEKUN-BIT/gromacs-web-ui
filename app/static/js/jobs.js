@@ -12,15 +12,14 @@ import {
   updateText,
   toast,
   api,
-  formatApiError,
   confirmDialog,
   confirmSubmitWarnings,
   replaySwapAnimation,
   showWorkspaceView,
   showDetailTab,
-} from "./core.js?v=ed99335f08f47fd8";
-import { renderPlots, resetPlotFilters, updatePlotOptions } from "./plots.js?v=ed99335f08f47fd8";
-import { renderResearch } from "./research.js?v=ed99335f08f47fd8";
+} from "./core.js?v=a3c62023f9227a95";
+import { renderPlots, resetPlotFilters, updatePlotOptions } from "./plots.js?v=a3c62023f9227a95";
+import { renderResearch } from "./research.js?v=a3c62023f9227a95";
 import {
   captureSubmissionSnapshot,
   isSubmissionSnapshotReady,
@@ -29,8 +28,9 @@ import {
   friendlyPreviewError,
   friendlyJobActionError,
   refreshPreview,
-} from "./form.js?v=ed99335f08f47fd8";
-import { apiSubmissionIssues, clearSubmissionIssues, showSubmissionIssues } from "./submission-validation.js?v=ed99335f08f47fd8";
+} from "./form.js?v=a3c62023f9227a95";
+import { apiSubmissionIssues, clearSubmissionIssues, showSubmissionIssues } from "./submission-validation.js?v=a3c62023f9227a95";
+import { uploadJob, bindUploadRecovery } from "./submission-upload.js?v=a3c62023f9227a95";
 
 /* ---------- 任务列表（签名对比，按需渲染 + 事件委托） ---------- */
 
@@ -64,10 +64,17 @@ export function renderJobs() {
   }
 
   if (!state.jobs.length) {
+    if (els.jobsList.contains(document.activeElement)) els.jobFilter?.focus({ preventScroll: true });
     const title = state.jobsBusy ? "正在读取任务…" : state.jobFilter.trim() ? "没有匹配任务" : "暂无任务";
     els.jobsList.innerHTML = `<div class="empty-jobs"><strong>${title}</strong><small>${state.jobFilter.trim() ? "换个名称、状态或工作流试试" : "提交后会出现在这里"}</small></div>`;
     return;
   }
+  const focused = els.jobsList.contains(document.activeElement) ? {
+    jobId: document.activeElement.closest("[data-job-id]")?.dataset.jobId,
+    action: document.activeElement.dataset.action,
+    select: document.activeElement.classList.contains("job-select"),
+  } : null;
+  const scrollTop = els.jobsList.scrollTop;
   els.jobsList.innerHTML = visibleJobs
     .map((job) => {
       const isActive = job.id === state.activeJobId;
@@ -99,6 +106,13 @@ export function renderJobs() {
       `;
     })
     .join("");
+  if (focused) {
+    const row = [...els.jobsList.querySelectorAll("[data-job-id]")].find(item => item.dataset.jobId === focused.jobId);
+    const target = row && (focused.select ? row.querySelector(".job-select")
+      : [...row.querySelectorAll("[data-action]")].find(button => button.dataset.action === focused.action));
+    (target || row?.querySelector(".job-select") || els.jobFilter)?.focus({ preventScroll: true });
+  }
+  els.jobsList.scrollTop = scrollTop;
   if (state.changedJobIds.size) {
     window.setTimeout(() => {
       els.jobsList.querySelectorAll(".badge.status-changed").forEach((badge) => badge.classList.remove("status-changed"));
@@ -655,33 +669,12 @@ function renderFiles(jobId, files, truncated = false) {
 
 /* ---------- 任务操作 ---------- */
 
-function uploadJob(data, button) {
-  return new Promise((resolve, reject) => {
-    const request = new XMLHttpRequest();
-    request.open("POST", "/api/jobs");
-    request.responseType = "json";
-    request.upload.addEventListener("progress", (event) => {
-      const label = event.lengthComputable && event.loaded < event.total
-        ? `正在上传 ${Math.round(event.loaded / event.total * 100)}%…` : "正在校验并准备输入…";
-      updateText(button.querySelector(".button-label"), label);
-    });
-    request.addEventListener("load", () => {
-      if (request.status >= 200 && request.status < 300) resolve(request.response);
-      else {
-        const problem = request.response?.problem;
-        const detail = problem?.code && !["operation_failed", "invalid_request"].includes(problem.code)
-          ? [problem.message, problem.recovery].filter(Boolean).join("；")
-          : request.response?.detail || request.statusText || "任务提交失败";
-        const error = new Error(formatApiError(detail));
-        error.status = request.status;
-        error.detail = request.response?.detail;
-        error.problem = problem;
-        reject(error);
-      }
-    });
-    request.addEventListener("error", () => reject(new Error("连接中断，请检查服务，并先查看任务列表确认是否已提交。")));
-    request.addEventListener("abort", () => reject(new Error("上传已取消。")));
-    request.send(data);
+export function bindSubmissionRecovery() {
+  bindUploadRecovery(async job => {
+    state.activeJobId = null;
+    await selectJob(job.id);
+    showDetailTab("overview");
+    showWorkspaceView("detail");
   });
 }
 

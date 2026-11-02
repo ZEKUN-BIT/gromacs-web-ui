@@ -86,6 +86,14 @@ def check_browser(artifact_dir: Path | None = None) -> None:
             matches = [job for job in jobs if search.lower() in (job["name"] + " " + job["id"]).lower()]
             offset = int(query.get("offset", ["0"])[0])
             payload = {"jobs": matches[offset : offset + 50], "total": len(matches), "has_more": offset + 50 < len(matches)}
+        elif path == "/api/research/compare":
+            assert route.request.post_data_json == {"reference_jobs": ["job-00"], "comparison_jobs": ["job-55"]}
+            unsafe_name = '<img src="/unexpected" onerror="window.researchInjected=true">'
+            reference, other = {"id": "job-00", "name": unsafe_name}, {"id": "job-55", "name": "对照来源"}
+            warning = f"来源 {unsafe_name} (job-00)：取样少于 50 帧，分布和占有率估计可能不稳定。"
+            payload = {"reference": [reference], "comparison": [other], "metrics": [], "residues": [], "protocol": [], "warnings": [warning],
+                       "sources": [{"job": reference, "group": "reference", "frames": 25, "window_ns": [10.5, 99.5], "warnings": [warning]},
+                                   {"job": other, "group": "comparison", "frames": 100, "window_ns": [10, 100], "warnings": []}]}
         elif path.startswith("/api/jobs/"):
             parts = path.split("/")
             job = next((job for job in jobs if job["id"] == parts[3]), None)
@@ -252,6 +260,15 @@ def check_browser(artifact_dir: Path | None = None) -> None:
                 expect(page.locator("#research-reference")).to_have_values(["job-00"])
                 expect(page.locator("#research-other")).to_have_values(["job-55"])
                 expect(page.locator('#research-other option[value="job-57"]')).to_have_count(1)
+                page.locator('#research-compare-form button[type="submit"]').click()
+                comparison = page.locator("#research-compare-results")
+                expect(comparison).to_contain_text("来源轨迹与实际取样范围")
+                expect(comparison).to_contain_text("job-00")
+                expect(comparison).to_contain_text("取样少于 50 帧")
+                expect(comparison).to_contain_text("10.500–99.500")
+                expect(comparison.locator("table").first.locator("tbody tr").first).to_contain_text("25")
+                expect(comparison.locator("img")).to_have_count(0)
+                assert not page.evaluate("Boolean(window.researchInjected)")
                 assert not page.evaluate("document.documentElement.scrollWidth > window.innerWidth")
                 assert not errors, errors
                 if artifact_dir:

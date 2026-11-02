@@ -73,6 +73,7 @@ from .product_api import product_router
 from .progress import enrich_progress
 from .reproducibility import write_experiment_manifest
 from .storage import CleanupRequest, execute_cleanup, preview_cleanup, storage_overview
+from .submissions import prepare_submission, submission_status, validate_submission_id
 from .worker_health import worker_status as read_worker_status
 
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -321,9 +322,14 @@ def workflows() -> dict:
 
 
 @app.get("/api/storage")
-def get_storage() -> dict:
+def get_storage(
+    limit: Annotated[int, Query(ge=1, le=200)] = 50,
+    offset: Annotated[int, Query(ge=0)] = 0,
+    refresh: bool = False,
+    search: Annotated[str, Query(max_length=255)] = "",
+) -> dict:
     try:
-        return storage_overview(STORE)
+        return storage_overview(STORE, limit=limit, offset=offset, refresh=refresh, search=search)
     except (OSError, ValueError) as exc:
         raise HTTPException(status_code=409, detail="无法安全扫描运行目录，请检查目录与权限。") from exc
 
@@ -457,12 +463,19 @@ def get_job(job_id: str) -> dict:
 async def create_job(
     params: Annotated[str | None, Form()] = None,
     files: Annotated[list[UploadFile], File()] = [],
+    submission_id: Annotated[str | None, Form()] = None,
 ) -> dict:
+    if submission_id is not None:
+        validate_submission_id(submission_id)
     try:
         request = SimulationParams.model_validate_json(params or "{}")
     except ValidationError as exc:
         raise HTTPException(status_code=422, detail=exc.errors())
 
+    if submission_id:
+        previous = await run_in_threadpool(submission_status, STORE, submission_id)
+        if previous["state"] == "cancelled":
+            raise HTTPException(status_code=409, detail="本次上传已取消，请重新提交。")
     name = request.name.strip() or "GROMACS run"
     temp_root = RUNTIME_ROOT / "incoming"
     temp_root.mkdir(parents=True, exist_ok=True)
@@ -470,7 +483,17 @@ async def create_job(
     prepared_hashes: dict[str, dict] = {}
     try:
         uploaded_names, upload_name_map = await stage_uploads(files, temp_dir, hashes=prepared_hashes)
-        return await run_in_threadpool(_prepare_uploaded_job, request, temp_dir, uploaded_names, upload_name_map, prepared_hashes)
+        if submission_id:
+            previous = await run_in_threadpool(
+                prepare_submission, STORE, submission_id, request.model_dump(), prepared_hashes, upload_name_map
+            )
+            if previous["state"] == "submitted":
+                return previous["job"]
+            if previous["state"] == "deleted":
+                raise HTTPException(status_code=409, detail="本次提交的任务已被删除，不会重复创建。")
+        return await run_in_threadpool(
+            _prepare_uploaded_job, request, temp_dir, uploaded_names, upload_name_map, prepared_hashes, submission_id
+        )
     finally:
         await run_in_threadpool(shutil.rmtree, temp_dir, True)
 
@@ -481,6 +504,7 @@ def _prepare_uploaded_job(
     uploaded_names: list[str],
     upload_name_map: dict[str, str],
     prepared_hashes: dict[str, dict],
+    submission_id: str | None = None,
 ) -> dict:
     settings = current_settings()
     name = request.name.strip() or "GROMACS run"
@@ -518,7 +542,16 @@ def _prepare_uploaded_job(
         shutil.rmtree(temp_dir, ignore_errors=True)
         raise
 
-    meta = STORE.create(name=name, params=job_params, uploaded_files=uploaded_names, steps=steps)
+    try:
+        meta = STORE.create(
+            name=name,
+            params=job_params,
+            uploaded_files=uploaded_names,
+            steps=steps,
+            **({"submission_id": submission_id} if submission_id else {}),
+        )
+    except RuntimeError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     try:
         with STORE.job_files_lock(meta["id"]):
             if STORE.get(meta["id"])["status"] != "preparing":
@@ -585,6 +618,17 @@ def _prepare_uploaded_job(
         raise
     except RuntimeError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@app.get("/api/submissions/{request_id}")
+def get_submission(request_id: str) -> dict:
+    return submission_status(STORE, request_id)
+
+
+@app.post("/api/submissions/{request_id}/resolve")
+def resolve_submission(request_id: str) -> dict:
+    """Seal an interrupted submission, or return its already-created task."""
+    return submission_status(STORE, request_id, cancel=True)
 
 
 @app.get("/api/jobs/{job_id}/research")
