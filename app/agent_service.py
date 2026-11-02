@@ -282,6 +282,7 @@ class AgentService:
             try:
                 self._executor.submit(function, state, *args)
             except Exception:
+                LOGGER.exception("Could not start background AI operation for session %s", state["id"])
                 state["status"] = "idle"
                 state["operation"] = None
                 state["last_error"] = "后台操作无法启动，尚未执行，请稍后重新规划。"

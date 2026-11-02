@@ -389,6 +389,7 @@ class WorkerEngine:
                 with self._open_saved_output(workdir, output) as (_path, reader):
                     self._tail_output(meta["id"], reader, lambda: False, lambda _: None, output=output)
         except Exception as error:
+            LOGGER.exception("%s: recovery of saved worker output failed", meta["id"])
             status = meta["status"] if meta["status"] in {"completed", "failed", "cancelled"} else "interrupted"
             self._finalize_job(meta["id"], status=status, desired_action=None, worker_id=None, error=str(error))
             return
@@ -1217,6 +1218,8 @@ class WorkerEngine:
                 **completion_updates,
             )
         except Exception as exc:
+            if not isinstance(exc, FileNotFoundError):
+                LOGGER.exception("%s: job execution failed", job_id)
             message = f"Executable not found: {exc.filename}" if isinstance(exc, FileNotFoundError) else str(exc)
             try:
                 self._terminate_leftover(self.store.get(job_id))

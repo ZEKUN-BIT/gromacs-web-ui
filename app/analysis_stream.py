@@ -4,10 +4,13 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 
 from starlette.concurrency import run_in_threadpool
 
 from .existing_analysis import create_existing_analysis
+
+LOGGER = logging.getLogger(__name__)
 
 
 async def analysis_preparation_events(store, job_id, request, settings):
@@ -33,6 +36,7 @@ async def analysis_preparation_events(store, job_id, request, settings):
         except ValueError as exc:
             deliver({"type": "error", "message": str(exc)})
         except Exception:
+            LOGGER.exception("Existing-analysis preparation failed for %s", job_id)
             deliver({"type": "error", "message": "分析准备已取消或失败，请检查任务状态、文件及可用磁盘空间。"})
         else:
             deliver({"type": "result", "job": job})
