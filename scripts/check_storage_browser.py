@@ -127,12 +127,22 @@ def _check_viewport(browser, width: int, height: int, artifact_dir: Path | None)
                 }
                 for job in jobs
             ]
+            if state.get("extra_storage"):
+                storage_jobs.extend({"id": f"history-{index}", "name": f"历史空间任务 {index:02d}", "status": "completed",
+                                     "bytes": 100, "reclaimable_bytes": 10, "eligible": True, "protected_reason": None}
+                                    for index in range(60))
             total = sum(job["bytes"] for job in storage_jobs)
+            search = query.get("search", [""])[0].casefold()
+            matching = [job for job in storage_jobs if search in (job["name"] + " " + job["id"]).casefold()]
+            offset = int(query.get("offset", [0])[0])
+            limit = int(query.get("limit", [50])[0])
+            state["last_storage_query"] = query
             payload = {
                 "disk": {"free_bytes": 4000000, "total_bytes": 10000000},
                 "runtime": {"bytes": total + 1000, "task_bytes": total, "other_bytes": 1000},
                 "categories": {"trajectories": total - 1000},
-                "jobs": storage_jobs,
+                "jobs": matching[offset:offset + limit],
+                "total": len(matching), "offset": offset, "limit": limit, "has_more": offset + limit < len(matching),
             }
         elif path == "/api/storage/preview":
             assert method == "POST"
@@ -270,6 +280,22 @@ def _check_viewport(browser, width: int, height: int, artifact_dir: Path | None)
         expect(page.locator('#research-reference option[value="storage-completed"]')).to_have_count(0)
         expect(page.locator('#research-other option[value="storage-completed"]')).to_have_count(0)
         assert len(state["cleanups"]) == 2 and state["deleted"]
+        state["extra_storage"] = True
+        page.locator("#storage-refresh").click()
+        expect(page.locator(".storage-job")).to_have_count(50)
+        assert state["last_storage_query"].get("refresh") == ["true"]
+        page.locator("#storage-next").click()
+        expect(page.locator(".storage-job")).to_have_count(11)
+        page.locator('.storage-job input[value="history-59"]').check()
+        page.locator("#storage-search").fill("历史空间任务 00")
+        expect(page.locator(".storage-job")).to_have_count(1)
+        expect(page.locator('.storage-job input[value="history-0"]')).to_have_count(1)
+        page.locator("#storage-search").fill("")
+        expect(page.locator(".storage-job")).to_have_count(50)
+        page.locator("#storage-next").click()
+        expect(page.locator('.storage-job input[value="history-59"]')).to_be_checked()
+        page.locator("#storage-previous").click()
+        expect(page.locator(".storage-job")).to_have_count(50)
         assert page.evaluate("document.documentElement.scrollWidth <= window.innerWidth")
         assert not errors, errors
         assert all(method == "GET" for method, path in requests if path.startswith("/api/jobs"))

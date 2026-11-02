@@ -69,3 +69,14 @@ def test_storage_rejects_browser_requests_from_other_origins(console, headers):
 def test_storage_request_cannot_supply_filesystem_paths(console):
     client, _, _ = console
     assert client.post("/api/storage/preview", json={"job_ids": ["../../.."]}).status_code == 422
+
+
+def test_storage_pagination_search_and_refresh(console):
+    client, _, job = console
+    response = client.get("/api/storage", params={"limit": 1, "search": "storage API", "refresh": True})
+    assert response.status_code == 200
+    assert [item["id"] for item in response.json()["jobs"]] == [job["id"]]
+    assert client.get("/api/storage?offset=1").json()["jobs"] == []
+    assert client.get("/api/storage?search=absent").json()["total"] == 0
+    assert client.get("/api/storage?limit=201").status_code == 422
+    assert client.get("/api/storage?offset=-1").status_code == 422

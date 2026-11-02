@@ -320,3 +320,62 @@ def test_stale_preview_preserves_successful_cleanup_record(store):
     assert current["storage_revision"] == completed["storage_revision"] == 1
     assert current["last_cleanup"] == completed["last_cleanup"]
     assert not current.get("last_cleanup_error")
+
+
+def test_overview_reuses_persistent_summaries_without_decoding_history(store):
+    job = terminal_job(store)
+    write_files(store, job, ["nested/result.dat", "nvt.trr"])
+    first = storage_overview(store)
+    reopened = JobStore(store.runtime_root)
+    with (
+        patch("app.storage._scan_job", side_effect=AssertionError("unchanged job must not be walked")),
+        patch.object(reopened, "list", side_effect=AssertionError("full metadata history must not be loaded")),
+        patch.object(reopened, "get", side_effect=AssertionError("cached metadata must not be decoded")),
+    ):
+        second = storage_overview(reopened)
+    assert second["jobs"] == first["jobs"]
+    assert second["categories"] == first["categories"]
+
+
+def test_overview_refresh_and_expiry_detect_external_nested_changes(store):
+    job = terminal_job(store)
+    root = write_files(store, job, ["nested/result.dat"])
+    with patch("app.storage.time.time", return_value=1000):
+        first = storage_overview(store)
+        (root / "nested/result.dat").write_bytes(b"x" * 200)
+        assert storage_overview(store)["jobs"] == first["jobs"]
+        forced = storage_overview(store, refresh=True)
+    assert forced["jobs"][0]["bytes"] == first["jobs"][0]["bytes"] + 191
+    (root / "nested/result.dat").write_bytes(b"x" * 300)
+    with patch("app.storage.time.time", return_value=1301):
+        expired = storage_overview(store)
+    assert expired["jobs"][0]["bytes"] == forced["jobs"][0]["bytes"] + 100
+
+
+def test_cached_overview_never_authorizes_cleanup_and_revision_invalidates_it(store):
+    job = terminal_job(store)
+    root = write_files(store, job, ["nvt.trr"])
+    first = storage_overview(store)
+    (root / "nvt.trr").write_bytes(b"changed outside the application")
+    preview, result = execute_preview(store, CleanupRequest(job_ids=[job["id"]]))
+    assert preview["total_bytes"] == len(b"changed outside the application")
+    assert result["deleted_files"] == 1
+    assert storage_overview(store)["reclaimable_bytes"] == 0
+    assert first["reclaimable_bytes"] == 9
+
+
+def test_overview_paginates_and_searches_all_jobs_but_totals_cover_runtime(store):
+    jobs = [terminal_job(store) for _ in range(3)]
+    store.update(jobs[0]["id"], name="search target")
+    for job in jobs:
+        write_files(store, job, ["nvt.trr"])
+    first = storage_overview(store, limit=2)
+    second = storage_overview(store, limit=2, offset=2)
+    assert first["total"] == second["total"] == 3
+    assert first["has_more"] and not second["has_more"]
+    assert len({job["id"] for job in first["jobs"] + second["jobs"]}) == 3
+    filtered = storage_overview(store, search="SEARCH TARGET", limit=1)
+    assert [job["id"] for job in filtered["jobs"]] == [jobs[0]["id"]]
+    assert filtered["total"] == 1
+    assert filtered["runtime"]["task_bytes"] == first["runtime"]["task_bytes"]
+    assert filtered["reclaimable_bytes"] == 27

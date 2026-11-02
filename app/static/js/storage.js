@@ -1,4 +1,4 @@
-import { api, confirmDialog, STATUS_LABELS, toast } from "./core.js?v=ed99335f08f47fd8";
+import { api, confirmDialog, STATUS_LABELS, toast } from "./core.js?v=a3c62023f9227a95";
 
 const CATEGORY_LABELS = {
   inputs: "输入", trajectories: "轨迹", checkpoints: "Checkpoint", topology_and_parameters: "拓扑与参数",
@@ -28,6 +28,19 @@ export function bindStorage() {
   let overview = null;
   let preview = null;
   let busy = false;
+  let offset = 0;
+  let refreshGeneration = 0;
+  let searchTimer;
+  const pager = element("div", undefined, "storage-toolbar");
+  const previous = element("button", "上一页", "tool-button");
+  const next = element("button", "下一页", "tool-button");
+  const pageStatus = element("span");
+  previous.type = next.type = "button";
+  previous.id = "storage-previous";
+  next.id = "storage-next";
+  pageStatus.setAttribute("role", "status");
+  pager.append(previous, pageStatus, next);
+  find("jobs").after(pager);
   const selected = new Set();
 
   function message(text = "") {
@@ -49,6 +62,8 @@ export function bindStorage() {
     find("jobs").querySelectorAll("input").forEach((input) => { input.disabled = value || input.dataset.protected === "true"; });
     find("execute").disabled = value || !preview?.jobs.length;
     document.querySelector("#close-storage").disabled = value;
+    previous.disabled = value || offset === 0;
+    next.disabled = value || !overview?.has_more;
   }
 
   function visibleJobs() {
@@ -75,6 +90,7 @@ export function bindStorage() {
         }
         if (checkbox.checked) selected.add(job.id); else selected.delete(job.id);
         invalidate();
+        renderPageStatus();
       });
       const details = element("span", undefined, "storage-job-details");
       details.append(element("strong", job.name), element("small", `${STATUS_LABELS[job.status] || job.status} · ${size(job.bytes)} · 常规可回收 ${size(job.reclaimable_bytes)}`));
@@ -83,16 +99,32 @@ export function bindStorage() {
       container.append(label);
     }
     if (!container.childElementCount) container.append(element("p", "没有符合筛选的任务。", "storage-note"));
+    renderPageStatus();
   }
 
-  async function refresh() {
+  function renderPageStatus() {
+    const total = overview?.total ?? overview?.jobs.length ?? 0;
+    pageStatus.textContent = total ? `第 ${offset + 1}–${offset + (overview?.jobs.length || 0)} 项，共 ${total} 项 · 已选 ${selected.size}` : "没有任务";
+    pager.hidden = total <= 50 && !selected.size;
+  }
+
+  async function refresh(force = false) {
+    const generation = ++refreshGeneration;
     setBusy(true);
     message();
     invalidate();
     find("summary").textContent = "正在统计占用…";
     try {
-      overview = await api("/api/storage");
-      for (const id of selected) if (!overview.jobs.some((job) => job.id === id && job.eligible)) selected.delete(id);
+      const query = new URLSearchParams({ limit: "50", offset: String(offset), search: find("search").value.trim() });
+      if (force) query.set("refresh", "true");
+      const result = await api(`/api/storage?${query}`);
+      if (generation !== refreshGeneration) return;
+      overview = result;
+      if (!overview.jobs.length && offset > 0) {
+        offset = Math.max(0, Math.floor(((overview.total || 1) - 1) / 50) * 50);
+        return await refresh(force);
+      }
+      for (const job of overview.jobs) if (!job.eligible) selected.delete(job.id);
       const summary = find("summary");
       summary.replaceChildren(
         element("strong", `运行数据 ${size(overview.runtime.bytes)}`),
@@ -100,11 +132,13 @@ export function bindStorage() {
         element("span", `任务 ${size(overview.runtime.task_bytes)} · 运行目录其他文件 ${size(overview.runtime.other_bytes)}`),
         element("span", Object.entries(overview.categories).map(([key, bytes]) => `${CATEGORY_LABELS[key] || key} ${size(bytes)}`).join(" · ")),
       );
+      if (overview.cache_max_age_seconds > 0) summary.append(element("small", "已复用近期统计；外部修改文件后可点击“刷新占用”。清理预览始终重新检查。"));
       renderJobs();
     } catch (error) {
+      if (generation !== refreshGeneration) return;
       find("summary").textContent = "占用统计失败。";
       message(error.message);
-    } finally { setBusy(false); }
+    } finally { if (generation === refreshGeneration) setBusy(false); }
   }
 
   function request() {
@@ -171,8 +205,13 @@ export function bindStorage() {
   opener.addEventListener("click", () => { dialog.showModal(); refresh(); });
   document.querySelector("#close-storage").addEventListener("click", () => dialog.close());
   dialog.addEventListener("cancel", (event) => { if (busy) event.preventDefault(); });
-  find("refresh").addEventListener("click", refresh);
-  find("search").addEventListener("input", renderJobs);
+  find("refresh").addEventListener("click", () => refresh(true));
+  previous.addEventListener("click", () => { offset = Math.max(0, offset - 50); refresh(); });
+  next.addEventListener("click", () => { offset += 50; refresh(); });
+  find("search").addEventListener("input", () => {
+    clearTimeout(searchTimer);
+    searchTimer = setTimeout(() => { offset = 0; refresh(); }, 250);
+  });
   find("options").addEventListener("change", () => {
     find("logs").disabled = dialog.querySelector("[name='storage-mode']:checked").value === "delete_jobs";
     invalidate();

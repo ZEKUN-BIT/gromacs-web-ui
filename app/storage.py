@@ -187,76 +187,154 @@ def _category(relative: str, inputs: set[str]) -> str:
     return "reports_and_other"
 
 
-def storage_overview(store) -> dict:
+_OVERVIEW_LOCK = threading.Lock()
+TERMINAL_CACHE_SECONDS = 300
+ACTIVE_CACHE_SECONDS = 5
+
+
+def _directory_stamp(store, job_id: str) -> str:
+    try:
+        descriptor = _job_fd(store, job_id)
+        try:
+            info = os.fstat(descriptor)
+            return json.dumps((info.st_dev, info.st_ino, info.st_mode, info.st_mtime_ns, info.st_ctime_ns))
+        finally:
+            os.close(descriptor)
+    except OSError:
+        return "missing"
+
+
+def _storage_summary(store, meta: dict) -> dict:
+    categories = {}
+    row = {
+        "id": meta["id"],
+        "name": meta.get("name") or meta["id"],
+        "status": meta["status"],
+        "bytes": 0,
+        "reclaimable_bytes": 0,
+        "eligible": False,
+        "protected_reason": "任务目录无法安全读取。",
+    }
+    try:
+        scan = _scan_job(store, meta["id"])
+        inputs = _input_paths(meta)
+        row["bytes"] = sum(record["size"] for record in scan["files"].values())
+        for relative, record in scan["files"].items():
+            key = _category(relative, inputs)
+            categories[key] = categories.get(key, 0) + record["size"]
+        reason = _protection_reason(store, meta)
+        if scan["unsafe"]:
+            reason = "目录包含符号链接或特殊文件，禁止自动清理。"
+        row.update(eligible=reason is None, protected_reason=reason)
+        if reason is None:
+            row["reclaimable_bytes"] = sum(
+                record["size"] for record in _candidates(meta, scan, CleanupRequest(job_ids=[meta["id"]])).values()
+            )
+    except OSError:
+        pass
+    return {"job": row, "categories": categories}
+
+
+def _other_runtime_bytes(runtime: Path, registered: set[str]) -> int:
+    """Count non-task data without walking registered task directories again."""
+
+    def visit(directory_fd: int, prefix: str = "") -> int:
+        total = 0
+        with os.scandir(directory_fd) as entries:
+            for entry in entries:
+                if prefix == "jobs/" and entry.name in registered:
+                    continue
+                try:
+                    info = os.stat(entry.name, dir_fd=directory_fd, follow_symlinks=False)
+                    if stat.S_ISREG(info.st_mode):
+                        total += info.st_size
+                    elif stat.S_ISDIR(info.st_mode):
+                        child = os.open(entry.name, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=directory_fd)
+                        try:
+                            total += visit(child, prefix + entry.name + "/")
+                        finally:
+                            os.close(child)
+                except OSError:
+                    continue
+        return total
+
+    root_fd = os.open(runtime, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    try:
+        return visit(root_fd)
+    finally:
+        os.close(root_fd)
+
+
+def storage_overview(store, *, limit: int = 50, offset: int = 0, refresh: bool = False, search: str = "") -> dict:
+    """Persist bounded summaries, never reuse overview data for deletion decisions."""
     runtime = Path(store.runtime_root)
     if runtime.is_symlink() or (runtime / "jobs").is_symlink():
         raise ValueError("空间管理不支持符号链接运行目录。")
+    limit, offset = max(1, min(int(limit), 200)), max(0, int(offset))
+    search = search.strip().casefold()
     disk = shutil.disk_usage(runtime)
-    metadata = store.list()
-    # Scan the runtime once, then partition its files by task. Cleanup itself
-    # still takes a fresh strict scan under the task lock and checks fingerprints.
-    root_fd = os.open(runtime, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
-    try:
-        runtime_scan = _scan_fd(root_fd, tolerate_changes=True)
-    finally:
-        os.close(root_fd)
-    scans = {meta["id"]: {"files": {}, "unsafe": []} for meta in metadata}
-    for relative, record in runtime_scan["files"].items():
-        parts = relative.split("/", 2)
-        if len(parts) == 3 and parts[0] == "jobs" and parts[1] in scans:
-            scans[parts[1]]["files"][parts[2]] = record
-    for relative in runtime_scan["unsafe"]:
-        parts = relative.split("/", 2)
-        if len(parts) >= 2 and parts[0] == "jobs" and parts[1] in scans:
-            scans[parts[1]]["unsafe"].append(relative)
-    jobs, categories = [], {}
-    for meta in metadata:
-        try:
-            directory = runtime_scan["entries"].get(f"jobs/{meta['id']}")
-            if directory is None or not stat.S_ISDIR(directory[2]):
-                raise OSError("Task directory is unavailable")
-            scan = scans[meta["id"]]
-            inputs = _input_paths(meta)
-            total = sum(record["size"] for record in scan["files"].values())
-            for relative, record in scan["files"].items():
-                key = _category(relative, inputs)
-                categories[key] = categories.get(key, 0) + record["size"]
-            reason = _protection_reason(store, meta)
-            if scan["unsafe"]:
-                reason = "目录包含符号链接或特殊文件，禁止自动清理。"
-            request = CleanupRequest(job_ids=[meta["id"]])
-            reclaimable = sum(record["size"] for record in _candidates(meta, scan, request).values()) if reason is None else 0
-            jobs.append(
-                {
-                    "id": meta["id"],
-                    "name": meta.get("name") or meta["id"],
-                    "status": meta["status"],
-                    "bytes": total,
-                    "reclaimable_bytes": reclaimable,
-                    "eligible": reason is None,
-                    "protected_reason": reason,
-                }
+    # Serialize refreshes within the single Web process, without holding a
+    # SQLite writer transaction during filesystem scans.
+    with _OVERVIEW_LOCK:
+        with store._connect() as connection:
+            connection.execute(
+                "CREATE TABLE IF NOT EXISTS storage_summaries ("
+                "job_id TEXT PRIMARY KEY REFERENCES jobs(id) ON DELETE CASCADE,"
+                "job_version INTEGER NOT NULL, directory_stamp TEXT NOT NULL,"
+                "scanned_at REAL NOT NULL, payload TEXT NOT NULL CHECK(json_valid(payload)))"
             )
-        except OSError:
-            jobs.append(
-                {
-                    "id": meta["id"],
-                    "name": meta.get("name") or meta["id"],
-                    "status": meta["status"],
-                    "bytes": 0,
-                    "reclaimable_bytes": 0,
-                    "eligible": False,
-                    "protected_reason": "任务目录无法安全读取。",
-                }
+            rows = connection.execute(
+                "SELECT j.id,j.version,j.status,s.job_version,s.directory_stamp,s.scanned_at,s.payload "
+                "FROM jobs j LEFT JOIN storage_summaries s ON j.id=s.job_id ORDER BY j.created_at DESC,j.id DESC"
+            ).fetchall()
+        jobs, categories, writes = [], {}, []
+        now = time.time()
+        max_age = 0.0
+        for record in rows:
+            stamp = _directory_stamp(store, record["id"])
+            ttl = (
+                TERMINAL_CACHE_SECONDS if record["status"] in {"completed", "failed", "cancelled", "interrupted"} else ACTIVE_CACHE_SECONDS
             )
-    # The same scan includes database, exports and unregistered runtime files.
-    runtime_bytes = sum(record["size"] for record in runtime_scan["files"].values())
+            age = max(0.0, now - (record["scanned_at"] or 0))
+            cached = not refresh and record["payload"] and record["version"] == record["job_version"]
+            cached = cached and stamp == record["directory_stamp"] and age < ttl
+            if cached:
+                summary = json.loads(record["payload"])
+                max_age = max(max_age, age)
+            else:
+                try:
+                    meta = store.get(record["id"])
+                except FileNotFoundError:
+                    continue
+                summary = _storage_summary(store, meta)
+                writes.append((record["id"], record["version"], stamp, now, json.dumps(summary, ensure_ascii=False)))
+            jobs.append(summary["job"])
+            for key, count in summary["categories"].items():
+                categories[key] = categories.get(key, 0) + count
+        if writes:
+            with store._connect() as connection:
+                # Ignore tasks deleted/updated while scanning. Their next read
+                # will refresh instead of persisting a stale version as current.
+                connection.executemany(
+                    "INSERT INTO storage_summaries(job_id,job_version,directory_stamp,scanned_at,payload) "
+                    "SELECT ?,?,?,?,? WHERE EXISTS (SELECT 1 FROM jobs WHERE id=? AND version=?) "
+                    "ON CONFLICT(job_id) DO UPDATE SET job_version=excluded.job_version,"
+                    "directory_stamp=excluded.directory_stamp,scanned_at=excluded.scanned_at,payload=excluded.payload",
+                    [(*row, row[0], row[1]) for row in writes],
+                )
+        other_bytes = _other_runtime_bytes(runtime, {record["id"] for record in rows})
     task_bytes = sum(job["bytes"] for job in jobs)
+    matching = [job for job in jobs if not search or search in (job["name"] + " " + job["id"]).casefold()]
     return {
         "disk": {"total_bytes": disk.total, "used_bytes": disk.used, "free_bytes": disk.free},
-        "runtime": {"bytes": runtime_bytes, "task_bytes": task_bytes, "other_bytes": max(0, runtime_bytes - task_bytes)},
+        "runtime": {"bytes": task_bytes + other_bytes, "task_bytes": task_bytes, "other_bytes": other_bytes},
         "categories": categories,
-        "jobs": jobs,
+        "jobs": matching[offset : offset + limit],
+        "total": len(matching),
+        "limit": limit,
+        "offset": offset,
+        "has_more": offset + limit < len(matching),
+        "cache_max_age_seconds": round(max_age, 1),
         "eligible_jobs": sum(job["eligible"] for job in jobs),
         "reclaimable_bytes": sum(job["reclaimable_bytes"] for job in jobs),
     }
