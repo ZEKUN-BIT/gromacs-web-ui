@@ -1,6 +1,6 @@
 // 上传文件选择与文件类型判断。
 
-import { els } from "./core.js?v=a3c62023f9227a95";
+import { els } from "./core.js?v=b2667498e9955f71";
 
 export function hasFile(data, suffixes) {
   return (data.files || []).some((name) => suffixes.some((suffix) => name.toLowerCase().endsWith(suffix)));

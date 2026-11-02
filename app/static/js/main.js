@@ -11,7 +11,7 @@ import {
   showWorkspaceView,
   showDetailTab,
   setSidebarOpen,
-} from "./core.js?v=a3c62023f9227a95";
+} from "./core.js?v=b2667498e9955f71";
 import {
   saveSettings,
   setMdpPanelExpanded,
@@ -33,39 +33,41 @@ import {
   refreshRowMode,
   applyHardwareRecommendation,
   updateResourceAdvice,
-} from "./form.js?v=a3c62023f9227a95";
+} from "./form.js?v=b2667498e9955f71";
 import {
   submitJob,
   bindSubmissionRecovery,
-  cancelActiveJob,
-  adoptActiveJob,
-  resumeActiveJob,
-  retryActiveJob,
-  skipActiveJob,
   selectJob,
-  cancelJob,
-  deleteJob,
-  cloneActiveJob,
-  benchmarkActiveJob,
-  compareActiveJob,
   renderJobs,
   refreshJobs,
   applyFileFilter,
   renderActiveJob,
   changeJobsPage,
   forgetDeletedJob,
-} from "./jobs.js?v=a3c62023f9227a95";
-import { bindDraftSaving, restoreDraft } from "./drafts.js?v=a3c62023f9227a95";
-import { bindPlotControls } from "./plots.js?v=a3c62023f9227a95";
-import { bindExistingAnalysis } from "./existing-analysis.js?v=a3c62023f9227a95";
-import { bindResearch } from "./research.js?v=a3c62023f9227a95";
-import { bindStorage } from "./storage.js?v=a3c62023f9227a95";
-import { bindAgent } from "./agent.js?v=a3c62023f9227a95";
-import { prepareWorkspace, bindWorkspace, refreshComposerSummary } from "./workspace.js?v=a3c62023f9227a95";
-import { bindResultSummary } from "./result-summary.js?v=a3c62023f9227a95";
+} from "./jobs.js?v=b2667498e9955f71";
+import {
+  cancelActiveJob,
+  adoptActiveJob,
+  resumeActiveJob,
+  retryActiveJob,
+  skipActiveJob,
+  cancelJob,
+  deleteJob,
+  cloneActiveJob,
+  benchmarkActiveJob,
+  compareActiveJob,
+} from "./job-actions.js?v=b2667498e9955f71";
+import { bindDraftSaving, restoreDraft } from "./drafts.js?v=b2667498e9955f71";
+import { bindPlotControls } from "./plots.js?v=b2667498e9955f71";
+import { bindExistingAnalysis } from "./existing-analysis.js?v=b2667498e9955f71";
+import { bindResearch } from "./research.js?v=b2667498e9955f71";
+import { bindStorage } from "./storage.js?v=b2667498e9955f71";
+import { bindAgent } from "./agent.js?v=b2667498e9955f71";
+import { prepareWorkspace, bindWorkspace, refreshComposerSummary } from "./workspace.js?v=b2667498e9955f71";
+import { bindResultSummary } from "./result-summary.js?v=b2667498e9955f71";
 
-import { connectEventStream, disconnectEventStream, bindConnectionStatus } from "./event-stream.js?v=a3c62023f9227a95";
-import { bindNavigation } from "./navigation.js?v=a3c62023f9227a95";
+import { connectEventStream, disconnectEventStream, bindConnectionStatus } from "./event-stream.js?v=b2667498e9955f71";
+import { bindNavigation } from "./navigation.js?v=b2667498e9955f71";
 
 /* ---------- 事件绑定 ---------- */
 

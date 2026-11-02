@@ -1,7 +1,7 @@
 // 多配体编辑与 PDB 配体识别。
 
-import { els, escapeHtml, toast } from "./core.js?v=a3c62023f9227a95";
-import { selectedUploadFiles } from "./form-files.js?v=a3c62023f9227a95";
+import { els, escapeHtml, toast } from "./core.js?v=b2667498e9955f71";
+import { selectedUploadFiles } from "./form-files.js?v=b2667498e9955f71";
 
 const PDB_WATER_RESIDUES = new Set(["HOH", "WAT", "SOL", "H2O", "TIP3", "TIP3P", "TIP4P", "OPC", "OPC3"]);
 const PDB_ION_RESIDUES = new Set([

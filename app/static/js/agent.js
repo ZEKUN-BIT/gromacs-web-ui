@@ -1,7 +1,7 @@
-import { api, state, toast, showWorkspaceView, confirmDialog } from "./core.js?v=a3c62023f9227a95";
-import { refreshJobs, selectJob } from "./jobs.js?v=a3c62023f9227a95";
-import { applyProtocol } from "./library.js?v=a3c62023f9227a95";
-import { renderMessage } from "./agent-content.js?v=a3c62023f9227a95";
+import { api, state, toast, showWorkspaceView, confirmDialog } from "./core.js?v=b2667498e9955f71";
+import { refreshJobs, selectJob } from "./jobs.js?v=b2667498e9955f71";
+import { applyProtocol } from "./library.js?v=b2667498e9955f71";
+import { renderMessage } from "./agent-content.js?v=b2667498e9955f71";
 
 const SESSION_KEY = "gromacs.agent-session";
 const ACTION_STATUS = { pending: "等待确认", running: "执行中", succeeded: "已完成", failed: "执行失败", cancelled: "已取消", rejected: "已拒绝", expired: "预览已过期", uncertain: "结果待核实" };
