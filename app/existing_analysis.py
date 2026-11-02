@@ -61,7 +61,7 @@ def _analysis_inputs(store: JobStore, job_id: str) -> dict:
     source = analysis_source(store, job_id)
     root = store.job_dir(job_id)
     listed = relative_files(root, max_files=1001)
-    result = {key: [] for key in INPUT_SUFFIXES}
+    result: dict[str, list[dict]] = {key: [] for key in INPUT_SUFFIXES}
     for item in listed[:1000]:
         for key, suffixes in INPUT_SUFFIXES.items():
             if Path(item["path"]).suffix.lower() not in suffixes:

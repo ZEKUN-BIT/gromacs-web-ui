@@ -222,6 +222,7 @@ def build_steps(
         raise ValueError("Upload one .tpr and one .xtc/.trr trajectory file for this workflow.")
 
     if workflow == "protein_md":
+        assert structure is not None  # validated above
         pdb2gmx_source, pre_steps = pdb2gmx_source_steps(params, structure, "protein_pdb2gmx_input.pdb")
         nvt_steps = []
         if pre_nvt:
@@ -385,6 +386,7 @@ def build_steps(
         ]
 
     if workflow == "protein_ligand_md":
+        assert protein_file is not None  # validated above
         ligands = normalize_ligands(params)
         total = len(ligands)
         for ligand in ligands:
@@ -836,6 +838,7 @@ def build_steps(
         return steps
 
     if workflow == "em_only":
+        assert structure is not None  # validated above
         return [
             Step(
                 "Prepare minimization",
@@ -848,6 +851,7 @@ def build_steps(
         ]
 
     if workflow == "run_tpr":
+        assert tpr is not None  # validated above
         stem = Path(tpr).stem
         return [
             Step(
@@ -858,6 +862,7 @@ def build_steps(
         ]
 
     if workflow == "analysis_rmsd":
+        assert tpr is not None and trajectory is not None  # validated above
         rmsd_params = {
             **params,
             "do_rmsd": True,
@@ -871,9 +876,11 @@ def build_steps(
         return _analysis_steps(rmsd_params, gmx_bin, tpr, trajectory, str_param(params, "index_file", ""))
 
     if workflow == "postprocess":
+        assert tpr is not None and trajectory is not None  # validated above
         return _postprocess_steps(params, gmx_bin, tpr, trajectory, str_param(params, "index_file", ""))
 
     if workflow == "analysis_suite":
+        assert tpr is not None and trajectory is not None  # validated above
         return [
             *_analysis_steps(
                 params, gmx_bin, tpr, trajectory, str_param(params, "index_file", ""), trajectory_prepared=analysis_trajectory_prepared

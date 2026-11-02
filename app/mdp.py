@@ -5,7 +5,9 @@ from __future__ import annotations
 import math
 import re
 import secrets
+from collections.abc import Mapping
 from pathlib import Path
+from typing import Any
 
 from .files import ensure_under_root
 from .workflow_parameters import bool_param, int_param
@@ -204,7 +206,7 @@ def read_mdp_values(text: str) -> dict[str, str]:
     return settings
 
 
-def preview_protocol(params: dict, base_dir: Path, uploaded_mdp: dict[str, str]) -> list[dict]:
+def preview_protocol(params: dict, base_dir: Path, uploaded_mdp: Mapping[Any, str]) -> list[dict]:
     if params.get("workflow") not in {"protein_md", "protein_ligand_md"}:
         return []
     templates = load_mdp_templates(base_dir, mdp_profile_for_workflow(params.get("workflow")))

@@ -10,6 +10,7 @@ import stat
 import tempfile
 import zipfile
 from pathlib import Path
+from typing import Any
 from urllib.parse import quote
 
 from .execution import live_process_identities
@@ -124,9 +125,10 @@ def build_result_bundle(store, job_id: str):
             workdir = store.job_dir(job_id)
             if live_process_identities(meta, workdir):
                 raise ValueError("任务仍关联活跃计算进程，请等计算停止后导出。")
-            included, skipped = [], []
+            included: list[dict] = []
+            skipped: list[dict] = []
             used = 0
-            summary = {
+            summary: dict[str, Any] = {
                 "schema_version": 1,
                 "exported_at": utc_now(),
                 "job": {

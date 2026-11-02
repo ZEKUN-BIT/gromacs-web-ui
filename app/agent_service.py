@@ -350,7 +350,7 @@ class AgentService:
 
     def _run_send(self, state: dict, client, tools, operation: OperationContext) -> dict:
         session_id = state["id"]
-        remaining, total_calls, model_claimed = TURN_SECONDS, 0, True
+        remaining, total_calls, model_claimed = float(TURN_SECONDS), 0, True
         try:
             history = copy.deepcopy(state["history"])
             for _ in range(MAX_ROUNDS):
@@ -375,7 +375,7 @@ class AgentService:
                 if total_calls > MAX_TOOL_CALLS:
                     raise AgentError("本轮工具调用已达到上限，请缩小问题范围。", 409)
                 history.extend(response["continuation"])
-                pending = []
+                pending: list[dict] = []
                 for call in response["calls"]:
                     try:
                         arguments = json.loads(call["arguments"], parse_constant=lambda _: (_ for _ in ()).throw(ValueError()))

@@ -27,7 +27,7 @@ def read_index_group(path: Path, name: str, atom_count: int) -> np.ndarray:
         raise ValueError("索引文件超过研究分析的 20 MB 上限。")
     selected = False
     found = False
-    indices = []
+    indices: list[int] = []
     for line in path.read_text(encoding="utf-8").splitlines():
         line = line.split(";", 1)[0].strip()
         if line.startswith("[") and line.endswith("]"):
@@ -118,6 +118,7 @@ def analyze_universe(universe, request: ExistingAnalysisRequest, index_file: Pat
         ca_rmsd.append(float(np.sqrt(np.mean(np.sum((xyz - reference_ca) ** 2, axis=1)))) / 10)
         ca_rg.append(float(np.sqrt(np.mean(np.sum((xyz - xyz.mean(axis=0)) ** 2, axis=1)))) / 10)
         if ligand is not None:
+            assert contacts is not None
             if ts.dimensions is None or not np.isfinite(ts.dimensions).all() or np.any(ts.dimensions[:3] <= 0):
                 raise ValueError("配体接触分析需要有效的周期性盒子。")
             ligand_xyz = (ligand.positions - center) @ rotation.T + reference_center
@@ -169,6 +170,7 @@ def analyze_universe(universe, request: ExistingAnalysisRequest, index_file: Pat
     summaries = {"ca_rmsd_nm": series_summary(ca_rmsd), "ca_rg_nm": series_summary(ca_rg)}
     binding = None
     if ligand is not None:
+        assert initial_contacts is not None, "ligand analysis samples at least one frame"
         summaries.update(
             ligand_rmsd_nm=series_summary(ligand_rmsd),
             ligand_self_rmsd_nm=series_summary(ligand_self),
@@ -190,7 +192,7 @@ def analyze_universe(universe, request: ExistingAnalysisRequest, index_file: Pat
         warnings.append("取样少于 50 帧，分布和占有率估计可能不稳定。")
     if not np.allclose(np.diff(times), np.diff(times)[0], rtol=1e-3, atol=1e-8):
         warnings.append("采样时间不均匀，占有率为帧比例，不代表驻留时间比例。")
-    if binding and not initial_contacts.any():
+    if binding and initial_contacts is not None and not initial_contacts.any():
         warnings.append("参考帧没有阈值内接触，初始口袋保持率不可计算。")
     return {
         "schema_version": 1,

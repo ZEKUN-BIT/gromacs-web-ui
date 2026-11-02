@@ -10,9 +10,10 @@ import shutil
 import sqlite3
 import stat
 import tempfile
+from collections.abc import Sequence
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import Annotated
+from typing import Annotated, Any
 from urllib.parse import urlsplit
 
 from fastapi import FastAPI, File, Form, HTTPException, Query, Request, UploadFile
@@ -183,7 +184,7 @@ async def explained_http_error(request: Request, exc: HTTPException):
     )
 
 
-def validation_error_response(errors: list[dict], *, headers: dict | None = None) -> JSONResponse:
+def validation_error_response(errors: Sequence[Any], *, headers: dict | None = None) -> JSONResponse:
     # Pydantic inputs/contexts can contain private data or non-finite numbers
     # which JSONResponse cannot encode. Field location and reason are enough.
     details = [{key: error[key] for key in ("type", "loc", "msg") if key in error} for error in errors]
@@ -264,7 +265,7 @@ def get_worker_status() -> dict:
     return worker_status()
 
 
-def _positive_int(value: object, default: object) -> int:
+def _positive_int(value: Any, default: Any) -> int:
     raw = default if value is None or value == "" else value
     try:
         number = int(raw)
@@ -682,7 +683,7 @@ def analysis_index_groups(job_id: str, file: Annotated[str, Query(min_length=1, 
         path = source_file(STORE.job_dir(job_id), file, {".ndx"})
         if path.stat().st_size > 20_000_000:
             raise ValueError("索引文件超过 20 MB 上限。")
-        groups = []
+        groups: list[dict[str, Any]] = []
         for raw in path.read_text(encoding="utf-8").splitlines():
             line = raw.split(";", 1)[0].strip()
             if line.startswith("[") and line.endswith("]"):

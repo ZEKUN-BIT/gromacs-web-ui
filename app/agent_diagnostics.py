@@ -16,7 +16,7 @@ _EXACT_NOTES = {
     "采样时间不均匀，占有率为帧比例，不代表驻留时间比例。": ("uneven_sampling", "采样时间不均匀，占有率不代表驻留时间比例。"),
     "参考帧没有阈值内接触，初始口袋保持率不可计算。": ("missing_initial_contacts", "参考帧没有阈值内接触，初始口袋保持率不可计算。"),
 }
-_NUMERIC_NOTES = (
+_NUMERIC_NOTES: tuple[tuple[str, str, str, tuple[str, ...], dict[str, float]], ...] = (
     (
         rf"mean temperature {_NUMBER} K differs from target {_NUMBER} K",
         "temperature_outside_target",
@@ -115,7 +115,7 @@ def failure_diagnostics(meta: dict) -> dict | None:
     operation = operation if isinstance(operation, str) else None
     args = failed.get("args")
     command = args[1] if isinstance(args, list) and len(args) > 1 and isinstance(args[1], str) else None
-    label = _STEP_LABELS.get(operation, _COMMAND_LABELS.get(command, "任务执行步骤"))
+    label = _STEP_LABELS.get(operation or "", _COMMAND_LABELS.get(command or "", "任务执行步骤"))
     exit_code = failed.get("exit_code", meta.get("exit_code"))
     exit_code = exit_code if type(exit_code) is int and -255 <= exit_code <= 255 else None
     error = meta.get("error")

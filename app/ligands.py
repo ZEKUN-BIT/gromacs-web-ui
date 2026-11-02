@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import re
 from pathlib import Path
+from typing import Any
 
 LEGACY_KEY = "lig"
 LEGACY_LIGAND_FIELDS = {
@@ -55,7 +56,7 @@ def _as_bool(value: object, default: bool) -> bool:
     return str(value).strip().lower() in {"1", "true", "yes", "on"}
 
 
-def _as_int(value: object, default: int) -> int:
+def _as_int(value: Any, default: int) -> int:
     try:
         return int(value)
     except (TypeError, ValueError):
@@ -197,7 +198,7 @@ def _str_param(params: dict, key: str, default: str = "") -> str:
     return text if text else default
 
 
-def _as_float(value: object, default: float) -> float:
+def _as_float(value: Any, default: float) -> float:
     try:
         return float(value)
     except (TypeError, ValueError):

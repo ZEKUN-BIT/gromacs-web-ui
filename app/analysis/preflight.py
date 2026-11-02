@@ -38,7 +38,7 @@ def inspect_research_inputs_cancellable(
     selected: dict[str, Path], request: ExistingAnalysisRequest, gmx_bin: str, operation: OperationContext
 ) -> dict:
     operation.checkpoint()
-    payload = json.dumps(
+    payload: str | None = json.dumps(
         {
             "files": {key: str(path) for key, path in selected.items()},
             "request": request.model_dump(),

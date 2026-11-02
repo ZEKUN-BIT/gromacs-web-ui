@@ -11,6 +11,7 @@ import subprocess
 import tempfile
 from functools import lru_cache
 from pathlib import Path
+from typing import Any
 
 from .diagnostics import gpu_information, host_information
 from .files import ensure_under_root
@@ -85,7 +86,7 @@ def write_experiment_manifest(meta: dict, *, prepared_hashes: dict[str, dict] | 
 @lru_cache(maxsize=1)
 def execution_software() -> dict:
     """Resolve once per worker, including a source identifier for editable installs."""
-    packages = {}
+    packages: dict[str, str | None] = {}
     for name in ("gromacs-web-ui", "numpy", "MDAnalysis", "biopython", "matplotlib", "fastapi"):
         try:
             packages[name] = importlib.metadata.version(name)
@@ -96,7 +97,11 @@ def execution_software() -> dict:
 
 
 def _source_identity(root: Path) -> dict:
-    source = {"revision": None, "dirty": None, "installation_sha256": os.environ.get("GROMACS_CONSOLE_INSTALLATION_SHA256") or None}
+    source: dict[str, Any] = {
+        "revision": None,
+        "dirty": None,
+        "installation_sha256": os.environ.get("GROMACS_CONSOLE_INSTALLATION_SHA256") or None,
+    }
     # Include untracked modules and protocol templates, which a Git diff alone
     # cannot identify. Contents never leave this process, only their digest.
     digest = hashlib.sha256()
@@ -165,9 +170,9 @@ def _protocol_record(workdir: Path, name: str) -> dict:
         after = os.fstat(handle.fileno())
         if (before.st_size, before.st_mtime_ns) != (after.st_size, after.st_mtime_ns):
             raise ValueError("Protocol file changed while hashing")
-    record = {"path": name, "size": before.st_size, "sha256": digest.hexdigest()}
+    record: dict[str, Any] = {"path": name, "size": before.st_size, "sha256": digest.hexdigest()}
     if Path(name).suffix.lower() == ".mdp" and before.st_size <= 2 * 1024**2:
-        parameters = {}
+        parameters: dict[str, str] = {}
         for line in b"".join(mdp).decode("utf-8", errors="replace").splitlines():
             key, separator, value = line.split(";", 1)[0].partition("=")
             if separator and key.strip():

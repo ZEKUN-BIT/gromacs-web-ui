@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import builtins
 import contextlib
 import fcntl
 import hashlib
@@ -14,7 +15,7 @@ from collections.abc import Callable, Iterator
 from contextlib import ExitStack, contextmanager, nullcontext, suppress
 from datetime import datetime
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 from uuid import uuid4
 
 from .files import ensure_under_root
@@ -431,15 +432,15 @@ class JobStore:
         where = " WHERE " + " AND ".join(conditions) if conditions else ""
         # Project only public summary fields; commands and large input metadata
         # never cross into Python for each history/SSE request.
-        fields = []
+        projection_fields: builtins.list[str] = []
         for field in SUMMARY_FIELDS:
             value = field if field in {"id", "status", "created_at", "updated_at"} else f"json_extract(meta_json,'$.{field}')"
             if field in {"pinned", "is_example"}:
                 value = (
                     f"CASE json_type(meta_json,'$.{field}') WHEN 'true' THEN json('true') WHEN 'false' THEN json('false') ELSE {value} END"
                 )
-            fields.extend((f"'{field}'", value))
-        projection = "json_object(" + ",".join(fields) + ") AS summary_json"
+            projection_fields.extend((f"'{field}'", value))
+        projection = "json_object(" + ",".join(projection_fields) + ") AS summary_json"
         total = int(connection.execute("SELECT count(*) FROM jobs" + where, parameters).fetchone()[0])
         rows = connection.execute(
             "SELECT "
@@ -477,8 +478,9 @@ class JobStore:
         return meta
 
     def update(self, job_id: str, **updates: object) -> dict:
-        desired = updates.pop("desired_action", None) if "desired_action" in updates else ...
-        worker = updates.pop("worker_id", None) if "worker_id" in updates else ...
+        # Ellipsis marks "not supplied", so None can still clear the column.
+        desired: Any = updates.pop("desired_action", None) if "desired_action" in updates else ...
+        worker: Any = updates.pop("worker_id", None) if "worker_id" in updates else ...
         with self._connect() as connection:
             connection.execute("BEGIN IMMEDIATE")
             try:
@@ -499,7 +501,9 @@ class JobStore:
                 connection.rollback()
                 raise
 
-    def create(self, name: str, params: dict, uploaded_files: list[str], steps: list[Step], *, submission_id: str | None = None) -> dict:
+    def create(
+        self, name: str, params: dict, uploaded_files: builtins.list[str], steps: builtins.list[Step], *, submission_id: str | None = None
+    ) -> dict:
         job_id = f"{datetime.now().strftime('%Y%m%d-%H%M%S')}-{directory_slug(name)}-{uuid4().hex[:8]}"
         workdir = self.job_dir(job_id)
         workdir.mkdir(parents=True, exist_ok=False)
@@ -548,7 +552,7 @@ class JobStore:
             raise
 
     @staticmethod
-    def serialize_steps(steps: list[Step]) -> list[dict]:
+    def serialize_steps(steps: builtins.list[Step]) -> builtins.list[dict]:
         return [
             {
                 "title": step.title,
@@ -564,7 +568,7 @@ class JobStore:
             for step in steps
         ]
 
-    def start(self, job_id: str, steps: list[Step], dry_run: bool = False) -> None:
+    def start(self, job_id: str, steps: builtins.list[Step], dry_run: bool = False) -> None:
         self.update(job_id, status="queued", commands=self.serialize_steps(steps), dry_run=bool(dry_run), desired_action="run")
 
     def append_log(self, job_id: str, text: str) -> None:

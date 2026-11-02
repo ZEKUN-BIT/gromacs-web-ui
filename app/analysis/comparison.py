@@ -86,7 +86,7 @@ def _display_text(value: object, limit: int) -> str:
 
 
 def _source_quality(report: dict, group: str) -> dict:
-    job = report.get("job") if isinstance(report.get("job"), dict) else {}
+    job: dict = report["job"] if isinstance(report.get("job"), dict) else {}
     frames = report.get("frames")
     window = report.get("window_ns")
     valid_window = (
@@ -181,9 +181,9 @@ def compare_reports(reference: list[dict], comparison: list[dict]) -> dict:
                     continue
                 if any(item.get(key) is None for item in mapped):
                     continue
-                a = fmean(item[key] for item in mapped[: len(reference)])
-                b = fmean(item[key] for item in mapped[len(reference) :])
-                entry[key] = {"reference": a, "comparison": b, "difference": b - a}
+                reference_mean = fmean(item[key] for item in mapped[: len(reference)])
+                comparison_mean = fmean(item[key] for item in mapped[len(reference) :])
+                entry[key] = {"reference": reference_mean, "comparison": comparison_mean, "difference": comparison_mean - reference_mean}
             residues.append(entry)
         if len(common) < len(canonical):
             warnings.append(f"残基差值覆盖参考结构的 {len(common)}/{len(canonical)} 个 C-alpha，缺口未插值。")

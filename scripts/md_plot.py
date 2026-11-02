@@ -65,7 +65,8 @@ def centered_trend(xs, ys, width: float, window_points: int | None = None):
         return [], [], {"reason": "fewer than three samples in the smoothing window"}
     # Missing observations, reversed axes and unequal sampling start new segments.
     cuts = [0, *(np.flatnonzero(~np.isclose(steps, dt, rtol=0.002, atol=1e-12) | ~finite[:-1] | ~finite[1:]) + 1).tolist(), len(xs)]
-    tx, ty = [], []
+    tx: list[float] = []
+    ty: list[float] = []
     for start, end in itertools.pairwise(cuts):
         if end - start < window or not np.all(finite[start:end]):
             continue
@@ -148,7 +149,8 @@ def apply_raw_trend_style(fig, window_ns: float = 1.0) -> list[dict]:
                 tx, ty, details = centered_trend(xs, ys, width, getattr(line, "_md_smooth_points", None))
                 record.update(time_unit=unit, requested_window_ns=window_ns, smoothing=details)
                 if tx:
-                    pale = "#A6CEE3" if dark.lower() == "#0072b2" else to_hex([0.35 * c + 0.65 for c in to_rgb(dark)])
+                    red, green, blue = to_rgb(dark)
+                    pale = "#A6CEE3" if dark.lower() == "#0072b2" else to_hex((0.35 * red + 0.65, 0.35 * green + 0.65, 0.35 * blue + 0.65))
                     line.set(color=pale, linewidth=0.55, alpha=1.0, zorder=1)
                     line._md_raw_trend_role = "raw"
                     trend, = ax.plot(tx, ty, color=dark, linewidth=1.6, alpha=1.0,

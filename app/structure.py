@@ -323,7 +323,7 @@ def merge_gro(workdir: Path, data: dict) -> None:
         if not atoms:
             raise ValueError("Protein and ligand coordinate files must both contain atoms")
         ligand_atom_blocks.append(atoms)
-        ligand_xyz.append((name, [tuple(float(line[start : start + 8]) for start in (20, 28, 36)) for line in atoms]))
+        ligand_xyz.append((name, [(float(line[20:28]), float(line[28:36]), float(line[36:44])) for line in atoms]))
 
     distances: list[tuple[str, str, float]] = []
     for name, xyz in ligand_xyz:
@@ -468,7 +468,7 @@ def structure_preflight(workdir: Path, data: dict) -> None:
             hetero.add(residue)
     if atoms == 0:
         failures.append(f"{source.name}: no PDB atoms found")
-    gaps = []
+    gaps: list[str] = []
     for chain, values in chains.items():
         unique = sorted(set(values))
         gaps.extend(f"{chain}:{left}-{right}" for left, right in itertools.pairwise(unique) if right - left > 1)

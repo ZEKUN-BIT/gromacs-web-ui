@@ -18,7 +18,7 @@ import time
 from collections.abc import Callable
 from contextlib import ExitStack, contextmanager, suppress
 from pathlib import Path
-from typing import BinaryIO
+from typing import BinaryIO, cast
 
 from . import reproducibility
 from .files import ensure_under_root
@@ -571,11 +571,11 @@ class WorkerEngine:
             "time_ps": time_ps,
             "total_steps": total_steps,
         }
-        ns_per_day = None
+        rate_ns_per_day: float | None = None
         if previous and current_step > previous[1] and now > previous[0] and dt_ps:
             steps_per_second = (current_step - previous[1]) / (now - previous[0])
-            ns_per_day = steps_per_second * dt_ps * 86.4
-            simulation["ns_per_day"] = round(ns_per_day, 3)
+            rate_ns_per_day = steps_per_second * dt_ps * 86.4
+            simulation["ns_per_day"] = round(rate_ns_per_day, 3)
             if total_steps:
                 simulation["eta_seconds"] = max(0, round((total_steps - current_step) / steps_per_second))
         self._progress_samples[sample_key] = (now, current_step)
@@ -583,7 +583,7 @@ class WorkerEngine:
             job_id,
             progress_percent=round(percent, 2),
             simulation_progress=simulation,
-            **({"performance_ns_per_day": round(ns_per_day, 3)} if ns_per_day is not None else {}),
+            **({"performance_ns_per_day": round(rate_ns_per_day, 3)} if rate_ns_per_day is not None else {}),
         )
 
     @staticmethod
@@ -673,7 +673,7 @@ class WorkerEngine:
                     raise
             # Keep the familiar Popen reader lifetime, with bounded file tailing
             # below instead of blocking on a pipe.
-            proc.stdout = reader
+            proc.stdout = reader  # type: ignore[assignment]  # binary tail reader replaces the unused text pipe
             identity = wait_process_identity(proc.pid)
             if identity is None:
                 identity = {
@@ -853,7 +853,7 @@ class WorkerEngine:
 
                 self._tail_output(
                     job_id,
-                    proc.stdout,
+                    cast(BinaryIO, proc.stdout),
                     lambda: proc.poll() is None,
                     record,
                     output={"path": identity["output_file"], "step_index": identity["output_step_index"]},
@@ -958,7 +958,7 @@ class WorkerEngine:
                 with proc.stdout:
                     self._tail_output(
                         job_id,
-                        proc.stdout,
+                        cast(BinaryIO, proc.stdout),
                         lambda: proc.poll() is None,
                         lambda line: self._record_seed_message(step_runs[len(step_runs) - len(steps) + offset], line),
                     )

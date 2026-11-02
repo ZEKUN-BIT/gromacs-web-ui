@@ -5,6 +5,7 @@ import json
 import tempfile
 import time
 from pathlib import Path
+from typing import Any
 
 HEARTBEAT_MAX_AGE_SECONDS = 10.0
 
@@ -23,7 +24,7 @@ def write_worker_heartbeat(runtime_root: Path, status: dict) -> None:
 
 
 def worker_status(runtime_root: Path) -> dict:
-    status = {"available": False, "worker_id": None, "state": "offline"}
+    status: dict[str, Any] = {"available": False, "worker_id": None, "state": "offline"}
     try:
         with (runtime_root / "worker.lock").open("r", encoding="utf-8") as handle:
             try:

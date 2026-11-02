@@ -12,6 +12,7 @@ import subprocess
 from datetime import UTC, datetime, timezone
 from pathlib import Path
 from statistics import fmean, stdev
+from typing import Any
 
 from .files import ensure_under_root
 from .forcefields import (
@@ -486,8 +487,9 @@ def parse_stdin_overrides(text: str) -> dict[str, str]:
         stripped = raw_line.strip()
         bracket_match = re.match(r"^\[(.+)\]$", stripped)
         heading_match = re.match(r"^#{1,6}\s+(.+)$", stripped)
-        if bracket_match or heading_match:
-            current_title = _normalize_interaction_title((bracket_match or heading_match).group(1))
+        title_match = bracket_match or heading_match
+        if title_match:
+            current_title = _normalize_interaction_title(title_match.group(1))
             if current_title:
                 overrides.setdefault(current_title, [])
             continue
@@ -538,7 +540,7 @@ def _read_xvg(path: Path) -> tuple[list[str], list[list[float]]]:
     """Read scientific gate/statistics inputs strictly; plotting has its own reader."""
     legend_entries: dict[int, str] = {}
     rows: list[list[float]] = []
-    columns = None
+    columns: int | None = None
     legend_pattern = re.compile(r'^@\s+s(\d+)\s+legend\s+"([^"]+)"')
     for line_number, line in enumerate(path.read_text(encoding="utf-8", errors="replace").splitlines(), 1):
         line = line.strip()
@@ -563,7 +565,7 @@ def _read_xvg(path: Path) -> tuple[list[str], list[list[float]]]:
             raise ValueError(f"{path.name}:{line_number}: inconsistent XVG columns (expected {columns}, found {len(values)})")
         columns = len(values)
         rows.append(values)
-    if len(rows) < 10:
+    if len(rows) < 10 or columns is None:
         raise ValueError(f"insufficient numeric samples in {path.name}")
     if legend_entries and max(legend_entries) >= columns - 1:
         raise ValueError(f"{path.name}: XVG legend refers to a missing numeric column")
@@ -649,7 +651,7 @@ def _validate_thermodynamics(workdir: Path, data: dict) -> None:
 
 
 def _summarize_replicas(workdir: Path, data: dict) -> None:
-    replicas = []
+    replicas: list[dict[str, Any]] = []
     for name in data.get("inputs", []):
         path = ensure_under_root(workdir / str(name), workdir)
         legends, rows = _read_xvg(path)
@@ -723,7 +725,7 @@ def _generate_analysis_figures(workdir: Path, data: dict) -> None:
 
 def _summarize_benchmarks(workdir: Path, data: dict) -> None:
     performance_pattern = re.compile(r"\bPerformance:\s*([0-9.eE+\-]+)", re.IGNORECASE)
-    results = []
+    results: list[dict[str, Any]] = []
     for profile in data.get("profiles") or []:
         log_path = ensure_under_root(workdir / str(profile["log"]), workdir)
         matches = performance_pattern.findall(log_path.read_text(encoding="utf-8", errors="replace")) if log_path.is_file() else []

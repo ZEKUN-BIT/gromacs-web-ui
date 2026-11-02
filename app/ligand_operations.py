@@ -58,7 +58,8 @@ def pdb_pose_atoms(path: Path) -> tuple[list[dict], set[tuple[int, int]]]:
         left = serial_to_index.get(left_serial)
         right = serial_to_index.get(right_serial)
         if left in old_to_heavy and right in old_to_heavy:
-            pair = tuple(sorted((old_to_heavy[left], old_to_heavy[right])))
+            low, high = sorted((old_to_heavy[left], old_to_heavy[right]))
+            pair = (low, high)
             if pair[0] != pair[1]:
                 bonds.add(pair)
     return heavy_atoms, bonds

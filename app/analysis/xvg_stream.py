@@ -11,7 +11,7 @@ from collections import OrderedDict
 from collections.abc import Iterator
 from pathlib import Path
 from threading import Lock
-from typing import BinaryIO
+from typing import Any, BinaryIO
 
 MAX_XVG_BYTES = 512 * 1024**2
 MAX_LINE_BYTES = 64 * 1024
@@ -65,6 +65,7 @@ def _row(line: str) -> list[float] | None:
 def _include(x: float, factor: float | None, begin: float | None, end: float | None) -> bool:
     if begin is None and end is None:
         return True
+    assert factor is not None, "time windows require a time axis"
     time_ns = x * factor
     return (begin is None or time_ns >= begin) and (end is None or time_ns <= end)
 
@@ -98,10 +99,10 @@ def _summary(stream: BinaryIO, metadata: dict, *, factor=None, begin=None, end=N
 
 def _sample(stream: BinaryIO, summary: dict, max_points: int, *, factor=None, begin=None, end=None) -> list[list]:
     count, width = summary["count"], summary["width"]
-    points = [[] for _ in range(width - 1)]
+    points: list[list[tuple[int, list[float]]]] = [[] for _ in range(width - 1)]
     # Each bucket contributes at most its minimum and maximum, plus both endpoints.
     bucket_count = (max_points - 2) // 2 if count > max_points else 0
-    buckets = [[None] * bucket_count for _ in points]
+    buckets: list[list[list[tuple[int, list[float]]] | None]] = [[None] * bucket_count for _ in points]
     index = 0
     for line in _lines(stream):
         row = _row(line)
@@ -143,7 +144,7 @@ def load_xvg(path: Path, max_points: int, max_bytes: int, begin: float | None, e
         if key in _CACHE:
             _CACHE.move_to_end(key)
             return copy.deepcopy(_CACHE[key][0])
-    metadata = {"title": path.stem.replace("_", " ").replace("-", " "), "x_label": "X", "y_label": "Value", "legends": {}}
+    metadata: dict[str, Any] = {"title": path.stem.replace("_", " ").replace("-", " "), "x_label": "X", "y_label": "Value", "legends": {}}
     flags = os.O_RDONLY | os.O_NONBLOCK | getattr(os, "O_NOFOLLOW", 0)
     with os.fdopen(os.open(path, flags), "rb") as stream:
         if _fingerprint(os.fstat(stream.fileno())) != fingerprint:
@@ -151,7 +152,7 @@ def load_xvg(path: Path, max_points: int, max_bytes: int, begin: float | None, e
         full = _summary(stream, metadata, read_headers=True)
         time_match = _TIME.fullmatch(metadata["x_label"])
         time_unit = time_match.group(1).lower() if time_match else None
-        factor = _NS_FACTORS.get(time_unit)
+        factor = _NS_FACTORS.get(time_unit) if time_unit else None
         summary = full
         if begin is not None or end is not None:
             if factor is None:

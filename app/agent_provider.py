@@ -14,13 +14,13 @@ import tempfile
 import threading
 import time
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal
 from urllib.parse import unquote, urlsplit
-from urllib.request import getproxies_environment, proxy_bypass_environment
+from urllib.request import getproxies_environment, proxy_bypass_environment  # type: ignore[attr-defined]
 
 from pydantic import BaseModel, ConfigDict, Field, SecretStr, field_validator
 
-PROVIDERS = {
+PROVIDERS: dict[str, dict[str, Any]] = {
     "openai": {
         "label": "OpenAI（ChatGPT 系列）",
         "default_model": "gpt-6.1-sol",
@@ -173,7 +173,7 @@ class ProviderConfig:
                 raise AgentError("请先保存 API Key，或设置服务端对应的 API Key 环境变量。", 409)
             # Environment credentials receive the same header-injection checks.
             try:
-                ProviderPatch(provider=provider, model=model, api_key=key)
+                ProviderPatch.model_validate({"provider": provider, "model": model, "api_key": key})
             except ValueError:
                 raise AgentError("服务端 API Key 或模型配置格式无效，请检查配置。", 409) from None
             return provider, model, key
@@ -263,7 +263,7 @@ def request_json(provider: str, api_key: str, payload: dict | None = None, *, ti
     proxy = proxy_for(destination["host"])
     connection = None
     try:
-        options = {"timeout": min(20, timeout), "context": ssl.create_default_context()}
+        options: dict[str, Any] = {"timeout": min(20, timeout), "context": ssl.create_default_context()}
         if proxy:
             host, port, headers = proxy
             connection = http.client.HTTPSConnection(host, port=port, **options)

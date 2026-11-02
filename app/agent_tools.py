@@ -14,7 +14,7 @@ import sys
 from collections.abc import Callable
 from contextlib import nullcontext
 from pathlib import Path
-from typing import Annotated, Literal
+from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
@@ -205,7 +205,7 @@ class Simulation(Arguments):
     params: SimulationParameters
 
 
-TOOLS = {
+TOOLS: dict[str, tuple[type[BaseModel], bool, str]] = {
     "workspace_summary": (Arguments, False, "查看任务数量、执行器状态和资源限制，不含本机路径或密钥。"),
     "list_jobs": (JobList, False, "分页查询任务摘要；search 可搜索名称、状态、工作流，project 为精确项目筛选。"),
     "get_job": (Target, False, "查看任务状态、可用操作、科学参数、失败步骤和白名单质量诊断；不读取原始结构、轨迹或日志。"),
@@ -238,7 +238,7 @@ def _summary(meta: dict) -> dict:
 
 
 def _scientific_parameters(params: dict) -> dict:
-    result = {}
+    result: dict[str, Any] = {}
     for key in SCIENTIFIC_FIELDS:
         value = params.get(key)
         if isinstance(value, (bool, int, float)) and math.isfinite(value):
@@ -446,7 +446,7 @@ class AgentTools:
             "create_analysis": ("创建结果分析任务", "独立复制选定输入文件并创建分析任务，将使用磁盘和计算资源。"),
         }[name]
         precondition = {"job": self._snapshot(meta)}
-        preview = {
+        preview: dict[str, Any] = {
             "target": _summary(meta),
             "parameters": args,
             "scientific_parameters": _scientific_parameters(meta.get("params") or {}),

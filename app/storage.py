@@ -12,7 +12,7 @@ import threading
 import time
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
@@ -145,7 +145,7 @@ def _input_paths(meta: dict) -> set[str]:
 
 def _disposable_paths(meta: dict) -> set[str]:
     inputs = _input_paths(meta)
-    paths = set()
+    paths: set[str] = set()
     for command in meta.get("commands") or []:
         if command.get("kind") == "internal" and command.get("operation") == "remove_files":
             paths.update(str(item) for item in (command.get("data") or {}).get("paths") or [])
@@ -205,7 +205,7 @@ def _directory_stamp(store, job_id: str) -> str:
 
 
 def _storage_summary(store, meta: dict) -> dict:
-    categories = {}
+    categories: dict[str, dict] = {}
     row = {
         "id": meta["id"],
         "name": meta.get("name") or meta["id"],
@@ -287,7 +287,9 @@ def storage_overview(store, *, limit: int = 50, offset: int = 0, refresh: bool =
                 "SELECT j.id,j.version,j.status,s.job_version,s.directory_stamp,s.scanned_at,s.payload "
                 "FROM jobs j LEFT JOIN storage_summaries s ON j.id=s.job_id ORDER BY j.created_at DESC,j.id DESC"
             ).fetchall()
-        jobs, categories, writes = [], {}, []
+        jobs: list[dict] = []
+        categories: dict[str, dict] = {}
+        writes: list = []
         now = time.time()
         max_age = 0.0
         for record in rows:
@@ -353,7 +355,10 @@ def _meta_binding(meta: dict) -> str:
 
 
 def preview_cleanup(store, request: CleanupRequest) -> dict:
-    snapshots, jobs, files, protected = {}, [], [], []
+    snapshots: dict[str, dict] = {}
+    jobs: list[dict] = []
+    files: list[dict] = []
+    protected: list[dict] = []
     entry_count = 0
     for job_id in request.job_ids:
         try:
@@ -453,8 +458,8 @@ def execute_cleanup(store, request: CleanupRequest) -> dict:
             raise ValueError("清理预览已过期或已使用，请重新预览。")
         if saved["selection"] != _selection(request) or saved["runtime"] != str(Path(store.runtime_root).resolve()):
             raise ValueError("清理选项与预览不一致，请重新预览。")
-        _PREVIEWS.pop(request.preview_token, None)
-    result = {"deleted_bytes": 0, "deleted_files": 0, "deleted_jobs": [], "cleaned_jobs": [], "skipped_jobs": []}
+        _PREVIEWS.pop(request.preview_token or "", None)
+    result: dict[str, Any] = {"deleted_bytes": 0, "deleted_files": 0, "deleted_jobs": [], "cleaned_jobs": [], "skipped_jobs": []}
     for job_id, snapshot in saved["jobs"].items():
         try:
 
