@@ -24,11 +24,18 @@ from . import reproducibility
 from .files import ensure_under_root
 from .gromacs import Step, execute_internal_step, utc_now
 from .job_store import JobStore
+from .mdrun_files import (
+    GROMACS_SEED_RE,
+    MDRUN_PERFORMANCE_RE,
+    MDRUN_STEP_RE,
+    mdrun_completed,
+    mdrun_mdp_number,
+    mdrun_total_steps,
+    native_log_snapshot,
+    process_resources,
+)
 from .reproducibility import write_execution_manifest
 
-MDRUN_STEP_RE = re.compile(r"\bstep\s+(\d+)(?:.*?\btime\s+([0-9.eE+\-]+))?", re.IGNORECASE)
-MDRUN_PERFORMANCE_RE = re.compile(r"\bPerformance:\s*([0-9.eE+\-]+)", re.IGNORECASE)
-GROMACS_SEED_RE = re.compile(r"\b(?:seed|seeds)\b.*?[-+]?\d+", re.IGNORECASE)
 PROGRESS_UPDATE_INTERVAL_SECONDS = 1.0
 
 MIN_FREE_DISK_BYTES = int(os.environ.get("GROMACS_WEB_MIN_FREE_DISK_BYTES", str(2 * 1024**3)))
@@ -141,102 +148,6 @@ def live_process_identities(meta: dict, workdir: Path) -> list[dict]:
         if cwd.is_relative_to(root) and identity_matches(record, cwd):
             live.append(record)
     return live
-
-
-def _process_resources(pid: int) -> tuple[int, float]:
-    peak_rss_bytes = 0
-    cpu_seconds = 0.0
-    try:
-        for line in (Path("/proc") / str(pid) / "status").read_text(encoding="utf-8").splitlines():
-            if line.startswith(("VmHWM:", "VmRSS:")):
-                peak_rss_bytes = max(peak_rss_bytes, int(line.split()[1]) * 1024)
-        fields = (Path("/proc") / str(pid) / "stat").read_text(encoding="utf-8").split()
-        cpu_seconds = (int(fields[13]) + int(fields[14])) / os.sysconf("SC_CLK_TCK")
-    except (FileNotFoundError, PermissionError, OSError, ValueError, IndexError):
-        pass
-    return peak_rss_bytes, cpu_seconds
-
-
-def _mdrun_mdp_path(workdir: Path, args: list[str], commands: list[dict]) -> Path | None:
-    if "mdrun" not in args:
-        return None
-    tpr = None
-    if "-s" in args and args.index("-s") + 1 < len(args):
-        tpr = args[args.index("-s") + 1]
-    elif "-deffnm" in args and args.index("-deffnm") + 1 < len(args):
-        tpr = f"{args[args.index('-deffnm') + 1]}.tpr"
-    if not tpr:
-        return None
-    mdp_name = None
-    for candidate in commands:
-        candidate_args = [str(arg) for arg in candidate.get("args") or []]
-        if all(flag in candidate_args for flag in ("grompp", "-o", "-f")) and candidate_args[candidate_args.index("-o") + 1] == tpr:
-            mdp_name = candidate_args[candidate_args.index("-f") + 1]
-    if not mdp_name:
-        return None
-    return workdir / mdp_name
-
-
-def _mdrun_mdp_number(workdir: Path, args: list[str], commands: list[dict], key: str) -> float | None:
-    path = _mdrun_mdp_path(workdir, args, commands)
-    if path is None:
-        return None
-    try:
-        for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
-            clean = line.split(";", 1)[0]
-            if clean.strip().lower().startswith(key.lower()) and "=" in clean:
-                return float(clean.split("=", 1)[1].strip())
-    except (FileNotFoundError, OSError, ValueError, IndexError):
-        pass
-    return None
-
-
-def _mdrun_total_steps(workdir: Path, args: list[str], commands: list[dict]) -> int | None:
-    value = _mdrun_mdp_number(workdir, args, commands, "nsteps")
-    return max(1, int(value)) if value is not None else None
-
-
-def _native_log_path(workdir: Path, args: list[str]) -> Path:
-    def option(flag: str, default: str) -> str:
-        return args[args.index(flag) + 1] if flag in args and args.index(flag) + 1 < len(args) else default
-
-    return ensure_under_root(workdir / option("-g", option("-deffnm", "md") + ".log"), workdir)
-
-
-def _native_log_snapshot(workdir: Path, args: list[str]) -> dict | None:
-    if "mdrun" not in args:
-        return None
-    path = _native_log_path(workdir, args)
-    snapshot = {"path": str(path.relative_to(workdir.resolve()))}
-    try:
-        info = path.stat()
-    except FileNotFoundError:
-        return snapshot
-    return {**snapshot, "inode": info.st_ino, "size": info.st_size, "mtime_ns": info.st_mtime_ns}
-
-
-def _mdrun_completed(meta: dict, workdir: Path) -> bool:
-    """Read a bounded tail of this invocation, excluding an earlier run's marker."""
-    if meta.get("process_step_index", meta.get("step_index")) != meta.get("step_index"):
-        return False
-    path = _native_log_path(workdir, [str(arg) for arg in meta.get("process_args") or []])
-    try:
-        descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
-    except FileNotFoundError:
-        return False
-    with os.fdopen(descriptor, "rb") as reader:
-        info = os.fstat(reader.fileno())
-        if not stat.S_ISREG(info.st_mode):
-            return False
-        before = meta.get("process_native_log") or {}
-        start = 0
-        if before.get("inode") == info.st_ino:
-            if before.get("mtime_ns") == info.st_mtime_ns and before.get("size") == info.st_size:
-                return False
-            if info.st_size >= int(before.get("size") or 0):
-                start = int(before.get("size") or 0)
-        reader.seek(max(start, info.st_size - 128 * 1024))
-        return b"Finished mdrun" in reader.read(128 * 1024)
 
 
 class WorkerEngine:
@@ -533,7 +444,7 @@ class WorkerEngine:
         while not stop.wait(0.25) and proc.poll() is None:
             with suppress(OSError, sqlite3.OperationalError):
                 self._refresh_owned_process(job_id, proc)
-            peak_rss, cpu_seconds = _process_resources(proc.pid)
+            peak_rss, cpu_seconds = process_resources(proc.pid)
             usage["peak_rss_bytes"] = max(int(usage.get("peak_rss_bytes") or 0), peak_rss)
             usage["cpu_seconds"] = max(float(usage.get("cpu_seconds") or 0), cpu_seconds)
 
@@ -735,7 +646,7 @@ class WorkerEngine:
             if self._launch_stopped:
                 raise SystemExit("Execution worker is stopping")
             step_index = self.store.get(job_id).get("step_index", 0)
-            native_log = _native_log_snapshot(workdir, step.args)
+            native_log = native_log_snapshot(workdir, step.args)
             # A pipe reader belongs to the worker: its death would give the
             # calculation EPIPE/SIGPIPE. The child owns a regular-file descriptor
             # which remains writable across worker exits and re-adoption.
@@ -927,8 +838,8 @@ class WorkerEngine:
         watcher.start()
         resource_watcher.start()
         disk_watcher.start()
-        total_steps = _mdrun_total_steps(workdir, step.args, list(meta.get("commands") or []))
-        dt_ps = _mdrun_mdp_number(workdir, step.args, list(meta.get("commands") or []), "dt")
+        total_steps = mdrun_total_steps(workdir, step.args, list(meta.get("commands") or []))
+        dt_ps = mdrun_mdp_number(workdir, step.args, list(meta.get("commands") or []), "dt")
         try:
             if step.stdin_text and proc.stdin:
                 proc.stdin.write(step.stdin_text)
@@ -957,7 +868,7 @@ class WorkerEngine:
                 proc.wait(timeout=2)
             raise
         finally:
-            peak_rss, cpu_seconds = _process_resources(proc.pid)
+            peak_rss, cpu_seconds = process_resources(proc.pid)
             usage["peak_rss_bytes"] = max(int(usage["peak_rss_bytes"]), peak_rss)
             usage["cpu_seconds"] = max(float(usage["cpu_seconds"]), cpu_seconds)
             stop.set()
@@ -1057,7 +968,7 @@ class WorkerEngine:
                 results[offset] = {"error": str(error)}
                 reader_error.set()
             finally:
-                peak_rss, cpu_seconds = _process_resources(proc.pid)
+                peak_rss, cpu_seconds = process_resources(proc.pid)
                 results.setdefault(offset, {}).update(exit_code=exit_code, peak_rss_bytes=int(peak_rss), cpu_seconds=round(cpu_seconds, 3))
 
         def watch_cancel() -> None:
@@ -1285,8 +1196,8 @@ class WorkerEngine:
                 args = [str(arg) for arg in (step or {}).get("args") or []]
                 index = int(current.get("step_index") or 1)
                 count = int(current.get("step_count") or 1)
-                total_steps = _mdrun_total_steps(workdir, args, commands)
-                dt_ps = _mdrun_mdp_number(workdir, args, commands, "dt")
+                total_steps = mdrun_total_steps(workdir, args, commands)
+                dt_ps = mdrun_mdp_number(workdir, args, commands, "dt")
                 self._tail_output(
                     job_id,
                     reader,
@@ -1307,7 +1218,7 @@ class WorkerEngine:
         if self._finish_disk_stop(job_id, disk_state):
             return
         current = self.store.get(job_id)
-        if not _mdrun_completed(current, workdir):
+        if not mdrun_completed(current, workdir):
             self._finalize_job(
                 job_id,
                 status="interrupted",
