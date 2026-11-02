@@ -39,6 +39,12 @@ minversion = "8.0"
 testpaths = ["tests"]
 pythonpath = ["."]
 addopts = "-ra --strict-config --strict-markers"
+filterwarnings = [
+    # Synthetic test structures omit optional PDB columns on purpose.
+    "ignore:Found no information for attr:UserWarning:MDAnalysis.coordinates.PDB",
+    "ignore:Unit cell dimensions not found:UserWarning:MDAnalysis.coordinates.PDB",
+    "ignore:Found missing chainIDs:UserWarning:MDAnalysis.coordinates.PDB",
+]
 markers = [
     "gromacs_integration: runs real, single-threaded GROMACS commands (enable with GROMACS_INTEGRATION=1 or -m gromacs_integration)",
 ]
@@ -49,6 +55,8 @@ source = ["app"]
 omit = ["app/static/*"]
 
 [tool.coverage.report]
+# Raise as coverage improves; measured 84% on 2026-11-02.
+fail_under = 83
 show_missing = true
 skip_covered = true
 exclude_also = [
