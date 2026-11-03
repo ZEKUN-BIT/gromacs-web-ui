@@ -112,6 +112,7 @@ def check_submission(artifact_dir: Path | None = None) -> None:
         """)
         try:
             page.goto(ORIGIN, wait_until="networkidle")
+            page.locator("#expert-mode").click()
             page.evaluate(
                 "async urls => { window.modules = {}; for (const [name, url] of Object.entries(urls)) window.modules[name] = await import(url); }",
                 urls,

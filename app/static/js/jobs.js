@@ -15,9 +15,9 @@ import {
   replaySwapAnimation,
   showWorkspaceView,
   showDetailTab,
-} from "./core.js?v=6cd8594e2b063155";
-import { renderPlots, resetPlotFilters, updatePlotOptions } from "./plots.js?v=6cd8594e2b063155";
-import { renderResearch } from "./research.js?v=6cd8594e2b063155";
+} from "./core.js?v=a501fb3828ebf5d3";
+import { renderPlots, resetPlotFilters, updatePlotOptions } from "./plots.js?v=a501fb3828ebf5d3";
+import { renderResearch } from "./research.js?v=a501fb3828ebf5d3";
 import {
   captureSubmissionSnapshot,
   isSubmissionSnapshotReady,
@@ -25,9 +25,9 @@ import {
   submitWarnings,
   friendlyPreviewError,
   refreshPreview,
-} from "./form.js?v=6cd8594e2b063155";
-import { apiSubmissionIssues, clearSubmissionIssues, showSubmissionIssues } from "./submission-validation.js?v=6cd8594e2b063155";
-import { uploadJob, bindUploadRecovery } from "./submission-upload.js?v=6cd8594e2b063155";
+} from "./form.js?v=a501fb3828ebf5d3";
+import { apiSubmissionIssues, clearSubmissionIssues, showSubmissionIssues } from "./submission-validation.js?v=a501fb3828ebf5d3";
+import { uploadJob, bindUploadRecovery } from "./submission-upload.js?v=a501fb3828ebf5d3";
 
 /* ---------- 任务列表（签名对比，按需渲染 + 事件委托） ---------- */
 
@@ -80,16 +80,15 @@ export function renderJobs() {
       return `
         <div class="job-item ${isActive ? "active" : ""}" data-job-id="${escapeHtml(job.id)}" data-status="${escapeHtml(job.status)}">
           <button class="job-select" type="button" data-action="select" title="${escapeHtml(job.name)}&#10;结果目录：${escapeHtml(job.directory_name || job.id)}">
-            <strong>${escapeHtml(job.name)}</strong>
-            ${job.project || job.pinned ? `<small class="job-project-label">${job.pinned ? "置顶 · " : ""}${escapeHtml(job.project || "未归入项目")}</small>` : ""}
+            <span class="job-titleline"><span data-ui-icon="file" aria-hidden="true"></span><strong>${job.pinned ? "置顶 · " : ""}${escapeHtml(job.name)}</strong></span>
             <span class="job-meta">
               <span class="badge ${escapeHtml(job.status)} ${state.changedJobIds.has(job.id) ? "status-changed" : ""}">${escapeHtml(STATUS_LABELS[job.status] || job.status)}</span>
+              <small class="job-time">${escapeHtml(formatTime(job.created_at))}</small>
               <small>${escapeHtml(WORKFLOW_LABELS[job.workflow] || job.workflow || "")}</small>
             </span>
             <small class="job-directory" title="结果目录">${escapeHtml(job.directory_name || job.id)}</small>
           </button>
           <div class="job-footer">
-          <small class="job-time">${escapeHtml(formatTime(job.created_at))}</small>
           <div class="job-actions" aria-label="${escapeHtml(job.name)} 操作">
             <button class="job-action icon-only" type="button" data-action="select" data-ui-icon="open" title="查看任务详情">查看</button>
             ${

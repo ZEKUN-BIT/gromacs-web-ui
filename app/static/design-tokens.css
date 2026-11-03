@@ -19,27 +19,30 @@
 
 :root {
   color-scheme: light dark;
-  --paper: #f5f7fa;
+  --paper: #ffffff;
   --panel: #ffffff;
-  --field: #f7f9fb;
-  --rail-background: #f0f3f6;
-  --ink: #202b3b;
-  --muted: #55657a;
-  --line: #e2e8f0;
-  --blue: #0b786f;
-  --green: #237951;
+  --field: #f4f5f4;
+  --rail-background: #fafbfa;
+  --ink: #181d18;
+  --muted: #637268;
+  --line: #b7c5bc;
+  --line-soft: #e6ebe7;
+  --control-line: #99ad9f;
+  --selection: #d3ebdc;
+  --blue: #147f3b;
+  --green: #147f3b;
   --amber: #936316;
   --red: #b43e3e;
   --violet: #625f91;
   --on-accent: #ffffff;
-  --acid: #e5f2ed;
-  --acid-hover: #d6ebe3;
-  --acid-soft: #edf7f1;
-  --green-soft: #edf7f1;
-  --cyan-soft: #eaf5f2;
+  --acid: #e2f1e7;
+  --acid-hover: #d2e9d9;
+  --acid-soft: #edf6ef;
+  --green-soft: #edf6ef;
+  --cyan-soft: #edf6ef;
   --coral-soft: #fff0ee;
   --plot-text: var(--muted);
-  --plot-grid: #e5eaf0;
+  --plot-grid: #e3e9e4;
   /* Scientific series colors are independent of UI text contrast tokens. */
   --series-0: #087f8c;
   --series-1: #e07a1f;
@@ -50,17 +53,17 @@
   --series-6: #b18b16;
   --series-7: #9b4dca;
   --shadow: 0 12px 40px #172b4d14, 0 2px 8px #172b4d08;
-  --shadow-sm: 0 1px 3px #172b4d08;
+  --shadow-sm: none;
 
   --sans: "Inter", system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", "Noto Sans CJK SC", "Source Han Sans SC", sans-serif;
   --display: var(--sans);
   --mono: "JetBrains Mono", "Cascadia Mono", "IBM Plex Mono", "SFMono-Regular", Consolas, monospace;
   --text-xs: 12px;
   --text-sm: 13px;
-  --text-ui: 14px;
+  --text-ui: 15px;
   --text-body: 16px;
   --text-section: 18px;
-  --text-title: 24px;
+  --text-title: 28px;
   --text-title-mobile: 22px;
   --leading-ui: 1.5;
   --leading-body: 1.65;
@@ -74,10 +77,11 @@
   --space-xl: 20px;
   --space-2xl: 24px;
   --radius-xs: 4px;
-  --radius-sm: 8px;
-  --radius: 12px;
-  --radius-lg: 14px;
+  --radius-sm: 6px;
+  --radius: 6px;
+  --radius-lg: 8px;
   --workspace-bar-height: 64px;
+  --rail-width: 296px;
 
   /* Semantic aliases used by diagnostics and existing component APIs. */
   --accent: var(--green);
@@ -89,26 +93,29 @@
 @media (prefers-color-scheme: dark) {
   :root {
     color-scheme: dark;
-    --paper: #151c24;
-    --panel: #1c2530;
-    --field: #222e3b;
-    --rail-background: #19222c;
-    --ink: #e6edf5;
-    --muted: #a3b2c4;
-    --line: #344353;
-    --blue: #85d6c6;
-    --green: #8bd4b0;
+    --paper: #171b19;
+    --panel: #1e2420;
+    --field: #272e29;
+    --rail-background: #191e1b;
+    --ink: #e5ebe7;
+    --muted: #abb8af;
+    --line: #46534a;
+    --line-soft: #303a33;
+    --control-line: #5c7062;
+    --selection: #294334;
+    --blue: #80c997;
+    --green: #80c997;
     --amber: #e4ba73;
     --red: #ee9b96;
     --violet: #a39fd6;
-    --on-accent: #172c31;
-    --acid: #294650;
-    --acid-hover: #365866;
-    --acid-soft: #293d35;
-    --green-soft: #293d35;
-    --cyan-soft: #243e3b;
+    --on-accent: #14261a;
+    --acid: #294633;
+    --acid-hover: #365840;
+    --acid-soft: #253d2d;
+    --green-soft: #253d2d;
+    --cyan-soft: #253d2d;
     --coral-soft: #422e2c;
-    --plot-grid: #344353;
+    --plot-grid: #35463a;
     --series-0: #6fb3bd;
     --series-1: #d99a4e;
     --series-2: #a39fd6;
@@ -116,6 +123,6 @@
     --series-4: #e08a7d;
     --series-5: #9aa5a0;
     --shadow: 0 8px 28px #0004;
-    --shadow-sm: 0 2px 6px #0003;
+    --shadow-sm: none;
   }
 }

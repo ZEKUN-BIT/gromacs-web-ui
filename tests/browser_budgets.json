@@ -2,6 +2,7 @@
   "javascript_bytes": 393216,
   "css_bytes": 163840,
   "font_bytes": 524288,
+  "structure_viewer_bytes": 573440,
   "fixture_ready_ms": 5000,
   "max_long_task_ms": 1000,
   "visual_changed_ratio": 0.003

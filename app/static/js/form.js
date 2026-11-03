@@ -4,30 +4,31 @@ import {
   $,
   els,
   state,
+  FILE_FIELD_NAMES,
   escapeHtml,
   updateText,
   debounce,
   toast,
   api,
   replaySwapAnimation,
-} from "./core.js?v=6cd8594e2b063155";
+} from "./core.js?v=a501fb3828ebf5d3";
 
 import {
   hasFile, fileNameEndsWith, fileParamEndsWith, uploadedNames, selectedUploadFiles,
-} from "./form-files.js?v=6cd8594e2b063155";
+} from "./form-files.js?v=a501fb3828ebf5d3";
 import {
   ligandCards, addLigandRow, ensureDefaultLigandRow, readLigandPayload, refreshRowMode, setLigandCardField,
   removeLigandRow as removeLigandEditorRow, detectLigandsFromPdb as detectPdbLigands,
-} from "./form-ligands.js?v=6cd8594e2b063155";
+} from "./form-ligands.js?v=a501fb3828ebf5d3";
 import {
   setMdpPanelExpanded, updateMdpPanelState, refreshProtocolPreview, renderMdpPreview,
-} from "./form-parameters.js?v=6cd8594e2b063155";
+} from "./form-parameters.js?v=a501fb3828ebf5d3";
 import {
   renderForceFieldSource, renderWaterModelOptions, refreshHealth, updateResourceAdvice,
   applyHardwareRecommendation as applyHardwareDefaults,
   renderReadiness,
-} from "./form-environment.js?v=6cd8594e2b063155";
-import { apiSubmissionIssues, clearSubmissionIssues, showSubmissionIssues } from "./submission-validation.js?v=6cd8594e2b063155";
+} from "./form-environment.js?v=a501fb3828ebf5d3";
+import { apiSubmissionIssues, clearSubmissionIssues, showSubmissionIssues } from "./submission-validation.js?v=a501fb3828ebf5d3";
 
 export {
   hasFile, fileNameEndsWith, fileParamEndsWith, uploadedNames, selectedUploadFiles,
@@ -701,7 +702,11 @@ export async function refreshPreview() {
       els.commandPreview.innerHTML = html;
     }
     const issues = requiredSubmitIssues(params);
-    showSubmissionIssues(issues.length ? issues : apiSubmissionIssues(error, friendlyPreviewError(error.message)), { focus: false, source: "preview" });
+    // Missing inputs are already explained by the workflow guide. Keep an
+    // untouched form calm; show validation once there is input to validate.
+    const hasInput = snapshot.files.length || [...FILE_FIELD_NAMES].some(name => String(params[name] || "").trim());
+    if ([400, 422].includes(error.status) && !hasInput && !issues.length && params.workflow !== "custom") clearSubmissionIssues({ source: "preview" });
+    else showSubmissionIssues(issues.length ? issues : apiSubmissionIssues(error, friendlyPreviewError(error.message)), { focus: false, source: "preview" });
     setSubmitReady(false);
   }
 }

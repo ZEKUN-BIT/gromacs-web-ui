@@ -1,5 +1,5 @@
-import { els, state, FILE_FIELD_NAMES } from "./core.js?v=6cd8594e2b063155";
-import { formObject, addLigandRow } from "./form.js?v=6cd8594e2b063155";
+import { els, state, FILE_FIELD_NAMES } from "./core.js?v=a501fb3828ebf5d3";
+import { formObject, addLigandRow } from "./form.js?v=a501fb3828ebf5d3";
 
 const DRAFT_KEY = "gromacs.simulation-draft.v1";
 const writer = crypto.randomUUID?.() || `${Date.now()}-${Math.random()}`;

@@ -191,11 +191,17 @@ export function cacheElements() {
 }
 
 export function setSidebarOpen(open, restoreFocus = false) {
-  document.body.classList.toggle("sidebar-open", open);
-  els.toggleSidebar.setAttribute("aria-expanded", String(open));
-  els.composeView.inert = open;
-  els.detailView.inert = open;
-  if (open) els.jobFilter?.focus({ preventScroll: true });
+  const mobile = window.matchMedia("(max-width: 1180px)").matches;
+  const expanded = mobile ? open : !document.body.classList.contains("sidebar-collapsed");
+  document.body.classList.toggle("sidebar-open", mobile && open);
+  els.toggleSidebar.setAttribute("aria-expanded", String(expanded));
+  const label = expanded ? "收起任务列表" : "展开任务列表";
+  els.toggleSidebar.setAttribute("aria-label", label);
+  els.toggleSidebar.title = label;
+  document.querySelector("#task-sidebar").inert = !expanded;
+  els.composeView.inert = mobile && open;
+  els.detailView.inert = mobile && open;
+  if (mobile && open) els.jobFilter?.focus({ preventScroll: true });
   else if (restoreFocus) els.toggleSidebar.focus({ preventScroll: true });
 }
 

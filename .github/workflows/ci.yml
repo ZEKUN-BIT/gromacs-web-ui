@@ -67,6 +67,7 @@ jobs:
         run: |
           node scripts/check_frontend_state.mjs
           node scripts/check_analysis_state.mjs
+          node scripts/check_structure_data.mjs
           python scripts/check_frontend_browser.py
           python scripts/check_analysis_browser.py
           python scripts/check_agent_browser.py

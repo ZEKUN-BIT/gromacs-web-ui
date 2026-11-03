@@ -1,7 +1,7 @@
 // Task updates retain their last known values while connection health is explicit.
-import { state, MAX_LOG_CHARS, updateText } from "./core.js?v=6cd8594e2b063155";
-import { refreshJobs, applyJobsPayload, applyJobDetail, appendLogChunk, forgetDeletedJob } from "./jobs.js?v=6cd8594e2b063155";
-import { renderReadiness } from "./form-environment.js?v=6cd8594e2b063155";
+import { state, MAX_LOG_CHARS, updateText } from "./core.js?v=a501fb3828ebf5d3";
+import { refreshJobs, applyJobsPayload, applyJobDetail, appendLogChunk, forgetDeletedJob } from "./jobs.js?v=a501fb3828ebf5d3";
+import { renderReadiness } from "./form-environment.js?v=a501fb3828ebf5d3";
 
 let heartbeatTimer = null;
 let lastSynchronized = null;

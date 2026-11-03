@@ -1,6 +1,6 @@
 // 图谱绘制模块：canvas 折线图与渲染。
 
-import { els, state, escapeHtml, updateText } from "./core.js?v=6cd8594e2b063155";
+import { els, state, escapeHtml, updateText } from "./core.js?v=a501fb3828ebf5d3";
 
 export const PLOT_COLORS = ["#087f8c", "#e07a1f", "#7259b5", "#2f855a", "#d14d72", "#3578c4", "#b18b16", "#9b4dca"];
 let plotObserver = null;

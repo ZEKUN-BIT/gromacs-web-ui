@@ -38,6 +38,7 @@ mdout.mdp
 !/app/static/**/*.svg
 !/app/static/**/*.png
 !/tests/browser_baselines/*.png
+!/tests/browser_baselines/*.jpg
 
 # Local design context, task-specific scripts, and historical verification reports.
 .impeccable/

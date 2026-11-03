@@ -1,5 +1,5 @@
 /* Inline AI workspace: one conversation, with separately opened provider settings. */
-.agent-panel { display: flex; flex-direction: column; width: 100%; height: min(880px, calc(100dvh - var(--workspace-bar-height, 64px) - 32px)); min-height: 540px; margin-bottom: 32px; padding: 0; overflow: hidden; border: 1px solid var(--line); border-radius: 16px; background: var(--panel); color: var(--ink); box-shadow: none; scroll-margin-top: calc(var(--workspace-bar-height, 64px) + 12px); }
+.agent-panel { display: flex; flex-direction: column; width: 100%; height: min(880px, calc(100dvh - var(--workspace-bar-height, 64px) - 48px)); min-height: 540px; margin-bottom: 32px; padding: 0; overflow: hidden; border: 1px solid var(--line); border-radius: var(--radius); background: var(--panel); color: var(--ink); box-shadow: none; scroll-margin-top: calc(var(--workspace-bar-height, 64px) + 12px); }
 .agent-panel p { color: var(--muted); font-size: var(--text-ui); line-height: var(--leading-chat); }
 .agent-panel label { display: grid; gap: 6px; margin: 14px 0; font-size: var(--text-ui); }
 .agent-panel summary { cursor: pointer; }
@@ -196,7 +196,7 @@
 .agent-model-tools { display: flex; align-items: center; gap: 12px; }
 .agent-model-tools button { flex-shrink: 0; font-size: var(--text-ui); }
 .agent-model-tools small { color: var(--muted); font-size: var(--text-xs); }
-#manual-compose-title { scroll-margin-top: 80px; }
+#manual-compose-title { scroll-margin-top: calc(var(--workspace-bar-height) + 24px); }
 @media (max-width: 700px) {
   .agent-saved-profiles { grid-template-columns: minmax(0, 1fr); }
   .agent-model-tools { align-items: flex-start; flex-direction: column; gap: 8px; }

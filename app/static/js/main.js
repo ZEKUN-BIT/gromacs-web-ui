@@ -11,7 +11,7 @@ import {
   showWorkspaceView,
   showDetailTab,
   setSidebarOpen,
-} from "./core.js?v=6cd8594e2b063155";
+} from "./core.js?v=a501fb3828ebf5d3";
 import {
   saveSettings,
   setMdpPanelExpanded,
@@ -33,7 +33,7 @@ import {
   refreshRowMode,
   applyHardwareRecommendation,
   updateResourceAdvice,
-} from "./form.js?v=6cd8594e2b063155";
+} from "./form.js?v=a501fb3828ebf5d3";
 import {
   submitJob,
   bindSubmissionRecovery,
@@ -44,7 +44,7 @@ import {
   renderActiveJob,
   changeJobsPage,
   forgetDeletedJob,
-} from "./jobs.js?v=6cd8594e2b063155";
+} from "./jobs.js?v=a501fb3828ebf5d3";
 import {
   cancelActiveJob,
   adoptActiveJob,
@@ -56,18 +56,19 @@ import {
   cloneActiveJob,
   benchmarkActiveJob,
   compareActiveJob,
-} from "./job-actions.js?v=6cd8594e2b063155";
-import { bindDraftSaving, restoreDraft } from "./drafts.js?v=6cd8594e2b063155";
-import { bindPlotControls } from "./plots.js?v=6cd8594e2b063155";
-import { bindExistingAnalysis } from "./existing-analysis.js?v=6cd8594e2b063155";
-import { bindResearch } from "./research.js?v=6cd8594e2b063155";
-import { bindStorage } from "./storage.js?v=6cd8594e2b063155";
-import { bindAgent } from "./agent.js?v=6cd8594e2b063155";
-import { prepareWorkspace, bindWorkspace, refreshComposerSummary } from "./workspace.js?v=6cd8594e2b063155";
-import { bindResultSummary } from "./result-summary.js?v=6cd8594e2b063155";
+} from "./job-actions.js?v=a501fb3828ebf5d3";
+import { bindDraftSaving, restoreDraft } from "./drafts.js?v=a501fb3828ebf5d3";
+import { bindPlotControls } from "./plots.js?v=a501fb3828ebf5d3";
+import { bindExistingAnalysis } from "./existing-analysis.js?v=a501fb3828ebf5d3";
+import { bindResearch } from "./research.js?v=a501fb3828ebf5d3";
+import { bindStorage } from "./storage.js?v=a501fb3828ebf5d3";
+import { bindAgent } from "./agent.js?v=a501fb3828ebf5d3";
+import { prepareWorkspace, bindWorkspace, refreshComposerSummary } from "./workspace.js?v=a501fb3828ebf5d3";
+import { bindResultSummary } from "./result-summary.js?v=a501fb3828ebf5d3";
+import { bindStructureViewers } from "./structure-viewer.js?v=a501fb3828ebf5d3";
 
-import { connectEventStream, disconnectEventStream, bindConnectionStatus } from "./event-stream.js?v=6cd8594e2b063155";
-import { bindNavigation } from "./navigation.js?v=6cd8594e2b063155";
+import { connectEventStream, disconnectEventStream, bindConnectionStatus } from "./event-stream.js?v=a501fb3828ebf5d3";
+import { bindNavigation } from "./navigation.js?v=a501fb3828ebf5d3";
 
 /* ---------- 事件绑定 ---------- */
 
@@ -105,11 +106,16 @@ function bindUI() {
     });
   });
   els.toggleSidebar.addEventListener("click", () => {
+    if (!window.matchMedia("(max-width: 1180px)").matches) {
+      document.body.classList.toggle("sidebar-collapsed");
+      setSidebarOpen(false, true);
+      return;
+    }
     setSidebarOpen(!document.body.classList.contains("sidebar-open"), true);
   });
   els.sidebarBackdrop?.addEventListener("click", () => setSidebarOpen(false, true));
-  window.matchMedia("(max-width: 1180px)").addEventListener("change", (event) => {
-    if (!event.matches) setSidebarOpen(false);
+  window.matchMedia("(max-width: 1180px)").addEventListener("change", () => {
+    setSidebarOpen(false);
   });
   els.saveSettings.addEventListener("click", saveSettings);
   for (const field of [els.gmxBin, els.maxParallel, document.querySelector("#analysis-parallel")]) {
@@ -168,6 +174,11 @@ function bindUI() {
     }
   });
   document.addEventListener("keydown", (event) => {
+    if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "k" && !document.querySelector("dialog[open]")) {
+      event.preventDefault();
+      els.jobFilter.focus();
+      els.jobFilter.select();
+    }
     if (event.key === "Escape" && !document.querySelector("dialog[open]") && document.body.classList.contains("sidebar-open")) {
       setSidebarOpen(false, true);
     }
@@ -213,7 +224,10 @@ function bindUI() {
   });
 
   els.logBottom.addEventListener("click", () => {
+    const logPanel = els.jobLog.closest("details");
+    if (logPanel) logPanel.open = true;
     els.jobLog.scrollTop = els.jobLog.scrollHeight;
+    els.jobLog.scrollIntoView({ block: "nearest", behavior: "smooth" });
   });
 
   // 任务列表：事件委托，只绑定一次
@@ -324,10 +338,7 @@ function bindUI() {
     if (!dropped?.length) return;
     try {
       els.files.files = dropped;
-      syncFileFieldsFromUploads({ notify: true });
-      updateText(els.fileSummary, selectedFileSummary());
-      renderWorkflowGuide();
-      refreshPreview();
+      els.files.dispatchEvent(new Event("change", { bubbles: true }));
     } catch {
       toast("无法读取拖入的文件，请改用点击选择", "error");
     }
@@ -352,6 +363,7 @@ async function boot() {
   bindUI();
   bindWorkspace();
   bindResultSummary();
+  bindStructureViewers();
   const navigationReady = bindNavigation();
   window.addEventListener("open-source-job", event => selectJob(event.detail));
   bindPlotControls(renderActiveJob);

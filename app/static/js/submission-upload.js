@@ -1,4 +1,4 @@
-import { api, formatApiError, updateText } from "./core.js?v=6cd8594e2b063155";
+import { api, formatApiError, updateText } from "./core.js?v=a501fb3828ebf5d3";
 
 const PENDING_KEY = "gromacs.pending-submission";
 const INACTIVITY_MS = 120_000;

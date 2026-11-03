@@ -6,8 +6,9 @@ body:has(dialog[open]) { overflow: hidden; }
 .sidebar-backdrop { display: none; }
 
 /* Onboarding and the composer navigation. */
-.start-guide { margin: 20px 0; border: 1px solid var(--line); border-radius: var(--radius); background: var(--panel); overflow: hidden; }
-.start-guide > summary { padding: 16px 20px; color: var(--ink); font-size: var(--text-ui); font-weight: 600; cursor: pointer; }
+.start-guide { margin: 16px 0; border: 0; border-radius: var(--radius); background: var(--field); overflow: hidden; }
+.start-guide > summary { padding: 12px 16px; color: var(--muted); font-size: var(--text-sm); font-weight: 500; cursor: pointer; }
+.start-guide > summary > span { float: right; color: var(--muted); font-weight: 400; }
 .start-guide > summary::marker { color: var(--muted); }
 .start-guide[open] > summary { border-bottom: 1px solid var(--line); }
 .start-guide-body { padding: 20px; }
@@ -20,16 +21,35 @@ body:has(dialog[open]) { overflow: hidden; }
 .product-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
 .product-actions .tool-button, .product-actions .primary-action { min-height: 40px; font-size: var(--text-ui); }
 .start-guide .product-actions { padding-top: 16px; border-top: 1px solid var(--line); }
-.composer-toolbar { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px; padding: 4px 0 12px; }
-.compose-path { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; counter-reset: compose-step; }
-.compose-path button { display: inline-flex; align-items: center; gap: 8px; min-height: 38px; padding: 6px 10px; border: 1px solid transparent; border-radius: var(--radius-sm); background: transparent; color: var(--muted); font-size: var(--text-ui); counter-increment: compose-step; }
-.compose-path button::before { content: counter(compose-step); display: inline-grid; place-items: center; flex: 0 0 22px; width: 22px; height: 22px; border: 1px solid var(--line); border-radius: 50%; background: var(--panel); color: var(--muted); font: 500 var(--text-xs)/1 var(--mono); }
+.composer-toolbar { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 4px; order: -4; margin: -12px -12px 0; padding: 0; border: 0; border-bottom: 1px solid var(--line); border-radius: var(--radius) var(--radius) 0 0; scroll-margin-top: calc(var(--workspace-bar-height) + 20px); }
+.compose-path { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; }
+.compose-path button { display: inline-flex; align-items: center; gap: 8px; min-height: 32px; padding: 4px 8px; border: 0; border-radius: var(--radius-xs); background: transparent; color: var(--ink); font-size: var(--text-ui); }
 .compose-path button:hover { color: var(--blue); background: var(--cyan-soft); }
-.compose-path button:hover::before { color: var(--blue); border-color: var(--blue); }
-.view-mode { display: inline-flex; flex-shrink: 0; padding: 3px; border: 1px solid var(--line); border-radius: 9px; background: var(--field); }
-.view-mode button { min-height: 36px; padding: 6px 12px; border: 1px solid transparent; border-radius: 6px; background: transparent; color: var(--muted); font-size: var(--text-ui); }
-.view-mode button[aria-pressed="true"] { border-color: var(--line); background: var(--panel); color: var(--ink); font-weight: 600; box-shadow: 0 1px 3px #18212b0a; }
+.compose-path button[aria-current="step"] { color: var(--blue); background: var(--field); font-weight: 500; }
+.view-mode { display: inline-flex; flex-shrink: 0; padding: 2px; border: 0; border-radius: var(--radius-sm); background: transparent; }
+.view-mode button { min-height: 32px; padding: 4px 10px; border: 1px solid transparent; border-radius: 4px; background: transparent; color: var(--muted); font-size: var(--text-xs); }
+.view-mode button[aria-pressed="true"] { border-color: transparent; background: var(--field); color: var(--blue); font-weight: 500; box-shadow: none; }
 .view-mode button:hover:not([aria-pressed="true"]) { color: var(--ink); }
+
+/* Focused steps share the same form so files, drafts and parameter values survive navigation. */
+.compose-inactive { display: none !important; }
+body[data-form-mode="guided"] .system-section legend { display: none; }
+body[data-form-mode="guided"] .parameter-column > .param-section { border-top: 0; padding-top: 0; }
+@media (min-width: 851px) {
+  body[data-form-mode="guided"] .execution-section { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 32px; }
+  body[data-form-mode="guided"] .execution-section .base-group > legend { border: 0; padding-top: 0; }
+}
+.workflow-chain { margin: 12px 0; }
+.workflow-chain > summary { color: var(--muted); font-size: var(--text-sm); cursor: pointer; }
+.workflow-chain .guide-steps { margin-top: 16px; }
+.compose-stage-empty { margin: 0; padding: 32px 20px; border: 1px dashed var(--line); border-radius: var(--radius-sm); color: var(--muted); font-size: var(--text-ui); line-height: 1.8; }
+.compose-review { padding-top: 24px; border-top: 1px solid var(--line); }
+.compose-review h3 { font-size: var(--text-body); font-weight: 600; margin: 0 0 16px; }
+.compose-review dl { margin: 0; }
+.compose-review dl > div { display: grid; grid-template-columns: 120px minmax(0, 1fr); gap: 16px; padding: 12px 0; border-bottom: 1px solid var(--line); }
+.compose-review dt { color: var(--muted); }
+.compose-review dd { margin: 0; overflow-wrap: anywhere; }
+.compose-review > p { color: var(--muted); font-size: var(--text-sm); margin: 16px 0 0; }
 
 /* Form helpers preserve the selected workflow and expert-mode behavior. */
 .workflow-intent { display: grid; gap: 8px; font-size: var(--text-ui); font-weight: 600; }
@@ -53,37 +73,38 @@ body[data-form-mode="guided"] .parameter-column .dense-grid > label { grid-colum
 body[data-form-mode="guided"] .parameter-column .dense-grid > .wide-field { grid-column: 1 / -1; }
 body[data-form-mode="guided"] .mdp-section:not(:has([name="mdp_override_enabled"]:checked)) > .dense-grid { display: none; }
 .parameter-column .input-section { border-top: 0; }
-.field-help { display: inline-grid; place-items: center; width: 24px; min-width: 24px; height: 24px; padding: 0; margin-left: 5px; border: 1px solid var(--line); border-radius: 50%; background: var(--panel); color: var(--muted); font-size: var(--text-xs); vertical-align: middle; }
+.field-help { display: inline-grid; place-items: center; width: 24px; min-width: 24px; height: 24px; padding: 0; margin-left: 5px; border: 0; border-radius: 50%; background: transparent; color: var(--muted); font-size: var(--text-xs); vertical-align: middle; }
 .field-help:hover { border-color: var(--blue); color: var(--blue); background: var(--cyan-soft); }
 .parameter-column label:has(.field-help), .job-name-field:has(.field-help) { position: relative; }
 .parameter-column label > .field-help, .job-name-field > .field-help { position: absolute; top: 0; right: 0; }
 .parameter-column label:has(.field-help) > small { margin-right: 32px; }
 
 /* A single persistent action surface, with enough room for the protocol summary. */
-.submission-bar { position: sticky; bottom: 16px; z-index: 14; display: flex; align-items: center; justify-content: space-between; gap: 20px; margin: 20px 0 0; padding: 16px 20px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--panel); box-shadow: 0 6px 24px #18212b0d; }
+.submission-bar { position: sticky; bottom: 0; z-index: 14; display: flex; align-items: center; justify-content: space-between; gap: 24px; margin: 24px 0 0; padding: 20px 0; border: 0; border-top: 1px solid var(--line); border-radius: 0; background: var(--paper); }
 .submission-bar > div { flex: 1 1 auto; min-width: 0; }
 .submission-bar strong, .submission-bar small { display: block; }
 .submission-bar strong { color: var(--ink); font-size: var(--text-ui); font-weight: 600; overflow-wrap: anywhere; }
 .submission-bar small { margin-top: 4px; color: var(--muted); font-size: var(--text-sm); line-height: 1.6; overflow-wrap: anywhere; }
-.submission-bar > button { flex: 0 0 auto; width: auto; min-width: 128px; }
+.submission-bar .compose-actions { display: flex; flex: 0 0 auto; align-items: center; gap: 12px; }
+.compose-actions > button { width: auto; min-height: 42px; white-space: nowrap; }
 
 /* Task organization and the result summary read as one coherent report. */
-.organization-panel { margin-bottom: 16px; padding: 16px 20px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--panel); }
+.organization-panel { margin: 16px 0 0; padding: 12px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--panel); }
 .organization-panel summary { font-size: var(--text-ui); }
 .organization-panel form { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 16px; padding-top: 16px; }
 .organization-panel label { display: grid; min-width: 0; gap: 6px; font-size: var(--text-ui); }
 .organization-panel .wide-field { grid-column: 1 / -1; }
 .organization-panel .check-row { display: flex; }
-.result-summary { margin-bottom: 20px; padding: 24px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--panel); }
-.result-summary h3 { margin: 0 0 16px; color: var(--ink); font-size: var(--text-section); font-weight: 600; }
+.result-summary { margin: 0; padding: 12px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--panel); overflow: auto; }
+.result-summary h3 { margin: -12px -12px 12px; padding: 6px 12px; border-bottom: 1px solid var(--line); color: var(--muted); font-size: var(--text-ui); font-weight: 500; }
 .result-summary p { margin: 8px 0; font-size: var(--text-ui); line-height: 1.7; }
 #result-summary-content { color: var(--muted); font-size: var(--text-ui); line-height: 1.7; overflow-wrap: anywhere; }
 #result-summary-content > strong { color: var(--ink); font-size: var(--text-body); font-weight: 600; line-height: 1.5; }
 .scientific-note { color: var(--muted); }
 .result-summary .scientific-note { margin: 16px 0 0; padding-top: 14px; border-top: 1px solid var(--line); font-size: var(--text-sm); }
 .result-summary .tool-button { margin-top: 12px; }
-.quality-summary-list { display: grid; gap: 8px; list-style: none; padding: 0; margin: 16px 0; }
-.quality-summary-list li { min-width: 0; padding: 12px 14px; border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--field); color: var(--muted); font-size: var(--text-sm); overflow-wrap: anywhere; }
+.quality-summary-list { display: grid; gap: 0; list-style: none; padding: 0; margin: 16px 0; border-top: 1px solid var(--line); }
+.quality-summary-list li { min-width: 0; padding: 8px 4px; border: 0; border-bottom: 1px solid var(--line); border-radius: 0; background: var(--panel); color: var(--muted); font-size: var(--text-sm); overflow-wrap: anywhere; }
 .quality-summary-list strong { color: var(--ink); font-weight: 500; }
 .quality-summary-list span { display: inline-block; margin-left: 12px; color: var(--ink); font-weight: 600; }
 .quality-summary-list p { margin: 6px 0 0; font-size: var(--text-sm); }
@@ -115,56 +136,64 @@ body[data-form-mode="guided"] .mdp-section:not(:has([name="mdp_override_enabled"
 @media (max-width: 1180px) {
   .app-shell { display: block; }
   body.sidebar-open { overflow: hidden; }
-  .workspace { max-width: none; padding: 0 24px 24px; gap: 20px; }
-  .workspace-bar { min-height: var(--workspace-bar-height, 64px); margin: 0 -24px; padding: 10px 24px; }
+  .workspace { max-width: none; padding: 24px; gap: 20px; }
   .rail { display: none; }
   body.sidebar-open .rail { position: fixed; inset: var(--workspace-bar-height, 64px) auto 0 0; z-index: 40; display: flex; width: 320px; max-width: 90vw; height: calc(100dvh - var(--workspace-bar-height, 64px)); }
   .rail .jobs-list { min-height: 120px; max-height: none; overflow-y: auto; }
   body.sidebar-open .sidebar-backdrop { position: fixed; inset: var(--workspace-bar-height, 64px) 0 0; z-index: 39; display: block; width: 100%; max-width: none; height: auto; margin: 0; padding: 0; border: 0; border-radius: 0; background: #0f172a59; backdrop-filter: blur(2px); }
   #toggle-sidebar { display: inline-flex; }
-  .composer-grid { grid-template-columns: 300px minmax(0, 1fr); gap: 0; margin: 12px 0 0; border: 1px solid var(--line); border-radius: var(--radius-lg); }
-  .form-column, .parameter-column { padding: 20px; }
   .workflow-switch { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .detail-tabs { top: var(--workspace-bar-height, 64px); gap: 10px; overflow-x: auto; }
   .start-guide ol { gap: 16px; }
 }
 
 @media (max-width: 700px) {
-  .workspace { padding: 0 16px 24px; }
-  .workspace-bar { gap: 6px; margin: 0 -16px; padding: 10px 16px; }
-  .workspace-nav { gap: 2px; }
-  .workspace-nav button { min-height: 40px; padding: 6px 5px; font-size: var(--text-ui); }
-  .workspace-nav button::before { display: none; }
-  #toggle-sidebar { flex-shrink: 0; min-height: 40px; padding: 6px; font-size: var(--text-ui); white-space: nowrap; }
+  :root { --workspace-bar-height: 112px; }
+  .workspace { padding: 20px 16px 24px; }
+  .workspace-bar { height: var(--workspace-bar-height); display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; margin: 0; padding: 8px 16px; }
+  .workspace-brand { flex-basis: auto; gap: 6px; }
+  .project-switch .mark { width: 30px; }
+  .project-switch .mark::before { width: 22px; height: 22px; }
+  .project-switch #project-filter { padding-left: 6px; font-size: var(--text-sm); }
+  .workspace-search { grid-column: 1 / -1; grid-row: 2; }
+  .workspace-search input { font-size: var(--text-body); }
+  .workspace-search kbd { display: none; }
+  .workspace-nav { gap: 4px; }
+  .workspace-nav button { justify-content: center; min-width: 32px; width: 32px; height: 36px; min-height: 36px; padding: 6px; font-size: 0; }
+  .workspace-nav button::before { display: inline-block; width: 18px; height: 18px; margin: 0; }
+  #toggle-sidebar { flex-shrink: 0; min-height: 40px; padding: 0; font-size: 0; white-space: nowrap; }
   .run-composer > .section-head h2, .detail-title { font-size: 22px; }
   .start-guide { margin: 16px 0; }
+  .start-guide > summary > span { display: none; }
   .start-guide > summary, .start-guide-body { padding: 16px; }
   .start-guide ol { grid-template-columns: 1fr; gap: 16px; margin-bottom: 16px; }
-  .composer-toolbar { gap: 12px; }
+  .composer-toolbar { gap: 4px; margin: -12px -12px 0; }
   .compose-path { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); align-items: stretch; width: 100%; gap: 8px; }
-  .compose-path button { flex-direction: column; align-items: flex-start; justify-content: flex-start; gap: 8px; min-width: 0; padding: 8px 4px; text-align: left; line-height: 1.5; }
-  .composer-grid { grid-template-columns: minmax(0, 1fr); margin: 12px 0 0; border: 1px solid var(--line); border-radius: var(--radius-lg); }
-  .form-column, .parameter-column { padding: 20px 16px; }
-  .parameter-column { border-left: 0; border-top: 1px solid var(--line); }
+  .compose-path button { align-items: center; justify-content: center; min-width: 0; padding: 8px 4px; font-size: var(--text-sm); white-space: nowrap; line-height: 1.5; }
+  .composer-grid { grid-template-columns: minmax(0, 1fr); gap: 16px; margin: 12px 0 0; border: 0; }
+  .form-column, .parameter-column { padding: 12px; border-radius: var(--radius); }
+  .column-heading { margin: -12px -12px 0; padding: 8px 12px; }
   .workflow-switch, .dense-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .detail-header { align-items: flex-start; flex-direction: column; }
+  .detail-title-block { width: 100%; flex-direction: column; align-items: flex-start; gap: 6px; }
+  .detail-title { width: 100%; flex: none; }
   .detail-analysis-actions { max-width: none; justify-content: flex-start; flex-wrap: wrap; }
-  .detail-tabs { gap: 0; margin-top: 8px; }
-  .detail-tabs button { padding: 10px; font-size: var(--text-ui); white-space: nowrap; }
-  .metrics-row { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  .metrics-row > div { padding: 12px; }
+  .detail-tabs { flex-wrap: nowrap; gap: 0; margin-top: 8px; overflow-x: auto; scrollbar-width: none; }
+  .detail-tabs button { flex-shrink: 0; padding: 10px; font-size: var(--text-ui); white-space: nowrap; }
+  .metrics-row { grid-template-columns: minmax(0, 1fr); }
   .metrics-row strong { overflow-wrap: anywhere; }
-  .organization-panel, .result-summary { padding: 16px; }
+  .organization-panel, .result-summary { padding: 12px; }
   .organization-panel form { grid-template-columns: minmax(0, 1fr); }
-  .submission-bar { bottom: 10px; gap: 12px; margin-top: 16px; padding: 12px; }
-  .submission-bar > button { min-width: 96px; min-height: 42px; padding: 8px 12px; }
+  .submission-bar { bottom: 0; flex-wrap: wrap; gap: 16px; margin-top: 16px; padding: 16px 0; }
+  .submission-bar > div:first-child { flex-basis: 100%; }
+  .submission-bar .compose-actions { width: 100%; justify-content: flex-end; }
+  .compose-actions > button { min-width: 96px; min-height: 44px; padding: 8px 12px; }
   .product-dialog { width: calc(100vw - 24px); max-height: calc(100dvh - 32px); padding: 20px; border-radius: var(--radius-lg); }
   .product-dialog-head { top: -20px; gap: 12px; margin: -20px -20px 16px; padding: 16px 20px; }
   .product-dialog .product-actions { align-items: stretch; }
 }
 
 @media (prefers-color-scheme: dark) {
-  .submission-bar { box-shadow: 0 6px 24px #0003; }
   .product-dialog { box-shadow: 0 24px 80px #0006; }
   .product-dialog::backdrop, body.sidebar-open .sidebar-backdrop { background: #02061799; }
 }

@@ -1,5 +1,5 @@
 // Persistent, field-linked validation. Server messages are always plain text.
-import { els, showWorkspaceView } from "./core.js?v=6cd8594e2b063155";
+import { els, showWorkspaceView } from "./core.js?v=a501fb3828ebf5d3";
 
 const markedFields = new Map();
 
@@ -19,6 +19,7 @@ export function focusSubmissionIssue(issue) {
   const field = issueField(issue);
   if (!field) return;
   showWorkspaceView("compose");
+  els.jobForm.dispatchEvent(new CustomEvent("compose-reveal-field", { detail: field }));
   if (field.closest(".advanced-field, .advanced-section")) document.querySelector("#expert-mode")?.click();
   for (let parent = field.parentElement; parent && parent !== els.jobForm; parent = parent.parentElement) {
     if (parent.tagName === "DETAILS") parent.open = true;

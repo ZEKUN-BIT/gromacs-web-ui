@@ -28,6 +28,7 @@ FONT_CSS = (
         for weight in (400, 500, 600)
     )
     + '\n:root { --sans: "Inter", "Gromacs Snapshot CJK", sans-serif; --display: var(--sans); }'
+    + '\nhtml { scrollbar-width: none; } #task-sync-time { visibility: hidden; }'
 )
 
 
@@ -53,6 +54,7 @@ def run(artifact_dir: Path, update: bool, visual: bool = True) -> None:
         kind: sum(p.stat().st_size for p in (ROOT / "app/static").rglob(pattern))
         for kind, pattern in (("javascript_bytes", "js/*.js"), ("css_bytes", "*.css"), ("font_bytes", "fonts/*.woff2"))
     }
+    resources["structure_viewer_bytes"] = sum(p.stat().st_size for p in (ROOT / "app/static/vendor/3dmol").glob("*.js"))
     for name, size in resources.items():
         assert size <= budgets[name], f"{name}: {size} exceeds {budgets[name]}"
     report = {
@@ -120,12 +122,12 @@ def run(artifact_dir: Path, update: bool, visual: bool = True) -> None:
             assert page.evaluate("document.documentElement.scrollWidth <= innerWidth"), f"Horizontal clipping in {name}"
             item = {"name": name, "wcag_violations": len(results)}
             if visual:
-                path = artifact_dir / f"{name}.png"
+                path = artifact_dir / f"{name}.jpg"
                 # Native smooth scrolling is not a Web Animation. Cancel it at
                 # sampling time so slower CI hosts capture the same location.
                 page.evaluate("window.scrollTo({top:0, left:0, behavior:'instant'})")
                 # Last-update timestamps are tested separately; exclude locale formatting.
-                page.screenshot(path=str(path), animations="disabled", caret="hide", mask=[page.locator("#task-sync-time")])
+                page.screenshot(path=str(path), type="jpeg", quality=80, animations="disabled", caret="hide")
                 baseline = BASELINES / path.name
                 if update:
                     pending_baselines.append((path, baseline))

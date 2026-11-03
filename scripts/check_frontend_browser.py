@@ -145,7 +145,7 @@ def check_browser(artifact_dir: Path | None = None) -> None:
                 page.locator("#open-agent").click()
                 expect(page.locator("#agent-panel")).to_be_visible()
                 expect(page.locator("#manual-compose")).to_be_hidden()
-                expect(page.locator("#submit-job-footer")).to_be_hidden()
+                expect(page.locator("#submit-job")).to_be_hidden()
                 expect(page.locator("#open-agent")).to_have_attribute("aria-pressed", "true")
                 page.locator("#agent-message").fill("切换视图保留未发送的提问")
                 page.locator('[data-workspace-view="detail"]').click()
@@ -164,6 +164,14 @@ def check_browser(artifact_dir: Path | None = None) -> None:
                 expect(page.locator("#agent-panel")).to_be_visible()
                 expect(page.locator("#manual-compose")).to_be_hidden()
                 page.locator('[data-workspace-view="compose"]').click()
+                if width > 1180:
+                    page.locator("#toggle-sidebar").click()
+                    expect(page.locator("#task-sidebar")).to_be_hidden()
+                    expect(page.locator("#toggle-sidebar")).to_have_attribute("aria-expanded", "false")
+                    assert not page.locator("#compose-view").evaluate("node => node.inert")
+                    page.locator("#toggle-sidebar").click()
+                    expect(page.locator("#task-sidebar")).to_be_visible()
+                    expect(page.locator("#toggle-sidebar")).to_have_attribute("aria-expanded", "true")
                 if width <= 1180:
                     page.locator("#toggle-sidebar").click()
                     expect(page.locator("#job-filter")).to_be_focused()

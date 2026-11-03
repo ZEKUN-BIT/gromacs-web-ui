@@ -1,21 +1,64 @@
-import { els, state, FILE_FIELD_NAMES, api, toast, confirmDialog, showWorkspaceView, showDetailTab } from "./core.js?v=6cd8594e2b063155";
-import { refreshJobs, selectJob } from "./jobs.js?v=6cd8594e2b063155";
-import { product, loadProduct, bindLibrary, downloadJson } from "./library.js?v=6cd8594e2b063155";
+import { els, state, FILE_FIELD_NAMES, api, toast, confirmDialog, showWorkspaceView, showDetailTab } from "./core.js?v=a501fb3828ebf5d3";
+import { refreshJobs, selectJob } from "./jobs.js?v=a501fb3828ebf5d3";
+import { product, loadProduct, bindLibrary, downloadJson } from "./library.js?v=a501fb3828ebf5d3";
 
 let diagnostics = null;
 let diagnosticsGeneration = 0;
 let workspacePrepared = false, productLoading = false;
+const composeSteps = ["inputs", "parameters", "resources"];
+let composeStep = "inputs";
+
+function showComposeStep(step, { focus = false } = {}) {
+  composeStep = composeSteps.includes(step) ? step : "inputs";
+  const expert = document.body.dataset.formMode === "expert";
+  const index = composeSteps.indexOf(composeStep);
+  document.querySelectorAll("[data-compose-panel]").forEach(panel => {
+    panel.classList.toggle("compose-inactive", !expert && panel.dataset.composePanel !== composeStep);
+  });
+  document.querySelectorAll("[data-compose-anchor]").forEach(button => {
+    if (!expert && button.dataset.composeAnchor === composeStep) button.setAttribute("aria-current", "step");
+    else button.removeAttribute("aria-current");
+  });
+  document.querySelector("#compose-previous").hidden = expert || index === 0;
+  document.querySelector("#compose-next").hidden = expert || index === composeSteps.length - 1;
+  document.querySelector("#compose-next").textContent = index === 0 ? "下一步：模拟设置" : "下一步：检查与运行";
+  els.submitJob.hidden = !expert && composeStep !== "resources";
+  document.querySelector("#compose-review").hidden = expert || composeStep !== "resources";
+  document.querySelector("#manual-compose").dataset.composeStep = composeStep;
+  const titles = { inputs: ["任务与体系", "选择输入文件，确认本次模拟的体系条件。"], parameters: ["模拟设置", "使用模板协议，或按需要调整模拟与分析选项。"], resources: ["检查与运行", "核对任务信息，分配本次计算使用的资源。"] };
+  document.querySelector("#compose-stage-title").textContent = expert ? "协议与运行" : titles[composeStep][0];
+  document.querySelector("#compose-stage-description").textContent = expert ? "完整的体系、协议与计算资源设置。" : titles[composeStep][1];
+  const panels = [...document.querySelectorAll(".parameter-column > [data-compose-panel]")];
+  document.querySelector("#compose-stage-empty").hidden = expert || panels.some(panel => !panel.classList.contains("compose-inactive") && !panel.hidden && [...panel.querySelectorAll("input,select,textarea")].some(field => field.getClientRects().length));
+  if (focus) {
+    const heading = document.querySelector("#compose-stage-title");
+    heading.tabIndex = -1;
+    heading.focus({ preventScroll: true });
+    document.querySelector(".parameter-column").scrollTop = 0;
+    document.querySelector(".composer-toolbar").scrollIntoView({ block: "nearest", behavior: "smooth" });
+  }
+}
+
+function revealComposeField(field) {
+  const panel = field.closest("[data-compose-panel]");
+  if (panel) showComposeStep(panel.dataset.composePanel);
+  for (let parent = field.parentElement; parent && parent !== els.jobForm; parent = parent.parentElement) {
+    if (parent.tagName === "DETAILS") parent.open = true;
+  }
+}
 const families = { simulation: ["protein_md", "protein_ligand_md", "em_only"], analysis: ["analysis_rmsd", "postprocess", "analysis_suite"], tpr: ["run_tpr"], all: [] };
-const advanced = new Set(["solvent_template", "box_type", "solvent_group", "ignh", "clean_pdb", "pre_nvt", "maxwarn", "production_deffnm", "verbose", "ntmpi", "ntomp", "pin", "protein_group", "complex_group", "water_ions_group", "restraint_fc", "atom_type", "charge_method", "custom_index_script", "center_output", "fit_output", "first_frame_output", "stdin_overrides"]);
+const advanced = new Set(["solvent_template", "box_type", "solvent_group", "ignh", "clean_pdb", "pre_nvt", "maxwarn", "production_deffnm", "verbose", "ntmpi", "pin", "protein_group", "complex_group", "water_ions_group", "restraint_fc", "atom_type", "charge_method", "custom_index_script", "center_output", "fit_output", "first_frame_output", "stdin_overrides"]);
 
 function setMode(mode) {
   const expert = mode === "expert";
   document.body.dataset.formMode = expert ? "expert" : "guided";
   document.querySelector("#guided-mode").setAttribute("aria-pressed", String(!expert));
   document.querySelector("#expert-mode").setAttribute("aria-pressed", String(expert));
+  document.querySelectorAll(".form-disclosure").forEach(section => { section.open = expert; });
   if (expert) document.querySelector("#workflow-intent").value = "all";
   try { localStorage.setItem("gromacs.form-mode", expert ? "expert" : "guided"); } catch { /* Browser storage is optional. */ }
   renderInputMapping(); filterWorkflows();
+  showComposeStep(composeStep);
 }
 
 function filterWorkflows() {
@@ -33,7 +76,8 @@ export function renderInputMapping() {
   container.replaceChildren();
   const files = Array.from(els.files.files || []);
   if (!files.length) return;
-  const heading = document.createElement("strong"); heading.textContent = `${files.length} 个文件已选择`; container.append(heading);
+  const details = document.createElement("details");
+  const heading = document.createElement("summary"); heading.textContent = `${files.length} 个文件已识别 · 查看输入映射`; details.append(heading);
   const list = document.createElement("ul");
   const workflow = els.jobForm.querySelector("input[name='workflow']:checked")?.value;
   for (const file of files) {
@@ -42,7 +86,7 @@ export function renderInputMapping() {
       || (/\.(pdb|gro)$/i.test(file.name) && workflow === "protein_md" ? "蛋白结构" : /\.mdp$/i.test(file.name) ? "协议参数" : /\.(top|itp)$/i.test(file.name) ? "拓扑参数" : "输入文件");
     const item = document.createElement("li"); item.textContent = `${role}：${file.name}`; list.append(item);
   }
-  container.append(list);
+  details.append(list); container.append(details);
 }
 
 export function refreshComposerSummary() {
@@ -50,9 +94,23 @@ export function refreshComposerSummary() {
   const protocol = els.protocolSummary?.querySelector("strong")?.textContent;
   summary.textContent = protocol || els.guideTitle.textContent;
   document.querySelector("#submission-readiness").textContent = els.guideHint.textContent;
-  const footer = document.querySelector("#submit-job-footer");
-  footer.disabled = els.submitJob.disabled;
-  footer.textContent = els.submitJob.querySelector(".button-label").textContent;
+  const review = document.querySelector("#compose-review-content");
+  const form = els.jobForm;
+  const distance = form.elements.namedItem("box_distance").value;
+  const salt = form.elements.namedItem("ion_concentration").value;
+  document.querySelector("#system-settings-summary").textContent = `${distance || "未设置"} nm 盒壁距离 · ${salt ? `${salt} mol/L 盐浓度` : "仅中和电荷"}`;
+  const rows = [
+    ["任务名称", form.elements.namedItem("name").value || "尚未命名"],
+    ["工作流", els.guideTitle.textContent],
+    ["输入文件", Array.from(els.files.files || []).map(file => file.name).join("、") || "尚未选择文件"],
+    ["运行方式", form.elements.namedItem("dry_run").checked ? "只检查命令（Dry run）" : "执行计算"],
+  ];
+  review.replaceChildren(...rows.map(([label, value]) => {
+    const row = document.createElement("div");
+    const term = document.createElement("dt"); term.textContent = label;
+    const definition = document.createElement("dd"); definition.textContent = value;
+    row.append(term, definition); return row;
+  }));
   renderInputMapping();
 }
 
@@ -116,7 +174,7 @@ export async function prepareWorkspace() {
       els.jobForm.dispatchEvent(new Event("change", { bubbles: true }));
     });
     notice.append(retry);
-    document.querySelector(".workspace-bar").after(notice);
+    document.querySelector(".workspace").prepend(notice);
     for (const id of ["open-library", "project-filter", "open-help", "start-example"]) {
       const control = document.getElementById(id); control.disabled = true; control.title = message;
     }
@@ -160,14 +218,20 @@ export function bindWorkspace() {
     }
     filterWorkflows();
   });
-  els.jobForm.addEventListener("change", () => { filterWorkflows(); refreshComposerSummary(); });
-  document.querySelector("#submit-job-footer").addEventListener("click", () => els.submitJob.click());
+  els.jobForm.addEventListener("change", () => { filterWorkflows(); refreshComposerSummary(); showComposeStep(composeStep); });
+  document.querySelector("#compose-previous").addEventListener("click", () => showComposeStep(composeSteps[composeSteps.indexOf(composeStep) - 1], { focus: true }));
+  document.querySelector("#compose-next").addEventListener("click", () => showComposeStep(composeSteps[composeSteps.indexOf(composeStep) + 1], { focus: true }));
+  els.jobForm.addEventListener("compose-reveal-field", event => revealComposeField(event.detail));
+  els.jobForm.addEventListener("invalid", event => revealComposeField(event.target), true);
   new MutationObserver(refreshComposerSummary).observe(els.submitJob, { attributes: true, childList: true, subtree: true });
   new MutationObserver(refreshComposerSummary).observe(els.protocolSummary, { childList: true, subtree: true });
-  document.querySelector("#start-own-data").addEventListener("click", () => { document.querySelector("#start-guide").open = false; els.files.focus(); els.dropzone.scrollIntoView({ block: "center", behavior: "smooth" }); });
+  document.querySelector("#start-own-data").addEventListener("click", () => { document.querySelector("#start-guide").open = false; showComposeStep("inputs"); els.files.focus(); els.dropzone.scrollIntoView({ block: "center", behavior: "smooth" }); });
   document.querySelectorAll("[data-compose-anchor]").forEach(button => button.addEventListener("click", () => {
-    const target = { inputs: ".form-column", parameters: ".mdp-section:not([hidden]), .parameter-column", resources: ".execution-section:not([hidden]), .submission-bar" }[button.dataset.composeAnchor];
-    document.querySelector(target)?.scrollIntoView({ behavior: "smooth", block: "start" });
+    if (document.body.dataset.formMode !== "expert") showComposeStep(button.dataset.composeAnchor, { focus: true });
+    else {
+      const target = { inputs: ".form-column", parameters: ".mdp-section:not([hidden]), .parameter-column", resources: ".execution-section:not([hidden]), .submission-bar" }[button.dataset.composeAnchor];
+      document.querySelector(target)?.scrollIntoView({ behavior: "smooth", block: "start" });
+    }
   }));
   document.querySelector("#project-filter").addEventListener("change", async event => {
     state.jobProject = event.target.value; state.jobsOffset = 0;
