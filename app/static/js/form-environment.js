@@ -1,6 +1,6 @@
 // 环境诊断、力场水模型与硬件配置建议。
 
-import { $, els, state, escapeHtml, updateText, toast, api } from "./core.js?v=7c195747008d663c";
+import { $, els, state, escapeHtml, updateText, toast, api } from "./core.js?v=b71b8f0b4a932c44";
 
 function setHealthCard(dotClass, title, detail) {
   const dot = els.healthCard.querySelector(".dot");

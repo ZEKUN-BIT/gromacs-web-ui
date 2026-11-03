@@ -1,4 +1,4 @@
-import { api, confirmDialog, STATUS_LABELS, toast } from "./core.js?v=7c195747008d663c";
+import { api, confirmDialog, STATUS_LABELS, toast } from "./core.js?v=b71b8f0b4a932c44";
 
 const CATEGORY_LABELS = {
   inputs: "输入", trajectories: "轨迹", checkpoints: "Checkpoint", topology_and_parameters: "拓扑与参数",

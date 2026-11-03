@@ -21,4 +21,4 @@
 
 本版本的自动测试和安装包构建结果以标签对应的 GitHub Actions 为准。Windows 工作流要求实际执行 UTF-8/错误编码的 NSIS 编译回归，并检查 PowerShell 双宿主和实际中文安装欢迎页。
 
-`windows-signing.json` 记录 EXE 签名状态；未配置发行者证书时为 **unsigned**。完整 Windows/WSL 首次安装、UAC/重启与 GPU 硬件验收仍未执行，见 [发布清单](RELEASE-CHECKLIST.md)。结构预览需要浏览器支持 WebGL。
+`windows-signing.json` 记录 EXE 签名状态；未配置发行者证书时为 **unsigned**。完整 Windows/WSL 首次安装、UAC/重启与 GPU 硬件验收仍未执行，见 [发布清单](https://github.com/ZEKUN-BIT/gromacs-web-ui/blob/main/docs/RELEASE-CHECKLIST.md)。结构预览需要浏览器支持 WebGL。

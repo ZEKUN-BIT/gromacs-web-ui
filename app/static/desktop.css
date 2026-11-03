@@ -99,8 +99,9 @@
 .run-composer > .section-head h2 { margin: 0; font-size: var(--text-title); font-weight: 600; line-height: 1.4; }
 .run-composer > .section-head > .primary-action { width: auto; min-width: 116px; flex: 0 0 auto; white-space: nowrap; }
 .section-intro { display: none; }
-.draft-bar { justify-content: flex-start; gap: 12px; margin: 0; min-height: 0; }
-.draft-bar:has(#draft-status:empty) { display: none; }
+.draft-bar { justify-content: flex-start; gap: 12px; margin: 0; min-height: 28px; }
+/* Saving on blur must not move an action between pointerdown and mouseup. */
+.draft-bar:has(#draft-status:empty) { visibility: hidden; }
 .draft-bar .tool-button { min-height: 28px; padding: 2px 0; border: 0; background: transparent; color: var(--muted); }
 .draft-bar .tool-button:hover { color: var(--blue); background: transparent; text-decoration: underline; }
 #draft-status:empty + #clear-draft { visibility: hidden; }

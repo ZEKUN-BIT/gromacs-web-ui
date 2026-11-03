@@ -1,6 +1,6 @@
-import { state, api, toast, escapeHtml } from "./core.js?v=7c195747008d663c";
-import { applyJobDetail } from "./jobs.js?v=7c195747008d663c";
-import { product, loadProduct } from "./library.js?v=7c195747008d663c";
+import { state, api, toast, escapeHtml } from "./core.js?v=b71b8f0b4a932c44";
+import { applyJobDetail } from "./jobs.js?v=b71b8f0b4a932c44";
+import { product, loadProduct } from "./library.js?v=b71b8f0b4a932c44";
 
 const DRAFT_PREFIX = "gromacs-organization-draft-v1:";
 const drafts = new Map();

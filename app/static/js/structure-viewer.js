@@ -1,13 +1,13 @@
-import { api, els, state, ACTIVE_STATES } from "./core.js?v=7c195747008d663c";
-import { selectedUploadFiles } from "./form-files.js?v=7c195747008d663c";
-import { checkStructureSize, prepareStructure, readStructureResponse, structureFiles, structureFormat } from "./structure-data.js?v=7c195747008d663c";
+import { api, els, state, ACTIVE_STATES } from "./core.js?v=b71b8f0b4a932c44";
+import { selectedUploadFiles } from "./form-files.js?v=b71b8f0b4a932c44";
+import { checkStructureSize, prepareStructure, readStructureResponse, structureFiles, structureFormat } from "./structure-data.js?v=b71b8f0b4a932c44";
 
 const CHAIN_COLORS = ["#43a6a3", "#8b87cd", "#d1a453", "#de8595", "#659ac9", "#85ad64"];
 const POLYMER = new Set("ALA ARG ASN ASP CYS GLN GLU GLY HIS ILE LEU LYS MET PHE PRO SER THR TRP TYR VAL HID HIE HIP HSD HSE HSP CYX CYM ASH GLH LYN MSE ACE NME DA DC DG DT DU A C G U T".split(" "));
 let rendererModule;
 
 function loadRenderer() {
-  rendererModule ||= import("../vendor/3dmol/3Dmol.es6-min.js?v=7c195747008d663c").catch(error => { rendererModule = null; throw error; });
+  rendererModule ||= import("../vendor/3dmol/3Dmol.es6-min.js?v=b71b8f0b4a932c44").catch(error => { rendererModule = null; throw error; });
   return rendererModule;
 }
 

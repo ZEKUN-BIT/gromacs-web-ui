@@ -1,5 +1,5 @@
-import { els, state, api, toast, confirmDialog, showWorkspaceView, FILE_FIELD_NAMES } from "./core.js?v=7c195747008d663c";
-import { formObject, toggleSections, refreshPreview, renderWorkflowGuide, addLigandRow, renderWaterModelOptions } from "./form.js?v=7c195747008d663c";
+import { els, state, api, toast, confirmDialog, showWorkspaceView, FILE_FIELD_NAMES } from "./core.js?v=b71b8f0b4a932c44";
+import { formObject, toggleSections, refreshPreview, renderWorkflowGuide, addLigandRow, renderWaterModelOptions } from "./form.js?v=b71b8f0b4a932c44";
 
 export const product = { templates: [], projects: [], defaults: {}, available: false };
 let productGeneration = 0;

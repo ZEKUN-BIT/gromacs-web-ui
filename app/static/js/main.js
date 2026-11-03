@@ -11,7 +11,7 @@ import {
   showWorkspaceView,
   showDetailTab,
   setSidebarOpen,
-} from "./core.js?v=7c195747008d663c";
+} from "./core.js?v=b71b8f0b4a932c44";
 import {
   saveSettings,
   setMdpPanelExpanded,
@@ -33,7 +33,7 @@ import {
   refreshRowMode,
   applyHardwareRecommendation,
   updateResourceAdvice,
-} from "./form.js?v=7c195747008d663c";
+} from "./form.js?v=b71b8f0b4a932c44";
 import {
   submitJob,
   bindSubmissionRecovery,
@@ -44,7 +44,7 @@ import {
   renderActiveJob,
   changeJobsPage,
   forgetDeletedJob,
-} from "./jobs.js?v=7c195747008d663c";
+} from "./jobs.js?v=b71b8f0b4a932c44";
 import {
   cancelActiveJob,
   adoptActiveJob,
@@ -56,19 +56,19 @@ import {
   cloneActiveJob,
   benchmarkActiveJob,
   compareActiveJob,
-} from "./job-actions.js?v=7c195747008d663c";
-import { bindDraftSaving, restoreDraft } from "./drafts.js?v=7c195747008d663c";
-import { bindPlotControls } from "./plots.js?v=7c195747008d663c";
-import { bindExistingAnalysis } from "./existing-analysis.js?v=7c195747008d663c";
-import { bindResearch } from "./research.js?v=7c195747008d663c";
-import { bindStorage } from "./storage.js?v=7c195747008d663c";
-import { bindAgent } from "./agent.js?v=7c195747008d663c";
-import { prepareWorkspace, bindWorkspace, refreshComposerSummary } from "./workspace.js?v=7c195747008d663c";
-import { bindResultSummary } from "./result-summary.js?v=7c195747008d663c";
-import { bindStructureViewers } from "./structure-viewer.js?v=7c195747008d663c";
+} from "./job-actions.js?v=b71b8f0b4a932c44";
+import { bindDraftSaving, restoreDraft } from "./drafts.js?v=b71b8f0b4a932c44";
+import { bindPlotControls } from "./plots.js?v=b71b8f0b4a932c44";
+import { bindExistingAnalysis } from "./existing-analysis.js?v=b71b8f0b4a932c44";
+import { bindResearch } from "./research.js?v=b71b8f0b4a932c44";
+import { bindStorage } from "./storage.js?v=b71b8f0b4a932c44";
+import { bindAgent } from "./agent.js?v=b71b8f0b4a932c44";
+import { prepareWorkspace, bindWorkspace, refreshComposerSummary } from "./workspace.js?v=b71b8f0b4a932c44";
+import { bindResultSummary } from "./result-summary.js?v=b71b8f0b4a932c44";
+import { bindStructureViewers } from "./structure-viewer.js?v=b71b8f0b4a932c44";
 
-import { connectEventStream, disconnectEventStream, bindConnectionStatus } from "./event-stream.js?v=7c195747008d663c";
-import { bindNavigation } from "./navigation.js?v=7c195747008d663c";
+import { connectEventStream, disconnectEventStream, bindConnectionStatus } from "./event-stream.js?v=b71b8f0b4a932c44";
+import { bindNavigation } from "./navigation.js?v=b71b8f0b4a932c44";
 
 /* ---------- 事件绑定 ---------- */
 
