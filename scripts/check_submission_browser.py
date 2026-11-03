@@ -280,7 +280,13 @@ def check_submission(artifact_dir: Path | None = None) -> None:
             # Asynchronous file-based autofill holds submission until complete.
             page.evaluate("""() => {
                 const file = document.querySelector('#files').files[0];
-                file.text = () => new Promise(resolve => { window.finishPdbRead = resolve; });
+                // Hold the detector's read once. The structure viewer can read
+                // the same file independently when the workspace is revealed.
+                const originalText = file.text.bind(file);
+                file.text = () => {
+                    file.text = originalText;
+                    return new Promise(resolve => { window.finishPdbRead = resolve; });
+                };
                 void window.modules.form.detectLigandsFromPdb();
             }""")
             expect(page.locator("#submit-job")).to_be_disabled()
