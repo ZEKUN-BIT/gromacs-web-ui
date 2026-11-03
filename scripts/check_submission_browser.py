@@ -75,6 +75,10 @@ def check_submission(artifact_dir: Path | None = None) -> None:
         if path == "/api/jobs/recovered-upload":
             fulfill(route, recovered_job)
             return
+        if path in {"/api/jobs/recovered-upload/files", "/api/jobs/synthetic-progress/files"}:
+            assert method == "GET", "The structure viewer only reads the fixture's file list"
+            fulfill(route, {"files": [], "total": 0, "has_more": False, "truncated": False})
+            return
         payloads = {
             "/api/health": {"settings": {"gmx_bin": "gmx", "max_parallel": 1}, "gromacs": {"available": False}, "diagnostics": {}},
             "/api/product": {"templates": [], "projects": [], "defaults": {}},
