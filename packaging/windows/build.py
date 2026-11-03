@@ -39,6 +39,8 @@ LEGAL_SOURCES = (
     "app/static/icons/lucide/LICENSE",
     "app/static/fonts/Inter-OFL.txt",
     "app/static/fonts/JetBrains-Mono-OFL.txt",
+    "app/static/vendor/3dmol/LICENSE",
+    "app/static/vendor/3dmol/3Dmol.es6-min.js.LICENSE.txt",
 )
 ENVIRONMENT_FILES = (
     "linux-system.sh",

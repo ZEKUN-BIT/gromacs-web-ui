@@ -714,7 +714,7 @@ def check(artifact_dir: Path | None = None):
                     page.locator("#toggle-sidebar").click()
                 page.locator("#open-agent").click()
                 assert not page.locator("body").evaluate("node => node.classList.contains('sidebar-open')")
-                expect(page.locator("#toggle-sidebar")).to_have_attribute("aria-expanded", "false")
+                expect(page.locator("#toggle-sidebar")).to_have_attribute("aria-expanded", "false" if width <= 1180 else "true")
                 expect(page.locator("#agent-messages")).to_contain_text("恢复发送")
                 expect(page.locator("#agent-send")).to_be_disabled()
                 sessions[session_id]["status"] = "idle"

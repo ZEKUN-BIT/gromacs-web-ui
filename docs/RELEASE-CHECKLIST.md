@@ -42,7 +42,7 @@ Linux 安装发行版的 `nsis` 软件包后可运行 `GROMACS_REQUIRE_NSIS=1 py
 在每台实际验收的 Windows 机器上，用 Python 3.11+ 从本版本源码运行以下命令。工具只读取 WSL 列表、GROMACS 版本、NVIDIA 名称/驱动及安装器哈希，不会安装、升级或启动模拟。`--source-commit` 填写构建安装包的完整提交 SHA；`--gmx` 可指定该发行版中的可执行文件路径。
 
 ```powershell
-python scripts/windows_acceptance.py collect --installer C:\releases\setup.exe --version 0.2.10 --source-commit FULL_40_CHARACTER_COMMIT --case win10-fresh-cpu --tester TESTER --distro Ubuntu-24.04 --output evidence\win10-fresh-cpu.json
+python scripts/windows_acceptance.py collect --installer C:\releases\setup.exe --version 0.2.11 --source-commit FULL_40_CHARACTER_COMMIT --case win10-fresh-cpu --tester TESTER --distro Ubuntu-24.04 --output evidence\win10-fresh-cpu.json
 ```
 
 其余场景分别使用 `win11-fresh-nvidia`、`win11-existing-cpu`、`win11-upgrade-nvidia` 和 `win-recovery-cpu`。采集结果和所有步骤一律为 `unverified`；只读探测成功不能证明首次安装、重启、GPU 计算或恢复通过。当前 Linux 开发环境无法完成这五项 Windows 实机验收，矩阵继续保持“未验证”。
@@ -52,7 +52,7 @@ python scripts/windows_acceptance.py collect --installer C:\releases\setup.exe -
 五种场景实际通过后，在发行审核时运行：
 
 ```powershell
-python scripts/windows_acceptance.py check --installer C:\releases\setup.exe --version 0.2.10 --source-commit FULL_40_CHARACTER_COMMIT --require-complete evidence\win10-fresh-cpu.json evidence\win11-fresh-nvidia.json evidence\win11-existing-cpu.json evidence\win11-upgrade-nvidia.json evidence\win-recovery-cpu.json
+python scripts/windows_acceptance.py check --installer C:\releases\setup.exe --version 0.2.11 --source-commit FULL_40_CHARACTER_COMMIT --require-complete evidence\win10-fresh-cpu.json evidence\win11-fresh-nvidia.json evidence\win11-existing-cpu.json evidence\win11-upgrade-nvidia.json evidence\win-recovery-cpu.json
 ```
 
 核验拒绝未完成的步骤、缺失/变动的证据、越界路径、重复场景，以及不匹配的版本、源码提交或安装器哈希。它验证记录完整性和维护者填写的结果，不能独立证明实机操作发生过。省略 `--require-complete` 可检查尚未完成的单条记录，不表示发布验收通过。报告及证据由维护者审核后随验收记录保存。

@@ -11,6 +11,7 @@ GROMACS Console is an independent project and is not endorsed by these projects.
 | Inter | SIL Open Font License 1.1 | `app/static/fonts/Inter-OFL.txt` |
 | JetBrains Mono | SIL Open Font License 1.1 | `app/static/fonts/JetBrains-Mono-OFL.txt` |
 | Lucide icons | ISC; original Feather icons MIT | `app/static/icons/lucide/LICENSE` |
+| 3Dmol.js 2.5.5 | BSD 3-Clause; bundled dependency notices | `app/static/vendor/3dmol/LICENSE`, `app/static/vendor/3dmol/3Dmol.es6-min.js.LICENSE.txt` |
 
 Font licenses permit redistribution subject to their conditions, including
 retention of notices and any reserved font names. Fonts are not relicensed under MIT.

@@ -92,7 +92,7 @@ STORE = JobStore(
 WEB_PROCESS_LOCK = None
 SSE_LOG_CHUNK_BYTES = 64 * 1024
 
-app = FastAPI(title="GROMACS Web UI", version="0.2.10")
+app = FastAPI(title="GROMACS Web UI", version="0.2.11")
 # Capture the running process identity once; files may be replaced by an update.
 # These public identifiers distinguish desktop instances, not authentication.
 RUNTIME_IDENTITY = {
