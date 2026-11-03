@@ -1,5 +1,5 @@
 // Persistent, field-linked validation. Server messages are always plain text.
-import { els, showWorkspaceView } from "./core.js?v=a501fb3828ebf5d3";
+import { els, showWorkspaceView } from "./core.js?v=7c195747008d663c";
 
 const markedFields = new Map();
 
@@ -61,7 +61,9 @@ export function showSubmissionIssues(issues, { focus = true, source = "submit" }
     summary.setAttribute("role", "alert");
     summary.setAttribute("aria-labelledby", "submission-errors-title");
     summary.tabIndex = -1;
-    els.jobForm.prepend(summary);
+    // Keep validation inside the scrolling editor. A grid-wide error row can
+    // move the action bar while a blur-triggered preview finishes a click.
+    (els.jobForm.querySelector(".parameter-column") || els.jobForm).prepend(summary);
   }
   // Focusing can commit an input's native change event. Let that clear the old
   // feedback before installing the new issues, not after rendering them.

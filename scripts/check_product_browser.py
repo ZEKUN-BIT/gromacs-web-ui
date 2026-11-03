@@ -167,6 +167,17 @@ def check_viewport(browser, width: int, height: int, scheme: str, artifact_dir: 
             constructor(url) { super(); this.url = url; this.readyState = 1; window.testStreams.push(this); }
             close() { this.readyState = 2; }
         };
+        window.composeEvents = [];
+        for (const type of ['pointerdown', 'change', 'mouseup', 'click', 'compose-reveal-field']) {
+            document.addEventListener(type, event => {
+                const next = document.querySelector('#compose-next');
+                const rect = next?.getBoundingClientRect();
+                window.composeEvents.push({type, target: event.target.id || event.target.className,
+                    step: document.querySelector('#manual-compose')?.dataset.composeStep,
+                    next: rect && {x: rect.x, y: rect.y}, at: performance.now()});
+                if (window.composeEvents.length > 50) window.composeEvents.shift();
+            }, true);
+        }
     """)
 
     def open_rail():
@@ -464,6 +475,14 @@ def check_viewport(browser, width: int, height: int, scheme: str, artifact_dir: 
         assert not errors, errors
         assert not pending, f"Unresolved responses: {list(pending)}"
         print(f"PASS product workflows {width}x{height} {scheme}")
+    except Exception:
+        diagnostics = artifact_dir or ROOT / "runtime/frontend-quality/product"
+        diagnostics.mkdir(parents=True, exist_ok=True)
+        name = f"failure-{width}-{scheme}"
+        page.screenshot(path=str(diagnostics / f"{name}.png"))
+        (diagnostics / f"{name}.json").write_text(json.dumps(page.evaluate("window.composeEvents"), ensure_ascii=False, indent=2))
+        print(f"Product interaction diagnostics: {diagnostics / name}")
+        raise
     finally:
         context.close()
 

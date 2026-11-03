@@ -18,6 +18,7 @@
 .sync-notice button { flex: none; }
 .sync-summary { display: flex; flex-wrap: wrap; gap: 4px 16px; margin: 0; color: var(--muted); font-size: var(--text-xs); }
 #submission-errors { grid-column: 1 / -1; border-left-color: var(--red); margin: 0 0 16px; scroll-margin-top: calc(var(--workspace-bar-height) + 16px); }
+.parameter-column > #submission-errors { order: -3; flex-shrink: 0; margin: 0; }
 #submission-errors ul { margin: 8px 0 0; padding-left: 22px; }
 #submission-errors li + li { margin-top: 6px; }
 .submission-error-link { padding: 2px 0; border: 0; background: transparent; color: var(--red); font: inherit; text-align: left; text-decoration: underline; text-underline-offset: 3px; overflow-wrap: anywhere; }

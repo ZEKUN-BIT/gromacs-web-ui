@@ -4,6 +4,11 @@ on:
   push:
   pull_request:
   workflow_dispatch:
+    inputs:
+      update_visual_snapshots:
+        description: Generate visual candidates for review and download (does not commit them)
+        type: boolean
+        default: false
   schedule:
     - cron: "23 18 * * 0"
 
@@ -84,10 +89,17 @@ jobs:
         if: matrix.python-version == '3.12'
         run: python scripts/check_plot_rendering_browser.py --output runtime/frontend-quality/plot-rendering.json
       - name: Check accessibility, visual snapshots and frontend budgets
-        if: matrix.python-version == '3.12'
-        run: python scripts/check_frontend_quality.py --artifact-dir runtime/frontend-quality
-      - name: Preserve frontend quality diagnostics on failure
-        if: failure() && matrix.python-version == '3.12'
+        if: ${{ !cancelled() && matrix.python-version == '3.12' && (success() || inputs.update_visual_snapshots) }}
+        env:
+          UPDATE_VISUAL_SNAPSHOTS: ${{ inputs.update_visual_snapshots }}
+        run: |
+          if [ "$UPDATE_VISUAL_SNAPSHOTS" = "true" ]; then
+            python scripts/check_frontend_quality.py --artifact-dir runtime/frontend-quality --update-snapshots
+          else
+            python scripts/check_frontend_quality.py --artifact-dir runtime/frontend-quality
+          fi
+      - name: Preserve frontend quality diagnostics and requested visual candidates
+        if: ${{ !cancelled() && matrix.python-version == '3.12' && (failure() || inputs.update_visual_snapshots) }}
         uses: actions/upload-artifact@v4
         with:
           name: frontend-quality-${{ matrix.python-version }}

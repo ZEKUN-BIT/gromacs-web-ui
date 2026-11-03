@@ -1,8 +1,8 @@
 // 任务操作模块：取消、接管、续跑、重试、跳过、删除、复制、性能基准与参数比较。
 
-import { ACTIVE_STATES, els, state, toast, api, confirmDialog } from "./core.js?v=a501fb3828ebf5d3";
-import { friendlyJobActionError } from "./form.js?v=a501fb3828ebf5d3";
-import { refreshJobs, renderActiveJob } from "./jobs.js?v=a501fb3828ebf5d3";
+import { ACTIVE_STATES, els, state, toast, api, confirmDialog } from "./core.js?v=7c195747008d663c";
+import { friendlyJobActionError } from "./form.js?v=7c195747008d663c";
+import { refreshJobs, renderActiveJob } from "./jobs.js?v=7c195747008d663c";
 
 function jobById(jobId) {
   return state.jobs.find((item) => item.id === jobId);
