@@ -31,6 +31,7 @@
 [data-ui-icon="network"] { --ui-icon: url('/static/icons/lucide/network.svg'); }
 [data-ui-icon="flask"] { --ui-icon: url('/static/icons/lucide/flask-conical.svg'); }
 [data-ui-icon="search"] { --ui-icon: url('/static/icons/lucide/search.svg'); }
+[data-ui-icon="diff"] { --ui-icon: url('/static/icons/ant-design/diff.svg'); }
 [data-ui-icon="chevron"] { --ui-icon: url('/static/icons/lucide/chevron-down.svg'); }
 [data-ui-icon="open"] { --ui-icon: url('/static/icons/lucide/external-link.svg'); }
 [data-ui-icon="close"] { --ui-icon: url('/static/icons/lucide/x.svg'); }

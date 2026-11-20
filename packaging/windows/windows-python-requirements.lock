@@ -1,6 +1,6 @@
 # Ubuntu 24.04 x64 / CPython 3.12. Generated; do not edit manually.
 # All application, bootstrap and scientific dependencies are resolved together.
-# source-input-sha256: b42abf95707083e0557393ee1892e3d5a914f49dc79f5630fa5846ceeb0a31e2
+# source-input-sha256: 51572971c7e807c66ff1dc9943f2a07d9a7efa1cffaaf60b0d8f8d96e9c2ea85
 
 acpype==2026.9.4 \
     --hash=sha256:591412cf53f49cf682426daec622d61d6f032ddda75c52793ff76abd5dec2559
@@ -65,8 +65,8 @@ matplotlib==3.10.8 \
 mda-xdrlib==0.2.0 \
     --hash=sha256:0d1757b339f5db2d017a89ddaae06a82cd7a2cce26b8063df9f52b64e933fb47
 
-mdanalysis==2.10.0 \
-    --hash=sha256:c1403b319f5b9054d3135984948ecd485702d3960a867c491283f836451dc2bd
+mdanalysis==2.11.0 \
+    --hash=sha256:a5268a6e0215380406af3b579b0814d6cb265fab69819f57517e4ab9b49efdb4
 
 mdurl==0.1.2 \
     --hash=sha256:84008a41e51615a49fc9966191ff91509e3c40b939176e643fd50a5c2196b8f8

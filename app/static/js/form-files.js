@@ -1,6 +1,6 @@
 // 上传文件选择与文件类型判断。
 
-import { els } from "./core.js?v=b71b8f0b4a932c44";
+import { els } from "./core.js?v=5b84b3e1eaca6ab9";
 
 export function hasFile(data, suffixes) {
   return (data.files || []).some((name) => suffixes.some((suffix) => name.toLowerCase().endsWith(suffix)));
@@ -25,11 +25,6 @@ export function selectedUploadFiles() {
     ...Array.from(els.files?.files || []),
     ...Array.from(els.ligandReferenceFile?.files || []),
   ];
-  const seen = new Set();
-  return files.filter((file) => {
-    const key = `${file.name}\u0000${file.size}\u0000${file.lastModified}`;
-    if (seen.has(key)) return false;
-    seen.add(key);
-    return true;
-  });
+  // Metadata alone cannot distinguish different files selected from different directories.
+  return [...new Set(files)];
 }

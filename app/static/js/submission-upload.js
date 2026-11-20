@@ -1,4 +1,4 @@
-import { api, formatApiError, updateText } from "./core.js?v=b71b8f0b4a932c44";
+import { api, formatApiError, updateText } from "./core.js?v=5b84b3e1eaca6ab9";
 
 const PENDING_KEY = "gromacs.pending-submission";
 const INACTIVITY_MS = 120_000;
@@ -143,7 +143,7 @@ export async function uploadJob(data, button) {
     announce(error.message);
     try {
       const result = await resolvePending();
-      if (result?.job) { announce("已确认任务创建成功，无需重复提交。"); return result.job; }
+      if (result?.job) { announce("已找到此次提交的任务，请查看任务状态，无需重复提交。"); return result.job; }
       announce("本次提交已停止，参数和已选文件已保留，可以重新提交。");
     } catch (resolutionError) {
       announce(`提交结果尚未确认：${resolutionError.message}。恢复连接后请核对，避免重复提交。`, { resolve: true });

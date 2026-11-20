@@ -1,7 +1,8 @@
 // Task updates retain their last known values while connection health is explicit.
-import { state, MAX_LOG_CHARS, updateText } from "./core.js?v=b71b8f0b4a932c44";
-import { refreshJobs, applyJobsPayload, applyJobDetail, appendLogChunk, forgetDeletedJob } from "./jobs.js?v=b71b8f0b4a932c44";
-import { renderReadiness } from "./form-environment.js?v=b71b8f0b4a932c44";
+import { appendLogChunk } from "./log-viewer.js?v=5b84b3e1eaca6ab9";
+import { state, MAX_LOG_CHARS, updateText } from "./core.js?v=5b84b3e1eaca6ab9";
+import { refreshJobs, applyJobsPayload, applyJobDetail, forgetDeletedJob } from "./jobs.js?v=5b84b3e1eaca6ab9";
+import { renderReadiness } from "./form-environment.js?v=5b84b3e1eaca6ab9";
 
 let heartbeatTimer = null;
 let lastSynchronized = null;
@@ -48,8 +49,10 @@ export function connectEventStream() {
     jobs_offset: String(state.jobsOffset), jobs_search: state.jobFilter.trim(), jobs_project: state.jobProject || "",
   });
   if (state.activeJobId) query.set("job_id", state.activeJobId);
-  if (state.logOffset > 0) query.set("log_offset", String(state.logOffset));
-  else query.set("log_tail", String(MAX_LOG_CHARS));
+  if (state.logOffset > 0 || state.logGeneration) {
+    query.set("log_offset", String(state.logOffset));
+    if (state.logGeneration) query.set("log_generation", state.logGeneration);
+  } else query.set("log_tail", String(MAX_LOG_CHARS));
   const source = new EventSource(`/api/events?${query}`);
   state.eventSource = source;
 
@@ -89,7 +92,7 @@ export function connectEventStream() {
     if (state.activeJobId !== previousActive) connectEventStream();
   });
   receive("job", applyJobDetail);
-  receive("log", appendLogChunk);
+  receive("log", chunk => { if (query.get("job_id") === state.activeJobId) appendLogChunk(chunk); });
   receive("worker", payload => {
     if (!state.healthPayload) return;
     state.healthPayload.worker = payload;

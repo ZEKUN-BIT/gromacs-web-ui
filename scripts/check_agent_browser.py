@@ -18,7 +18,7 @@ def check(artifact_dir: Path | None = None):
     with sync_playwright() as playwright:
         browser = playwright.chromium.launch(headless=True)
         try:
-            for width, height, scheme in ((1440, 1000, "light"), (768, 1024, "light"), (390, 844, "dark"), (320, 740, "dark")):
+            for width, height, scheme in ((1440, 1000, "light"), (1280, 800, "dark")):
                 page = browser.new_page(viewport={"width": width, "height": height}, color_scheme=scheme)
                 errors = []
                 calls = []
@@ -710,11 +710,8 @@ def check(artifact_dir: Path | None = None):
                 expect(page.locator("#open-agent")).to_be_in_viewport()
                 page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
                 expect(page.locator("#open-agent")).to_be_in_viewport()
-                if width <= 1180:
-                    page.locator("#toggle-sidebar").click()
                 page.locator("#open-agent").click()
-                assert not page.locator("body").evaluate("node => node.classList.contains('sidebar-open')")
-                expect(page.locator("#toggle-sidebar")).to_have_attribute("aria-expanded", "false" if width <= 1180 else "true")
+                expect(page.locator("#toggle-sidebar")).to_have_attribute("aria-expanded", "true")
                 expect(page.locator("#agent-messages")).to_contain_text("恢复发送")
                 expect(page.locator("#agent-send")).to_be_disabled()
                 sessions[session_id]["status"] = "idle"
@@ -771,7 +768,7 @@ def check(artifact_dir: Path | None = None):
         finally:
             browser.close()
     print(
-        "Inline AI chat, automatic saved configuration/session recovery, settings retry, keyboard/IME input, rendering, isolated drafts and confirmed actions passed on four desktop/mobile widths."
+        "Inline AI chat, automatic saved configuration/session recovery, settings retry, keyboard/IME input, rendering, isolated drafts and confirmed actions passed on both desktop widths."
     )
 
 

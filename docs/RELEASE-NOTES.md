@@ -1,24 +1,15 @@
-# GROMACS Console 0.2.11
-
-0.2.11 将重新排版的分子模拟工作台和蛋白结构预览纳入 Windows 安装包。
+# GROMACS Console 0.2.12
 
 ## 更新内容
 
-- 调整为浅色、灰绿配色的工作区，梳理导航、表单与结果的层次，保留深色主题和手机布局。
-- 新建任务按“体系输入、模拟设置、检查运行”分步组织，常用参数两列排列，高级设置按需展开；切换步骤保留参数和已选文件，校验错误定位到对应字段。
-- 新建任务与任务详情均可预览 PDB/GRO 结构，支持旋转、缩放、重置、卡通、球棍和线框；结构查看器随包提供，按需加载，预览不发送到外部服务。
-- 桌面任务栏加宽至 296 px，结构窗口约占工作区 40%（320–480 px），任务列表支持收起。
-- Windows 载荷包含结构预览模块、3Dmol.js 及其许可证，更新截图基线和结构数据回归检查。
-- 包含任务恢复、进程状态、AI 工具与前端模块拆分等自 0.2.10 以来的维护改进。
+- 工作台改为桌面布局（最小宽度 1200 像素），保留明暗主题；任务列表、运行状态、空状态和参数比较入口使用统一的组件样式，不再提供单独的手机布局。
+- 任务详情可逐帧播放 XTC / TRR 轨迹、定位帧号、查看模拟时间；PDB / GRO 结构预览支持导出 PNG。运行日志新增搜索、匹配跳转和高亮。
+- 改进任务复制与恢复、批量文件归档和断线重连。轨迹读取库升级为 MDAnalysis 2.11.0，支持读取 GROMACS 2026.4 的 TPR；Linux 与 Windows / WSL 的 Python 依赖锁同步更新。
 
-## 下载与更新
+## Windows 下载与升级
 
-安装 `GromacsConsole-0.2.11-windows-x64-setup.exe`，或完整解压 `GromacsConsole-0.2.11-windows-x64.zip` 后运行 `Start.cmd`。两种产物均附 SHA-256。
+安装 `GromacsConsole-0.2.12-windows-x64-setup.exe`，或完整解压 `GromacsConsole-0.2.12-windows-x64.zip` 后运行 `Start.cmd`。两个文件均附 SHA-256。升级前等正在运行的模拟结束，再在原安装目录执行 **Configure or Update**；无需删除 WSL 发行版、设置或模拟结果。
 
-请在已有计算任务结束后执行 **Configure or Update**。更新复用兼容的 WSL 环境，保留设置和模拟结果；启动窗口应显示 `GROMACS Console 0.2.11`。密钥、对话、输入文件和本地运行目录不随安装包分发。
+**引擎版本与控制台版本不同。** Linux 可配置 GROMACS 2026.4。Windows 安装器首次配置时仍下载已固定校验值的 conda-forge GROMACS **2026.3**（CPU / CUDA），并不包含或自动安装 2026.4。首次配置需要联网。
 
-## 验证边界
-
-本版本的自动测试和安装包构建结果以标签对应的 GitHub Actions 为准。Windows 工作流要求实际执行 UTF-8/错误编码的 NSIS 编译回归，并检查 PowerShell 双宿主和实际中文安装欢迎页。
-
-`windows-signing.json` 记录 EXE 签名状态；未配置发行者证书时为 **unsigned**。完整 Windows/WSL 首次安装、UAC/重启与 GPU 硬件验收仍未执行，见 [发布清单](https://github.com/ZEKUN-BIT/gromacs-web-ui/blob/main/docs/RELEASE-CHECKLIST.md)。结构预览需要浏览器支持 WebGL。
+`windows-signing.json` 记录安装器签名状态。完整 Windows / WSL 首装、重启、旧环境升级和 GPU 硬件验收与 CI 分开记录，见[发布清单](https://github.com/ZEKUN-BIT/gromacs-web-ui/blob/v0.2.12/docs/RELEASE-CHECKLIST.md)。

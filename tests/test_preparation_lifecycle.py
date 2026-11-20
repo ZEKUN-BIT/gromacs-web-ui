@@ -106,6 +106,13 @@ def test_manifest_failure_never_queues_task(tmp_path, monkeypatch):
     assert store.list()[0]["status"] == "failed"
     assert store.claim_next("worker") is None
     assert list((tmp_path / "incoming").iterdir()) == []
+    source = store.get(store.list()[0]["id"])
+    assert source["dry_run"] is True
+    cloned = store.clone(source["id"])
+    assert cloned["status"] == "queued" and cloned["dry_run"] is True
+    assert cloned["commands"] == source["commands"]
+    manifest = json.loads((store.job_dir(cloned["id"]) / "experiment-manifest.json").read_text())
+    assert manifest["job"]["dry_run"] is True
 
 
 def test_preparation_keeps_async_requests_responsive(tmp_path, monkeypatch):
@@ -177,7 +184,7 @@ def test_cancel_upload_during_manifest_cannot_delete_or_requeue_target(tmp_path,
 
     monkeypatch.setattr(main, "write_experiment_manifest", slow_manifest)
     job = asyncio.run(scenario())
-    assert job["status"] == "cancelled"
+    assert job["status"] == "cancelled" and job["dry_run"] is True
     assert store.get(job["id"])["status"] == "cancelled"
     assert store.claim_next("worker-after-preparation") is None
     assert main.delete_job(job["id"])["deleted"]

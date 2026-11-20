@@ -50,16 +50,15 @@ export const state = {
   previewSignature: "",
   previewCommands: [],
   mdpSignature: "",
-  logKey: "",
-  logSignature: "",
   logText: "",
   logOffset: 0,
+  logGeneration: null,
+  logRotated: false,
   logTailOmittedBytes: 0,
   logTrimmedChars: 0,
   artifactKey: "",
   filesSignature: "",
   plotsSignature: "",
-  fileFilter: "",
   jobFilter: "",
   jobProject: "",
   productStatus: "loading",
@@ -87,7 +86,6 @@ export function cacheElements() {
     manualCompose: $("#manual-compose"),
     agentPanel: $("#agent-panel"),
     toggleSidebar: $("#toggle-sidebar"),
-    sidebarBackdrop: $("#sidebar-backdrop"),
     jobError: $("#job-error"),
     skippedStepsNotice: $("#skipped-steps-notice"),
     qualityReports: $("#quality-reports"),
@@ -159,6 +157,12 @@ export function cacheElements() {
     skipJob: $("#skip-job"),
     copyLog: $("#copy-log"),
     downloadLog: $("#download-log"),
+    logSearch: $("#log-search"),
+    logClear: $("#log-clear"),
+    logCount: $("#log-count"),
+    logPrev: $("#log-prev"),
+    logNext: $("#log-next"),
+    logFollow: $("#log-follow"),
     logBottom: $("#log-bottom"),
     jobStatus: $("#job-status"),
     jobStep: $("#job-step"),
@@ -178,6 +182,7 @@ export function cacheElements() {
     plotCount: $("#plot-count"),
     fileCount: $("#file-count"),
     fileFilter: $("#file-filter"),
+    clearFileFilter: $("#clear-file-filter"),
     terminalTitle: $("#terminal-title"),
     submitWarning: $("#submit-warning"),
     submitWarningDialog: $("#submit-warning .run-dialog"),
@@ -188,21 +193,6 @@ export function cacheElements() {
     submitWarningConfirm: $("#submit-warning-confirm"),
     submitWarningCancel: $("#submit-warning-cancel"),
   });
-}
-
-export function setSidebarOpen(open, restoreFocus = false) {
-  const mobile = window.matchMedia("(max-width: 1180px)").matches;
-  const expanded = mobile ? open : !document.body.classList.contains("sidebar-collapsed");
-  document.body.classList.toggle("sidebar-open", mobile && open);
-  els.toggleSidebar.setAttribute("aria-expanded", String(expanded));
-  const label = expanded ? "收起任务列表" : "展开任务列表";
-  els.toggleSidebar.setAttribute("aria-label", label);
-  els.toggleSidebar.title = label;
-  document.querySelector("#task-sidebar").inert = !expanded;
-  els.composeView.inert = mobile && open;
-  els.detailView.inert = mobile && open;
-  if (mobile && open) els.jobFilter?.focus({ preventScroll: true });
-  else if (restoreFocus) els.toggleSidebar.focus({ preventScroll: true });
 }
 
 export function showWorkspaceView(view, chosen = true) {
@@ -217,7 +207,6 @@ export function showWorkspaceView(view, chosen = true) {
     button.setAttribute("aria-pressed", String(button.dataset.workspaceView === state.workspaceView));
   });
   document.querySelector("#open-agent")?.setAttribute("aria-pressed", String(state.workspaceView === "agent"));
-  setSidebarOpen(false);
   window.scrollTo({ top: 0, behavior: "instant" });
   window.dispatchEvent(new CustomEvent("workspace-view-change"));
 }

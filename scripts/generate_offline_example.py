@@ -94,6 +94,9 @@ def generate(gmx: str, output: Path) -> dict:
         # The processed native MDP records the temporary run directory in its
         # comments. Only the original, hash-recorded protocol is shipped.
         (workdir / "mdout.mdp").unlink(missing_ok=True)
+        # This public fixture ships the sanitized experiment manifest above, not
+        # the worker's native audit record (absolute executable and runtime paths).
+        (workdir / "execution-manifest.json").unlink(missing_ok=True)
         store.update(job["id"], params=public_params)
         output.mkdir(parents=True, exist_ok=True)
         with build_result_bundle(store, job["id"]) as archive, zipfile.ZipFile(archive) as bundle:

@@ -1,5 +1,6 @@
 // 入口模块：事件绑定、轮询、启动。
 
+import { bindLogViewer } from "./log-viewer.js?v=5b84b3e1eaca6ab9";
 import {
   FILE_FIELD_NAMES,
   els,
@@ -10,8 +11,7 @@ import {
   closeConfirmDialog,
   showWorkspaceView,
   showDetailTab,
-  setSidebarOpen,
-} from "./core.js?v=b71b8f0b4a932c44";
+} from "./core.js?v=5b84b3e1eaca6ab9";
 import {
   saveSettings,
   setMdpPanelExpanded,
@@ -33,7 +33,7 @@ import {
   refreshRowMode,
   applyHardwareRecommendation,
   updateResourceAdvice,
-} from "./form.js?v=b71b8f0b4a932c44";
+} from "./form.js?v=5b84b3e1eaca6ab9";
 import {
   submitJob,
   bindSubmissionRecovery,
@@ -44,7 +44,7 @@ import {
   renderActiveJob,
   changeJobsPage,
   forgetDeletedJob,
-} from "./jobs.js?v=b71b8f0b4a932c44";
+} from "./jobs.js?v=5b84b3e1eaca6ab9";
 import {
   cancelActiveJob,
   adoptActiveJob,
@@ -55,25 +55,27 @@ import {
   deleteJob,
   cloneActiveJob,
   benchmarkActiveJob,
-  compareActiveJob,
-} from "./job-actions.js?v=b71b8f0b4a932c44";
-import { bindDraftSaving, restoreDraft } from "./drafts.js?v=b71b8f0b4a932c44";
-import { bindPlotControls } from "./plots.js?v=b71b8f0b4a932c44";
-import { bindExistingAnalysis } from "./existing-analysis.js?v=b71b8f0b4a932c44";
-import { bindResearch } from "./research.js?v=b71b8f0b4a932c44";
-import { bindStorage } from "./storage.js?v=b71b8f0b4a932c44";
-import { bindAgent } from "./agent.js?v=b71b8f0b4a932c44";
-import { prepareWorkspace, bindWorkspace, refreshComposerSummary } from "./workspace.js?v=b71b8f0b4a932c44";
-import { bindResultSummary } from "./result-summary.js?v=b71b8f0b4a932c44";
-import { bindStructureViewers } from "./structure-viewer.js?v=b71b8f0b4a932c44";
+  bindJobComparison,
+} from "./job-actions.js?v=5b84b3e1eaca6ab9";
+import { bindDraftSaving, restoreDraft } from "./drafts.js?v=5b84b3e1eaca6ab9";
+import { bindPlotControls } from "./plots.js?v=5b84b3e1eaca6ab9";
+import { bindExistingAnalysis } from "./existing-analysis.js?v=5b84b3e1eaca6ab9";
+import { bindResearch } from "./research.js?v=5b84b3e1eaca6ab9";
+import { bindStorage } from "./storage.js?v=5b84b3e1eaca6ab9";
+import { bindAgent } from "./agent.js?v=5b84b3e1eaca6ab9";
+import { prepareWorkspace, bindWorkspace, refreshComposerSummary } from "./workspace.js?v=5b84b3e1eaca6ab9";
+import { bindResultSummary } from "./result-summary.js?v=5b84b3e1eaca6ab9";
+import { bindTrajectory } from "./trajectory.js?v=5b84b3e1eaca6ab9";
+import { bindStructureViewers } from "./structure-viewer.js?v=5b84b3e1eaca6ab9";
 
-import { connectEventStream, disconnectEventStream, bindConnectionStatus } from "./event-stream.js?v=b71b8f0b4a932c44";
-import { bindNavigation } from "./navigation.js?v=b71b8f0b4a932c44";
+import { connectEventStream, disconnectEventStream, bindConnectionStatus } from "./event-stream.js?v=5b84b3e1eaca6ab9";
+import { bindNavigation } from "./navigation.js?v=5b84b3e1eaca6ab9";
 
 /* ---------- 事件绑定 ---------- */
 
 function bindUI() {
   bindSubmissionRecovery();
+  bindLogViewer();
   bindConnectionStatus();
   bindStorage();
   bindAgent();
@@ -106,16 +108,13 @@ function bindUI() {
     });
   });
   els.toggleSidebar.addEventListener("click", () => {
-    if (!window.matchMedia("(max-width: 1180px)").matches) {
-      document.body.classList.toggle("sidebar-collapsed");
-      setSidebarOpen(false, true);
-      return;
-    }
-    setSidebarOpen(!document.body.classList.contains("sidebar-open"), true);
-  });
-  els.sidebarBackdrop?.addEventListener("click", () => setSidebarOpen(false, true));
-  window.matchMedia("(max-width: 1180px)").addEventListener("change", () => {
-    setSidebarOpen(false);
+    const collapsed = document.body.classList.toggle("sidebar-collapsed");
+    const label = collapsed ? "展开任务列表" : "收起任务列表";
+    document.querySelector("#task-sidebar").inert = collapsed;
+    els.toggleSidebar.setAttribute("aria-expanded", String(!collapsed));
+    els.toggleSidebar.setAttribute("aria-label", label);
+    els.toggleSidebar.title = label;
+    els.toggleSidebar.focus({ preventScroll: true });
   });
   els.saveSettings.addEventListener("click", saveSettings);
   for (const field of [els.gmxBin, els.maxParallel, document.querySelector("#analysis-parallel")]) {
@@ -131,7 +130,7 @@ function bindUI() {
   els.skipJob.addEventListener("click", skipActiveJob);
   els.cloneJob?.addEventListener("click", cloneActiveJob);
   els.benchmarkJob?.addEventListener("click", benchmarkActiveJob);
-  els.compareJob?.addEventListener("click", compareActiveJob);
+  bindJobComparison();
   els.mdpPanelToggle?.addEventListener("click", () => {
     setMdpPanelExpanded(els.mdpPanelToggle.getAttribute("aria-expanded") !== "true");
   });
@@ -179,23 +178,6 @@ function bindUI() {
       els.jobFilter.focus();
       els.jobFilter.select();
     }
-    if (event.key === "Escape" && !document.querySelector("dialog[open]") && document.body.classList.contains("sidebar-open")) {
-      setSidebarOpen(false, true);
-    }
-  });
-
-  els.copyLog.addEventListener("click", async () => {
-    const text = els.jobLog.textContent || "";
-    if (!text) {
-      toast("当前没有日志");
-      return;
-    }
-    try {
-      await navigator.clipboard.writeText(text);
-      toast(state.logTailOmittedBytes || state.logTrimmedChars ? "当前显示的末尾日志已复制；可下载已保留日志，服务端轮转可能省略更早内容。" : "日志已复制到剪贴板", "success");
-    } catch {
-      toast("复制失败，请检查浏览器权限", "error");
-    }
   });
 
   els.copyJobDirectory?.addEventListener("click", async () => {
@@ -223,15 +205,14 @@ function bindUI() {
     }
   });
 
-  els.logBottom.addEventListener("click", () => {
-    const logPanel = els.jobLog.closest("details");
-    if (logPanel) logPanel.open = true;
-    els.jobLog.scrollTop = els.jobLog.scrollHeight;
-    els.jobLog.scrollIntoView({ block: "nearest", behavior: "smooth" });
-  });
-
   // 任务列表：事件委托，只绑定一次
   els.jobsList.addEventListener("click", (event) => {
+    if (event.target.closest("[data-clear-job-search]")) {
+      els.jobFilter.value = "";
+      els.jobFilter.focus({ preventScroll: true });
+      els.jobFilter.dispatchEvent(new Event("input", { bubbles: true }));
+      return;
+    }
     const actionButton = event.target.closest("button[data-action]");
     const item = event.target.closest(".job-item[data-job-id]");
     if (!item || !actionButton) return;
@@ -274,9 +255,15 @@ function bindUI() {
   els.jobsPrevious?.addEventListener("click", () => changeJobsPage(-1).catch((error) => toast(error.message, "error")));
   els.jobsNext?.addEventListener("click", () => changeJobsPage(1).catch((error) => toast(error.message, "error")));
 
-  els.fileFilter?.addEventListener("input", () => {
-    state.fileFilter = els.fileFilter.value;
+  els.fileFilter.addEventListener("input", applyFileFilter);
+  function clearFileFilter() {
+    els.fileFilter.value = "";
+    els.fileFilter.focus();
     applyFileFilter();
+  }
+  els.clearFileFilter.addEventListener("click", clearFileFilter);
+  els.outputFiles.addEventListener("click", (event) => {
+    if (event.target.closest("[data-clear-file-filter]")) clearFileFilter();
   });
 
   // 输入时防抖刷新预览，避免每次击键都发请求
@@ -364,6 +351,7 @@ async function boot() {
   bindWorkspace();
   bindResultSummary();
   bindStructureViewers();
+  bindTrajectory();
   const navigationReady = bindNavigation();
   window.addEventListener("open-source-job", event => selectJob(event.detail));
   bindPlotControls(renderActiveJob);

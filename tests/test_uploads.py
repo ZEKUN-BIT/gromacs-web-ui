@@ -50,19 +50,14 @@ class UploadTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(raised.exception.status_code, 400)
             self.assertEqual(list(Path(folder).iterdir()), [])
 
-    async def test_duplicate_names_are_staged_without_overwrite(self) -> None:
+    async def test_ambiguous_names_are_rejected_before_writing(self) -> None:
         with tempfile.TemporaryDirectory() as folder:
-            names, _ = await stage_uploads(
-                [upload("input.pdb", b"first"), upload("input.pdb", b"second")],
-                Path(folder),
-                max_files=2,
-                max_file_bytes=10,
-                max_total_bytes=20,
-            )
-
-            self.assertEqual(names, ["input.pdb", "input-2.pdb"])
-            self.assertEqual((Path(folder) / "input.pdb").read_bytes(), b"first")
-            self.assertEqual((Path(folder) / "input-2.pdb").read_bytes(), b"second")
+            for first, second in [("input.tpr", "input.tpr"), ("Input.tpr", "input.tpr"), ("a?.tpr", "a*.tpr")]:
+                with self.subTest(first=first, second=second), self.assertRaises(HTTPException) as raised:
+                    await stage_uploads([upload(first, b"first"), upload(second, b"second")], Path(folder))
+                self.assertEqual(raised.exception.status_code, 422)
+                self.assertIn("请改名", raised.exception.detail)
+                self.assertEqual(list(Path(folder).iterdir()), [])
 
     async def test_single_file_limit_returns_413(self) -> None:
         with tempfile.TemporaryDirectory() as folder:

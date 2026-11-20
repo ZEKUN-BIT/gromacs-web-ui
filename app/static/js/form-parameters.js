@@ -1,7 +1,7 @@
 // MDP 参数状态、协议摘要与参数覆盖预览。
 
-import { els, state, escapeHtml, updateText, api } from "./core.js?v=b71b8f0b4a932c44";
-import { selectedUploadFiles } from "./form-files.js?v=b71b8f0b4a932c44";
+import { els, state, escapeHtml, updateText, api } from "./core.js?v=5b84b3e1eaca6ab9";
+import { selectedUploadFiles } from "./form-files.js?v=5b84b3e1eaca6ab9";
 
 export function setMdpPanelExpanded(expanded) {
   if (!els.mdpPanelToggle || !els.mdpPanelBody) return;

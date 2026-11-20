@@ -3,12 +3,15 @@
 from __future__ import annotations
 
 import io
+import json
+import os
+import stat
 import threading
 import time
 import zipfile
 from pathlib import Path
 
-from .files import ensure_under_root, relative_file_page, relative_files
+from .files import relative_file_page, relative_files
 
 FILE_LIST_CACHE: dict[tuple[int, str], tuple[str, list[dict], bool, float]] = {}
 FILE_LIST_CACHE_LOCK = threading.Lock()
@@ -24,8 +27,12 @@ ACTIVE_STATUSES = frozenset({"preparing", "queued", "running", "interrupted"})
 def forget_file_lists(store, job_ids) -> None:
     """Drop cached full listings after tasks are deleted or cleaned."""
     with FILE_LIST_CACHE_LOCK:
-        for job_id in job_ids:
-            FILE_LIST_CACHE.pop((id(store), job_id), None)
+        entries = {(id(store), job_id) for job_id in job_ids}
+        for key in entries:
+            FILE_LIST_CACHE.pop(key, None)
+        for page_key in list(FILE_PAGE_CACHE):
+            if page_key[:2] in entries:
+                del FILE_PAGE_CACHE[page_key]
 
 
 def _remember(cache: dict, key, value) -> None:
@@ -34,7 +41,7 @@ def _remember(cache: dict, key, value) -> None:
     cache[key] = value
 
 
-def list_job_files(store, job_id: str, meta: dict, *, limit: int | None, offset: int, search: str) -> dict:
+def list_job_files(store, job_id: str, meta: dict, *, limit: int | None, offset: int, search: str, structures_only: bool = False) -> dict:
     """Return a full (truncated) listing, or one page when ``limit`` is given.
 
     Results are reused until the task's status, step or storage revision
@@ -48,13 +55,15 @@ def list_job_files(store, job_id: str, meta: dict, *, limit: int | None, offset:
         return stored_key == cache_key and (not active or now - stored_at < ACTIVE_FILE_CACHE_SECONDS)
 
     workdir = Path(meta["workdir"])
+    if structures_only and limit is None:
+        limit = 200
     if limit is not None:
-        page_key = (id(store), job_id, search, offset, limit)
+        page_key = (id(store), job_id, search, offset, limit, structures_only)
         with FILE_LIST_CACHE_LOCK:
             cached_page = FILE_PAGE_CACHE.get(page_key)
             if cached_page and fresh(cached_page[0], cached_page[2]):
                 return cached_page[1]
-        page = relative_file_page(workdir, search=search, offset=offset, limit=limit)
+        page = relative_file_page(workdir, search=search, offset=offset, limit=limit, structures_only=structures_only)
         with FILE_LIST_CACHE_LOCK:
             _remember(FILE_PAGE_CACHE, page_key, (cache_key, page, now))
         return page
@@ -72,29 +81,50 @@ def list_job_files(store, job_id: str, meta: dict, *, limit: int | None, offset:
     return {"files": files, "truncated": truncated}
 
 
+class XvgArchiveLimitError(ValueError):
+    """XVG data exists, but no individual file fits the archive."""
+
+
 def xvg_archive(workdir: Path) -> bytes | None:
-    """Zip regular XVG files under ``workdir`` within count/size limits; None if none."""
-    workdir = workdir.resolve()
-    files: list[Path] = []
-    total_bytes = 0
-    for candidate in sorted(workdir.rglob("*.xvg")):
-        if len(files) >= MAX_XVG_ARCHIVE_FILES:
-            break
-        try:
-            path = ensure_under_root(candidate, workdir)
-            if path.is_symlink() or not path.is_file():
-                continue
-            size = path.stat().st_size
-        except OSError:
-            continue
-        if total_bytes + size > MAX_XVG_ARCHIVE_BYTES:
-            break
-        files.append(path)
-        total_bytes += size
-    if not files:
+    """Archive bounded snapshots; skip oversized files without losing later small ones."""
+    if not workdir.is_dir():
         return None
     archive = io.BytesIO()
+    count = total_bytes = skipped = 0
+    examples = []
     with zipfile.ZipFile(archive, "w", compression=zipfile.ZIP_DEFLATED) as bundle:
-        for path in files:
-            bundle.write(path, path.relative_to(workdir).as_posix())
+        for directory, folders, names, dir_fd in os.fwalk(workdir, follow_symlinks=False):
+            folders.sort()
+            for name in sorted(names):
+                if not name.lower().endswith(".xvg"):
+                    continue
+                rel = (Path(directory) / name).relative_to(workdir).as_posix()
+                try:
+                    fd = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=dir_fd)
+                except OSError:
+                    continue
+                with os.fdopen(fd, "rb") as source:
+                    info = os.fstat(fd)
+                    if not stat.S_ISREG(info.st_mode):
+                        continue
+                    if count >= MAX_XVG_ARCHIVE_FILES or total_bytes + info.st_size > MAX_XVG_ARCHIVE_BYTES:
+                        skipped += 1
+                        if len(examples) < 100:
+                            examples.append({"path": rel, "reason": "file_count_limit" if count >= MAX_XVG_ARCHIVE_FILES else "byte_limit"})
+                        continue
+                    with bundle.open(rel, "w") as dest:
+                        remaining = info.st_size
+                        while remaining and (chunk := source.read(min(1024 * 1024, remaining))):
+                            dest.write(chunk)
+                            remaining -= len(chunk)
+                    total_bytes += info.st_size - remaining
+                    count += 1
+        if not count:
+            if skipped:
+                raise XvgArchiveLimitError()
+            return None
+        if skipped:
+            bundle.writestr(
+                "manifest.json", json.dumps({"included": count, "skipped": skipped, "skipped_examples": examples}, ensure_ascii=False)
+            )
     return archive.getvalue()

@@ -311,14 +311,14 @@ console.log("Organization drafts preserve all fields across task switches/reload
 // Exercise real artifact request coordination. Failures must release the cache,
 // and an older response must not win after returning to the same task and tab.
 const artifactStart = source.indexOf("let artifactRequestGeneration = 0;");
-const artifactEnd = source.indexOf("let logHighlightTimer", artifactStart);
+const artifactEnd = source.indexOf("function formatSize", artifactStart);
 assert(artifactStart >= 0 && artifactEnd > artifactStart);
 let artifactNow = 0;
 const artifactRequests = [];
 const artifactRenders = [];
 const artifacts = {
   AbortController,
-  fileViews: new Map(), filePage: null, renderFilePager() {},
+  fileViews: new Map(), filePage: null, renderFilePager() {}, syncFileSearch() {}, showFileLoading() {},
   state: { workspaceView: "detail", activeJobId: "a", detailTab: "files", artifactKey: "", filesSignature: "", plotFilters: { replica: "", metric: "", begin: "", end: "" } },
   URLSearchParams,
   ACTIVE_STATES: new Set(["preparing", "queued", "running", "interrupted"]),
@@ -432,18 +432,17 @@ for (const sampleCount of [10, 20]) {
 assert.equal(plotRenders.at(-1)[0].sample_count, 20);
 console.log("Visible running artifacts and plots refresh within one step; pending reads, hidden views and terminal caches stay bounded.");
 
-const logStart = source.indexOf("let logHighlightTimer");
-const logEnd = source.indexOf("function formatSize", logStart);
+const logSource = readFileSync(new URL("../app/static/js/log-viewer.js", import.meta.url), "utf8");
 const logHarness = {
-  state: { activeJobId: "log-job", logOffset: 0, logText: "", logSignature: "", logTailOmittedBytes: 0, logTrimmedChars: 0 },
+  state: { activeJobId: "log-job", logOffset: 0, logText: "", logTailOmittedBytes: 0, logTrimmedChars: 0 },
   MAX_LOG_CHARS: 10,
-  els: { jobLog: { textContent: "", scrollTop: 0, clientHeight: 20, scrollHeight: 20 }, logNotice: { hidden: true } },
-  window: { setTimeout() {}, clearTimeout() {} },
+  els: { jobLog: { textContent: "", append(text) { this.textContent += text; }, scrollTop: 0, clientHeight: 20, scrollHeight: 20 }, logNotice: { hidden: true },
+    ...Object.fromEntries(["logSearch", "logClear", "logCount", "logPrev", "logNext", "logFollow", "copyLog", "downloadLog"].map(key => [key, new TestElement()])) },
+  window: { setTimeout() {}, clearTimeout() {}, getSelection() { return null; } },
   updateText(element, text) { element.textContent = text; },
-  escapeHtml(text) { return text; },
 };
 vm.createContext(logHarness);
-vm.runInContext(source.slice(logStart, logEnd).replaceAll("export ", ""), logHarness);
+vm.runInContext(logSource.replace(/^import .*\n/gm, "").replaceAll("export ", ""), logHarness);
 logHarness.appendLogChunk({ start: 2048, offset: 2053, text: "hello" });
 assert.equal(logHarness.state.logTailOmittedBytes, 2048);
 assert.equal(logHarness.els.logNotice.hidden, false);
@@ -460,7 +459,8 @@ logHarness.appendLogChunk({ reset: true, start: 0, offset: 0, text: "" });
 assert.equal(logHarness.state.logOffset, 0);
 assert.equal(logHarness.state.logTailOmittedBytes, 0);
 assert.equal(logHarness.state.logTrimmedChars, 0);
-assert.equal(logHarness.els.logNotice.hidden, true);
+assert.equal(logHarness.els.logNotice.hidden, false);
+assert.match(logHarness.els.logNotice.textContent, /日志已轮转/);
 console.log("Tail omissions and cumulative clipping remain visible, duplicate chunks are ignored, and log rotation resets all counters.");
 
 // Timeouts cover response bodies as well as headers, and remain opt-in for writes.

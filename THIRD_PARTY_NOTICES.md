@@ -11,6 +11,7 @@ GROMACS Console is an independent project and is not endorsed by these projects.
 | Inter | SIL Open Font License 1.1 | `app/static/fonts/Inter-OFL.txt` |
 | JetBrains Mono | SIL Open Font License 1.1 | `app/static/fonts/JetBrains-Mono-OFL.txt` |
 | Lucide icons | ISC; original Feather icons MIT | `app/static/icons/lucide/LICENSE` |
+| Ant Design Icons · DiffOutlined (`diff.svg` from [`@ant-design/icons-svg` 4.6.0](https://www.npmjs.com/package/@ant-design/icons-svg/v/4.6.0)) | MIT | `app/static/icons/ant-design/LICENSE` |
 | 3Dmol.js 2.5.5 | BSD 3-Clause; bundled dependency notices | `app/static/vendor/3dmol/LICENSE`, `app/static/vendor/3dmol/3Dmol.es6-min.js.LICENSE.txt` |
 
 Font licenses permit redistribution subject to their conditions, including
@@ -36,7 +37,7 @@ the application's MIT grant.
 | Bundled AmberTools programs | Individual AmberTools component licenses distributed in the ACPYPE wheel; no claim that all components share one license |
 | Open Babel | GPL 2.0; Open Babel / openbabel-wheel distribution notices |
 | DSSP / mkdssp | BSD 2-Clause; Ubuntu package copyright file |
-| MDAnalysis 2.10.0 | LGPL 3.0 or later; installed distribution license files |
+| MDAnalysis 2.11.0 | LGPL 3.0 or later; installed distribution license files |
 | NumPy, SciPy, Biopython, Matplotlib and web/Python dependencies | Their respective upstream license files and installed distribution metadata |
 | Ubuntu packages | `/usr/share/doc/<package>/copyright` inside the distribution |
 | Microsoft WSL | Microsoft WSL license and Windows component terms |

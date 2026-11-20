@@ -55,7 +55,7 @@ typography:
     fontWeight: 600
     lineHeight: 1.5
     letterSpacing: "0"
-  mobile-display:
+  chat-heading:
     fontFamily: "Inter, system-ui, -apple-system, BlinkMacSystemFont, Segoe UI, PingFang SC, Hiragino Sans GB, Microsoft YaHei, Noto Sans CJK SC, Source Han Sans SC, sans-serif"
     fontSize: "22px"
     fontWeight: 600
@@ -191,7 +191,7 @@ The shared UI stack is `Inter, system-ui, -apple-system, BlinkMacSystemFont, Seg
 ### Hierarchy
 
 - **Page Title** (600, 24px, 1.4): Screen title on desktop.
-- **Mobile Page Title** (600, 22px, 1.4): Screen title on narrow layouts.
+- **Chat Heading** (600, 22px, 1.4): Heading in the AI workspace.
 - **Panel and Brand Title** (600, 16px, 1.5): Desktop panel, form column, and app identity headings.
 - **Result and Dialog Title** (600, 18px, 1.5): Larger result and dialog headings.
 - **UI Body** (400, 14px, 1.65): Task details, file summaries, and ordinary parameter values.
@@ -200,7 +200,7 @@ The shared UI stack is `Inter, system-ui, -apple-system, BlinkMacSystemFont, Seg
 - **Metadata** (400-500, 12px, 1.5): Timestamps, secondary labels, and compact readouts.
 - **Chat Body** (400, 16px, 1.75): User and assistant messages.
 
-Use only 400, 500, and 600 for the UI hierarchy. Keep Chinese text at least 12px. Mobile labels and buttons remain 14px, while input text uses 16px. Reduce columns or collapse secondary content instead of shrinking text to 10-11px.
+Use only 400, 500, and 600 for the UI hierarchy. Keep Chinese text at least 12px.
 
 ### Named Rules
 
@@ -208,7 +208,7 @@ Use only 400, 500, and 600 for the UI hierarchy. Keep Chinese text at least 12px
 
 ## Layout
 
-The app uses a persistent left rail and a right-side workbench. Desktop keeps the setup form and parameter bank side by side; mobile collapses into a single task-first stack. The primary reading order is: choose workflow, satisfy inputs, inspect commands, run job, read logs, download files.
+The app uses a persistent left rail and a right-side workbench. The structure viewer and parameter panel stay side by side. The workbench has a 1200px minimum width; smaller windows scroll horizontally rather than switching layouts. The primary reading order is: choose workflow, satisfy inputs, inspect commands, run job, read logs, download files.
 
 Form groups use CSS Grid with stable minimum widths so long Chinese labels and scientific terms wrap inside their cells without changing neighboring controls. Monitor panels use a left stack for command preview and outputs, plus a right job panel for status, progress, and logs.
 
@@ -269,7 +269,7 @@ The guide combines current workflow name, readiness count, progress bar, ordered
 - **Do** make missing inputs visible in the workflow guide and command preview.
 - **Do** preserve form field names when changing UI layout.
 - **Do** use semantic state colors for success, warning, danger, and info.
-- **Do** aim for 44px touch targets; retain adequate target spacing for compact controls and verify the 24px WCAG 2.2 minimum or its spacing exception.
+- **Do** retain adequate target spacing for compact controls and verify the 24px WCAG 2.2 minimum or its spacing exception.
 
 ### Don't:
 

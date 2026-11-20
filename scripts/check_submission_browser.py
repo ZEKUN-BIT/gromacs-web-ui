@@ -141,6 +141,18 @@ def check_submission(artifact_dir: Path | None = None) -> None:
                 expect(page.locator("#submit-job")).to_be_enabled()
 
             configure()
+            # Two distinct files can share all metadata. Neither should be silently dropped.
+            page.evaluate("""() => {
+                const input = document.querySelector('#files'), original = input.files[0], transfer = new DataTransfer();
+                transfer.items.add(original);
+                transfer.items.add(new File(['NEW!'], original.name, {lastModified: original.lastModified}));
+                input.files = transfer.files;
+                input.dispatchEvent(new Event('change', {bubbles:true}));
+            }""")
+            expect(page.locator("#submission-errors")).to_contain_text("输入文件重名")
+            expect(page.locator("#submit-job")).to_be_disabled()
+            assert not submissions
+            configure()
             # Edits invalidate readiness immediately, including the debounce gap.
             held.add("preview")
             page.locator("#job-name").fill("延迟预览 A")

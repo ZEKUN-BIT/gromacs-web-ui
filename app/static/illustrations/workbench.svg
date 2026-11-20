@@ -1,0 +1,44 @@
+<svg xmlns="http://www.w3.org/2000/svg">
+  <!-- Original workbench illustrations. The host supplies light/dark theme tokens. -->
+  <symbol id="simulation-cell" viewBox="0 0 280 196">
+    <g fill="none" stroke="var(--line)" stroke-width="1" stroke-linecap="round" stroke-linejoin="round">
+      <!-- Registration marks and projection of the periodic cell. -->
+      <path d="M23 56v-8h8m218 0h8v8M23 144v8h8m218 0h8v-8"/>
+      <path d="m34 141 95 43 116-55" stroke-dasharray="2 5"/>
+      <path d="m52 128 81 37 94-44v7l-94 44-81-37z" fill="var(--field)"/>
+      <path d="m52 128 94-44 81 37-94 44z" fill="var(--green-soft)"/>
+      <path d="m74 118 81 37m-57-48 81 37m-58-48 81 37m-130 4 94-44m-74 54 94-45m-74 54 94-44" opacity=".6"/>
+      <path d="M52 128V58l94-44 81 37v70" stroke="var(--control-line)"/>
+      <path d="M146 14v70m-94-26 81 37 94-44m-94 44v70" stroke-dasharray="3 5"/>
+    </g>
+    <!-- A folded ribbon rather than simulated atoms or a result trace. -->
+    <g transform="rotate(28 140 86)" stroke-linejoin="round">
+      <g fill="var(--green-soft)" stroke="var(--green)" stroke-width="1.3">
+        <path d="M159 39c4 11-19 28-38 36-6 3-8 3-9 1l1-12c0-3 5-6 10-9 16-10 27-21 26-24z"/>
+        <path d="M159 69c4 11-19 28-38 36-6 3-8 3-9 1l1-12c0-3 5-6 10-9 16-10 27-21 26-24z"/>
+        <path d="M159 99c4 11-19 28-38 36l-5-9c15-10 34-26 33-35z"/>
+      </g>
+      <g fill="var(--green)" stroke="var(--green)" stroke-width="1.3">
+        <path d="M118 26c12-3 39 4 41 13l1 11c-8-8-30-14-44-13z"/>
+        <path d="M113 64c8-6 44-1 46 5l1 12c-9-8-40-12-48-5z"/>
+        <path d="M113 94c8-6 44-1 46 5l1 12c-9-8-40-12-48-5z"/>
+      </g>
+    </g>
+    <g fill="var(--panel)" stroke="var(--green)" stroke-width="1.4">
+      <path d="m76 84 10-7 11 6m80 22 9-6 11 5" fill="none"/>
+      <circle cx="76" cy="84" r="2.5"/><circle cx="86" cy="77" r="3.5"/><circle cx="97" cy="83" r="2"/>
+      <circle cx="177" cy="105" r="2"/><circle cx="186" cy="99" r="3.5"/><circle cx="197" cy="104" r="2.5"/>
+    </g>
+    <g fill="var(--green)"><circle cx="52" cy="58" r="2.5"/><circle cx="227" cy="51" r="2.5"/><circle cx="133" cy="165" r="2.5"/></g>
+  </symbol>
+  <symbol id="run-log" viewBox="0 0 82 54">
+    <g stroke-linejoin="round" stroke-linecap="round" stroke-width="1.4">
+      <path d="m9 43 35 7 29-9" fill="none" stroke="var(--line)" stroke-dasharray="2 4"/>
+      <path d="m20 13 37-5 5 31-37 6z" fill="var(--green-soft)" stroke="var(--control-line)"/>
+      <rect x="17" y="11" width="39" height="31" rx="3" fill="var(--panel)" stroke="var(--control-line)"/>
+      <path d="M24 19h13m-13 5h7m-7 5h5" fill="none" stroke="var(--line)"/>
+      <rect x="33" y="24" width="31" height="18" rx="3" fill="var(--green-soft)" stroke="var(--green)"/>
+      <path d="M38 35h4l4-7 5 10 4-6h4" fill="none" stroke="var(--green)"/>
+    </g>
+  </symbol>
+</svg>

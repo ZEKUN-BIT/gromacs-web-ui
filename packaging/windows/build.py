@@ -37,6 +37,7 @@ LEGAL_SOURCES = (
     "THIRD_PARTY_NOTICES.md",
     "app/static/licenses/project-MIT.txt",
     "app/static/icons/lucide/LICENSE",
+    "app/static/icons/ant-design/LICENSE",
     "app/static/fonts/Inter-OFL.txt",
     "app/static/fonts/JetBrains-Mono-OFL.txt",
     "app/static/vendor/3dmol/LICENSE",

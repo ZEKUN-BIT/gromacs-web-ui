@@ -51,3 +51,8 @@ mdout.mdp
 
 # Development-only frontend lint tooling.
 node_modules/
+
+# Local research workspaces and generated outputs.
+/work/
+/outputs/
+/*_HANDOFF.md

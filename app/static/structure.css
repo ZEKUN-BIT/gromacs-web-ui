@@ -15,8 +15,11 @@
 .parameter-column input:not([type="checkbox"]):not([type="radio"]), .parameter-column select, .parameter-column textarea { border-color: var(--control-line); background-color: var(--field); }
 .parameter-column input:focus, .parameter-column select:focus, .parameter-column textarea:focus { border-color: var(--green); background-color: var(--panel); }
 .parameter-column .job-name-field, .parameter-column .workflow-intent { display: grid; align-content: start; gap: 8px; font-size: var(--text-sm); font-weight: 500; }
-.parameter-column .dropzone { display: grid; grid-template-columns: 30px minmax(0, 1fr); align-content: center; justify-items: start; min-height: 78px; padding: 16px 20px; gap: 3px 12px; border-color: var(--line); background: var(--field); text-align: left; }
-.parameter-column .dropzone-icon { display: block; grid-row: 1 / 3; width: 28px; height: 28px; align-self: center; }
+.parameter-column .dropzone { display: grid; grid-template-columns: 36px minmax(0, 1fr); align-content: center; justify-items: start; min-height: 78px; padding: 16px 20px; gap: 3px 12px; border-color: var(--line); background: var(--field); text-align: left; }
+.parameter-column .dropzone-icon { display: grid; place-items: center; grid-row: 1 / 3; width: 36px; height: 36px; padding: 0; align-self: center; background: var(--green-soft); border-radius: var(--radius); }
+.parameter-column .dropzone-icon::before { width: 20px; height: 20px; }
+.parameter-column .dropzone:is(:hover, :focus-within, .dragging) { border-color: var(--green); background: var(--green-soft); }
+.parameter-column .dropzone:focus-within { outline: 2px solid var(--green); outline-offset: 2px; }
 .parameter-column .dropzone strong { font-size: var(--text-sm); font-weight: 500; }
 .parameter-column .dropzone > #file-summary { grid-column: 2; font-size: var(--text-xs); }
 .parameter-column .new-job-organization { margin: 0; padding: 0; border: 0; }
@@ -52,12 +55,13 @@ body[data-form-mode="guided"] .parameter-column label > small { display: none; }
 body[data-form-mode="guided"] .form-disclosure .advanced-field:not([hidden]) { display: flex !important; }
 .workflow-guide.form-disclosure { padding: 14px 0 0; }
 .workflow-guide .workflow-notes { margin-bottom: 0; }
-.compose-path { align-self: stretch; gap: 16px; }
+.compose-path { align-self: stretch; gap: 18px; }
 .compose-path button { position: relative; min-height: 49px; padding: 8px 0; gap: 7px; border-radius: 0; color: var(--muted); font-size: var(--text-sm); }
-.compose-path button > span { display: inline-grid; place-items: center; width: 20px; height: 20px; border-radius: 50%; border: 1px solid var(--line); font-size: 11px; }
-.compose-path button[aria-current="step"] { color: var(--green); background: transparent; }
+.compose-path button > span { display: inline-grid; place-items: center; width: 22px; height: 22px; border-radius: 50%; border: 1px solid var(--line); font: 500 var(--text-xs)/1 var(--mono); }
+.compose-path button[aria-current="step"] { color: var(--green); background: transparent; font-weight: 600; }
+.compose-path button + button::before { content: ""; position: absolute; left: -14px; top: 50%; width: 10px; border-top: 1px solid var(--line); pointer-events: none; }
 .compose-path button[aria-current="step"]::after { content: ""; position: absolute; inset: auto 0 -1px; height: 2px; background: var(--green); }
-.compose-path button[aria-current="step"] > span { border-color: var(--green); background: var(--green-soft); }
+.compose-path button[aria-current="step"] > span { border-color: var(--green); background: var(--green); color: var(--on-accent); }
 .view-mode button { padding-inline: 6px; }
 .parameter-column .execution-options { gap: 6px 20px; }
 .parameter-column .protocol-options { border: 0; padding: 0; }
@@ -74,8 +78,9 @@ body[data-form-mode="guided"] .form-disclosure .advanced-field:not([hidden]) { d
 .structure-head > span::before { margin-right: 6px; }
 .structure-head select { flex: 1; width: 0; min-width: 0; min-height: 30px; padding: 3px 24px 3px 6px; border: 0; background-color: transparent; font-size: var(--text-sm); text-overflow: ellipsis; }
 .structure-head .tool-button { flex-shrink: 0; width: 28px; min-width: 28px; height: 28px; min-height: 28px; background: transparent; }
+.structure-head .structure-export { width: auto; padding: 0 6px; font-size: var(--text-xs); white-space: nowrap; }
 .structure-stage { position: relative; flex: 1; min-height: 0; }
-.structure-canvas { position: absolute; inset: 0; overflow: hidden; touch-action: none; }
+.structure-canvas { position: absolute; inset: 0; overflow: hidden; }
 .structure-canvas:focus-visible { outline: 2px solid var(--blue); outline-offset: -3px; }
 .structure-canvas > canvas { display: block; }
 .structure-overlay { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 14px; padding: 24px; text-align: center; pointer-events: none; }
@@ -85,6 +90,16 @@ body[data-form-mode="guided"] .form-disclosure .advanced-field:not([hidden]) { d
 .structure-overlay button { pointer-events: auto; }
 .structure-viewer:not([data-state="empty"]) [data-structure-empty-add] { display: none; }
 .structure-chains:empty { display: none; }
+.structure-illustration, .structure-prompt { display: none; }
+.structure-viewer[data-state="empty"] .structure-overlay {
+  gap: 8px;
+  background: radial-gradient(ellipse at 50% 43%, var(--green-soft), transparent 68%), var(--viewer-background);
+}
+.structure-viewer[data-state="empty"] .structure-illustration { display: block; width: min(74%, 280px); height: auto; min-height: 0; margin-bottom: 6px; }
+.structure-viewer[data-state="empty"] .structure-prompt { display: block; color: var(--ink); font-size: var(--text-section); font-weight: 600; }
+.structure-viewer[data-state="empty"] .structure-overlay button { margin-top: 6px; }
+.structure-viewer[data-state="empty"] .structure-empty-mark { display: none; }
+.structure-viewer:not([data-state="ready"]) .structure-footer > span:last-child { visibility: hidden; }
 .structure-empty-mark { color: var(--line); }
 .structure-empty-mark::before { width: 52px; height: 52px; margin: 0; }
 .structure-viewer[data-state="error"] .structure-overlay p { color: var(--red); }
@@ -106,24 +121,28 @@ body[data-form-mode="guided"] .form-disclosure .advanced-field:not([hidden]) { d
 @keyframes structure-pulse { 50% { opacity: 0.35; } }
 @media (prefers-reduced-motion: reduce) { .structure-viewer[data-state="loading"] .structure-empty-mark { animation: none; } }
 @media (prefers-color-scheme: dark) { :root { --viewer-background: #1b211d; } }
-@media (max-width: 950px) {
-  .composer-grid, .detail-workbench { grid-template-columns: minmax(0, 1fr); gap: 12px; }
-  .structure-viewer { height: clamp(240px, 34vh, 340px); }
-  .composer-grid > .parameter-column { height: auto; max-height: none; overflow: visible; }
-  .parameter-column > .composer-toolbar { position: static; }
-}
-@media (max-width: 700px) {
-  .composer-grid > .parameter-column { padding: 16px; gap: 20px; }
-  .parameter-column > .composer-toolbar { margin: -16px -16px 0; padding-inline: 12px; }
-  .compose-path { gap: 12px; }
-  .compose-path button { gap: 5px; font-size: var(--text-xs); padding: 8px 0; }
-  .parameter-column > .form-column { grid-template-columns: minmax(0, 1fr); }
-  .parameter-column .workflow-switch { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  .parameter-column .dense-grid, body[data-form-mode="guided"] .parameter-column .dense-grid { gap: 16px 12px; }
-  .form-disclosure > summary { flex-wrap: wrap; }
-  .form-disclosure > summary > span { flex-basis: 100%; margin-left: 16px; text-align: left; }
-  .structure-head select, .structure-controls select { font-size: 16px; }
-  .structure-head > span { font-size: var(--text-xs); }
-  .structure-head > span::before { display: none; }
-  .structure-footer > span:last-child { display: none; }
-}
+
+/* The trajectory panel is loaded only when explicitly opened in job details. */
+#trajectory-panel { padding: 12px; min-width: 0; }
+.trajectory-inputs, .trajectory-transport { display: flex; flex-wrap: wrap; align-items: end; gap: 8px; }
+.trajectory-inputs label { display: grid; flex: 1 1 140px; min-width: 0; }
+.trajectory-inputs select { width: 100%; }
+#traj-canvas { position: relative; height: clamp(240px, 36vh, 440px); overflow: hidden; background: var(--viewer-background); border: 1px solid var(--line); }
+.trajectory-transport { margin-block: 8px; }
+.trajectory-seek { display: grid; }
+#traj-seek { width: 100%; }
+#traj-number { width: 8ch; }
+#traj-stamp { display: block; margin-top: 6px; font-variant-numeric: tabular-nums; }
+
+/* Collapse only a successfully listed, empty job; keep the refresh action and the full viewer on errors. */
+.structure-head .structure-empty-note { display: none; }
+.detail-workbench:has(> [data-no-structures]) { grid-template-columns: minmax(0, 1fr); }
+#detail-structure[data-no-structures] { height: auto; }
+#detail-structure[data-no-structures] :is(.structure-stage, .structure-footer, [data-structure-file], .structure-export) { display: none; }
+#detail-structure[data-no-structures] .structure-head { border-bottom: 0; }
+#detail-structure[data-no-structures] .structure-empty-note { display: block; flex: 1; }
+[data-no-structures] + .detail-content:has([data-detail-panel="overview"]:not([hidden])) { height: auto; }
+[data-no-structures] + .detail-content .metrics-table-head { display: none; }
+[data-no-structures] + .detail-content .metrics-row { grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; }
+[data-no-structures] + .detail-content .metrics-row > div { display: flex; flex-direction: column; }
+[data-no-structures] + .detail-content .metrics-row strong { text-align: start; }

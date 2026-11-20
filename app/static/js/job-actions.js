@@ -1,8 +1,9 @@
 // 任务操作模块：取消、接管、续跑、重试、跳过、删除、复制、性能基准与参数比较。
 
-import { ACTIVE_STATES, els, state, toast, api, confirmDialog } from "./core.js?v=b71b8f0b4a932c44";
-import { friendlyJobActionError } from "./form.js?v=b71b8f0b4a932c44";
-import { refreshJobs, renderActiveJob } from "./jobs.js?v=b71b8f0b4a932c44";
+import { resetLogState } from "./log-viewer.js?v=5b84b3e1eaca6ab9";
+import { ACTIVE_STATES, els, state, toast, api, confirmDialog } from "./core.js?v=5b84b3e1eaca6ab9";
+import { friendlyJobActionError } from "./form.js?v=5b84b3e1eaca6ab9";
+import { refreshJobs, renderActiveJob } from "./jobs.js?v=5b84b3e1eaca6ab9";
 
 function jobById(jobId) {
   return state.jobs.find((item) => item.id === jobId);
@@ -147,11 +148,7 @@ export async function deleteJob(jobId) {
     if (state.activeJobId === jobId) {
       state.activeJobId = null;
       state.activeJob = null;
-      state.logKey = "";
-      state.logText = "";
-      state.logOffset = 0;
-      state.logTailOmittedBytes = 0;
-      state.logTrimmedChars = 0;
+      resetLogState();
       state.artifactKey = "";
       state.filesSignature = "";
     }
@@ -164,22 +161,39 @@ export async function deleteJob(jobId) {
   }
 }
 
+let clonePending = false;
 export async function cloneActiveJob() {
-  if (!state.activeJobId) return;
+  const source = state.activeJobId, button = els.cloneJob;
+  if (!source || clonePending) return;
+  clonePending = true;
   try {
-    const cloned = await api(`/api/jobs/${encodeURIComponent(state.activeJobId)}/clone`, {
+    const confirmed = await confirmDialog({ title: "复制并运行任务？", subtitle: "沿用原始输入和参数，创建一个新任务",
+      items: [`来源：${state.activeJob?.name || jobById(source)?.name || source}`, "沿用源任务的执行模式；非试运行任务将加入运行队列。"], confirmText: "复制并运行" });
+    if (!confirmed || source !== state.activeJobId) return;
+    button.disabled = true;
+    button.setAttribute("aria-busy", "true");
+    button.textContent = "正在复制…";
+    const cloned = await api(`/api/jobs/${encodeURIComponent(source)}/clone`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({}),
     });
-    state.activeJobId = cloned.id;
-    state.activeJob = cloned;
+    if (state.activeJobId === source) {
+      state.activeJobId = cloned.id;
+      state.activeJob = cloned;
+      resetLogState();
+      window.dispatchEvent(new CustomEvent("active-job-change"));
+    }
     state.jobsSignature = "";
     toast(`已复制任务：${cloned.name}`, "success");
     await refreshJobs();
-    window.dispatchEvent(new CustomEvent("active-job-change"));
   } catch (error) {
     toast(friendlyJobActionError(error.message), "error");
+  } finally {
+    clonePending = false;
+    button.removeAttribute("aria-busy");
+    button.textContent = "复制并运行";
+    button.disabled = !state.activeJobId;
   }
 }
 
@@ -209,6 +223,7 @@ export async function benchmarkActiveJob() {
     });
     state.activeJobId = benchmark.id;
     state.activeJob = benchmark;
+    resetLogState();
     state.jobsSignature = "";
     toast(`性能基准已入队：${benchmark.name}`, "success");
     await refreshJobs();
@@ -219,25 +234,155 @@ export async function benchmarkActiveJob() {
   }
 }
 
-export async function compareActiveJob() {
-  const otherJobId = els.compareJobSelect?.value;
-  const jobId = state.activeJobId;
-  if (!jobId || !otherJobId) return;
-  try {
-    const result = await api(`/api/jobs/${encodeURIComponent(jobId)}/diff/${encodeURIComponent(otherJobId)}`);
-    const items = result.differences.length
-      ? result.differences.slice(0, 30).map((item) => `${item.path}: ${JSON.stringify(item.left)} → ${JSON.stringify(item.right)}`)
-      : ["参数完全一致"];
-    if (result.differences.length > 30) items.push(`另有 ${result.differences.length - 30} 项未显示`);
-    await confirmDialog({
-      title: "任务参数差异",
-      subtitle: `${result.left.name} ↔ ${result.right.name}`,
-      items,
-      confirmText: "关闭",
-      cancelText: "关闭",
-      mark: "Δ",
-    });
-  } catch (error) {
-    toast(friendlyJobActionError(error.message), "error");
+export function bindJobComparison() {
+  const dialog = document.querySelector("#job-diff-dialog");
+  const part = name => dialog.querySelector(`#job-diff-${name}`);
+  const search = part("search"), rows = part("rows"), clear = part("clear");
+  const targetSearch = part("target-search"), targets = els.compareJobSelect, more = part("more");
+  let leftJob, pair, request, listing, timer, nextOffset, differences = [];
+
+  function showState(status, message = "", action = "") {
+    part("status").textContent = status;
+    part("message").textContent = message;
+    part("empty").hidden = !message;
+    part("reset").hidden = action !== "reset";
+    part("retry").hidden = action !== "retry";
   }
+
+  function setHeaders(left, right) {
+    const name = job => left.name && left.name === right.name ? `${job.name} · ${job.id}` : job.name || job.id;
+    part("left").textContent = name(left);
+    part("right").textContent = name(right);
+  }
+
+  function filterRows() {
+    const query = search.value.trim().toLowerCase();
+    search.disabled = !differences.length;
+    clear.hidden = !search.value;
+    let count = 0;
+    for (const { row, terms } of differences) {
+      row.hidden = !!query && !terms.some(term => term.includes(query));
+      if (!row.hidden) count++;
+    }
+    rows.closest(".diff-scroll").scrollTop = 0;
+    const total = differences.length;
+    showState(query ? `匹配 ${count} / ${total} 项` : `共 ${total} 项差异`,
+      !total ? "两个任务没有参数差异。" : !count ? "没有匹配的差异项，试试其他参数名或值。" : "", count || !total ? "" : "reset");
+  }
+
+  function makeRow({ path, left, right }) {
+    const row = document.createElement("tr");
+    const heading = document.createElement("th");
+    heading.scope = "row";
+    heading.textContent = path;
+    row.append(heading);
+    const terms = [path.toLowerCase()];
+    for (const value of [left, right]) {
+      const cell = row.insertCell();
+      cell.textContent = value === null ? "未设置" : JSON.stringify(value);
+      if (value === null) {
+        cell.className = "diff-unset";
+        cell.title = "该侧没有此参数，或值为 null";
+        terms.push("null");
+      }
+      terms.push(cell.textContent.toLowerCase());
+    }
+    return { row, terms };
+  }
+
+  async function load() {
+    request?.abort();
+    const controller = request = new AbortController();
+    const [left, right] = pair;
+    differences = [];
+    rows.replaceChildren();
+    search.value = "";
+    search.disabled = clear.hidden = true;
+    showState("正在比较…", "正在读取两个任务的参数。");
+    try {
+      const result = await api(`/api/jobs/${encodeURIComponent(left)}/diff/${encodeURIComponent(right)}`, { signal: controller.signal });
+      if (controller !== request || !dialog.open) return;
+      setHeaders(result.left, result.right);
+      differences = result.differences.map(makeRow);
+      const fragment = document.createDocumentFragment();
+      for (const { row } of differences) fragment.append(row);
+      rows.append(fragment);
+      filterRows();
+    } catch (error) {
+      if (controller === request && dialog.open) showState("比较失败", friendlyJobActionError(error.message), "retry");
+    }
+  }
+
+  function compareSelected() {
+    const option = targets.selectedOptions[0];
+    if (!option?.value) return;
+    pair = [leftJob.id, option.value];
+    setHeaders(leftJob, { id: option.value, name: option.text });
+    void load();
+  }
+
+  async function listTargets() {
+    const controller = listing = new AbortController();
+    const params = new URLSearchParams({ search: targetSearch.value.trim(), limit: "50", offset: String(nextOffset) });
+    more.disabled = true;
+    try {
+      const page = await api(`/api/jobs?${params}`, { signal: controller.signal });
+      if (controller !== listing || !dialog.open) return;
+      const seen = new Set(Array.from(targets.options, option => option.value));
+      for (const job of page.jobs) {
+        if (job.id !== leftJob.id && !seen.has(job.id)) targets.add(new Option(job.name || job.id, job.id));
+      }
+      nextOffset += page.jobs.length;
+      more.hidden = !page.has_more || !page.jobs.length;
+      more.textContent = "更多任务";
+      targets.disabled = !targets.length;
+      if (!pair && targets.length) compareSelected();
+      else if (!targets.length) showState("无对照任务", targetSearch.value.trim() ? "没有匹配的其他任务，请更换搜索词。" : "需要至少两个任务才能比较参数。");
+    } catch (error) {
+      if (controller !== listing || !dialog.open) return;
+      more.hidden = false;
+      more.textContent = "重试读取任务";
+      if (!pair) showState("任务列表读取失败", friendlyJobActionError(error.message));
+    } finally {
+      if (controller === listing) more.disabled = false;
+    }
+  }
+
+  function resetTargets(delay = 0) {
+    clearTimeout(timer);
+    listing?.abort(); request?.abort();
+    listing = request = pair = null;
+    nextOffset = 0;
+    targets.replaceChildren(); rows.replaceChildren(); differences = [];
+    search.value = "";
+    targets.disabled = more.hidden = search.disabled = clear.hidden = true;
+    setHeaders(leftJob, { id: "—" });
+    showState("正在查找对照任务…", "正在读取历史任务。");
+    timer = setTimeout(listTargets, delay);
+  }
+  more.addEventListener("click", listTargets);
+  targets.addEventListener("change", compareSelected);
+  targetSearch.addEventListener("input", () => resetTargets(200));
+  window.addEventListener("active-job-change", () => { if (dialog.open && leftJob.id !== state.activeJobId) dialog.close(); });
+  els.compareJob.addEventListener("click", () => {
+    const id = state.activeJobId;
+    if (!id || dialog.open) return;
+    leftJob = state.activeJob?.id === id ? state.activeJob : jobById(id) || { id };
+    targetSearch.value = "";
+    dialog.showModal();
+    resetTargets();
+  });
+  dialog.addEventListener("close", () => {
+    if (dialog.open) return; // A queued close event may follow a new comparison.
+    clearTimeout(timer);
+    listing?.abort(); request?.abort();
+    listing = request = null;
+    differences = [];
+    rows.replaceChildren();
+  });
+  search.addEventListener("input", filterRows);
+  function resetSearch() { search.value = ""; filterRows(); search.focus(); }
+  clear.addEventListener("click", resetSearch);
+  part("reset").addEventListener("click", resetSearch);
+  part("retry").addEventListener("click", () => { part("title").focus(); load(); });
 }

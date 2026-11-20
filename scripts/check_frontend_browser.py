@@ -123,7 +123,7 @@ def check_browser(artifact_dir: Path | None = None) -> None:
     with sync_playwright() as playwright:
         browser = playwright.chromium.launch(headless=True)
         try:
-            for width, height in ((1440, 1000), (768, 1024), (390, 844)):
+            for width, height in ((1440, 1000), (1280, 800)):
                 page = browser.new_page(viewport={"width": width, "height": height})
                 page.on("pageerror", lambda error: errors.append(str(error)))
                 page.route(f"{ORIGIN}/**", fixture)
@@ -164,39 +164,27 @@ def check_browser(artifact_dir: Path | None = None) -> None:
                 expect(page.locator("#agent-panel")).to_be_visible()
                 expect(page.locator("#manual-compose")).to_be_hidden()
                 page.locator('[data-workspace-view="compose"]').click()
-                if width > 1180:
-                    page.locator("#toggle-sidebar").click()
-                    expect(page.locator("#task-sidebar")).to_be_hidden()
-                    expect(page.locator("#toggle-sidebar")).to_have_attribute("aria-expanded", "false")
-                    assert not page.locator("#compose-view").evaluate("node => node.inert")
-                    page.locator("#toggle-sidebar").click()
-                    expect(page.locator("#task-sidebar")).to_be_visible()
-                    expect(page.locator("#toggle-sidebar")).to_have_attribute("aria-expanded", "true")
-                if width <= 1180:
-                    page.locator("#toggle-sidebar").click()
-                    expect(page.locator("#job-filter")).to_be_focused()
-                    expect(page.locator("#sidebar-backdrop")).to_be_visible()
-                    assert page.locator("#compose-view").evaluate("node => node.inert")
-                    page.locator("#job-name").focus()
-                    expect(page.locator("#job-filter")).to_be_focused()
-                    for _ in range(8):
-                        page.keyboard.press("Tab")
-                        assert not page.evaluate("document.activeElement.closest('#compose-view, #detail-view') !== null")
-                    page.locator("#sidebar-backdrop").click(position={"x": width - 12, "y": 12})
-                    expect(page.locator("#toggle-sidebar")).to_be_focused()
-                    expect(page.locator("#sidebar-backdrop")).to_be_hidden()
-                    assert not page.locator("#compose-view").evaluate("node => node.inert")
-                    page.locator("#toggle-sidebar").click()
-                    page.keyboard.press("Escape")
-                    expect(page.locator("#toggle-sidebar")).to_be_focused()
-                    expect(page.locator("#toggle-sidebar")).to_have_attribute("aria-expanded", "false")
-                    page.locator("#toggle-sidebar").click()
+                toggle = page.locator("#toggle-sidebar")
+                rail = page.locator("#task-sidebar")
+                expect(rail).to_be_visible()
+                expect(toggle).to_have_attribute("aria-expanded", "true")
+                toggle.focus()
+                page.keyboard.press("Enter")
+                expect(rail).to_be_hidden()
+                expect(toggle).to_be_focused()
+                expect(toggle).to_have_attribute("aria-expanded", "false")
+                assert rail.evaluate("node => node.inert")
+                page.locator('[data-workspace-view="detail"]').click()
+                expect(rail).to_be_hidden()
+                page.locator('[data-workspace-view="compose"]').click()
+                toggle.click()
+                expect(rail).to_be_visible()
+                expect(toggle).to_have_attribute("aria-expanded", "true")
+                assert not rail.evaluate("node => node.inert")
                 page.locator("#jobs-next").click()
                 expect(page.locator(".job-item")).to_have_count(10)
                 page.locator('[data-job-id="job-55"] [data-action="select"]').first.click()
                 expect(page.locator("#active-job-title")).to_have_text("合成测试任务 55")
-                if width <= 1180:
-                    page.locator("#toggle-sidebar").click()
                 page.locator("#jobs-previous").click()
                 expect(page.locator(".job-item")).to_have_count(50)
                 expect(page.locator("#active-job-title")).to_have_text("合成测试任务 55")
@@ -210,10 +198,12 @@ def check_browser(artifact_dir: Path | None = None) -> None:
                 expect(page.locator(".job-item")).to_have_count(1)
                 expect(page.locator(".job-item")).to_have_attribute("data-job-id", "job-57")
                 expect(page.locator("#active-job-title")).to_have_text("合成测试任务 55")
-                page.locator("#job-filter").fill("")
+                page.locator("#job-filter").fill("no-matching-run")
+                expect(page.locator(".empty-jobs strong")).to_have_text("没有匹配任务")
+                page.get_by_role("button", name="清除搜索词").click()
+                expect(page.locator("#job-filter")).to_have_value("")
+                expect(page.locator("#job-filter")).to_be_focused()
                 expect(page.locator(".job-item")).to_have_count(50)
-                if width <= 1180:
-                    page.locator("#toggle-sidebar").click()
                 page.locator("#analyze-job").focus()
                 expect(page.locator("#analyze-job")).to_be_focused()
                 duplicate_result = page.evaluate(
@@ -494,7 +484,7 @@ def check_browser(artifact_dir: Path | None = None) -> None:
         finally:
             browser.close()
     assert any("search=job-57" in url for _, url in requests)
-    print("Three workspace views preserve drafts/files; mobile sidebar focus/backdrop, history/report navigation, SSE and dialogs passed at 3 viewports; delayed boot, same-step artifacts and log notices passed.")
+    print("Three workspace views preserve drafts/files; desktop sidebar collapse/focus, history/report navigation, SSE and dialogs passed at both desktop widths; delayed boot, same-step artifacts and log notices passed.")
 
 
 if __name__ == "__main__":

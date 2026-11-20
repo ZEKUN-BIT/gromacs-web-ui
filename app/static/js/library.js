@@ -1,5 +1,5 @@
-import { els, state, api, toast, confirmDialog, showWorkspaceView, FILE_FIELD_NAMES } from "./core.js?v=b71b8f0b4a932c44";
-import { formObject, toggleSections, refreshPreview, renderWorkflowGuide, addLigandRow, renderWaterModelOptions } from "./form.js?v=b71b8f0b4a932c44";
+import { els, state, api, toast, confirmDialog, showWorkspaceView, FILE_FIELD_NAMES, WORKFLOW_LABELS } from "./core.js?v=5b84b3e1eaca6ab9";
+import { formObject, toggleSections, refreshPreview, renderWorkflowGuide, addLigandRow, renderWaterModelOptions } from "./form.js?v=5b84b3e1eaca6ab9";
 
 export const product = { templates: [], projects: [], defaults: {}, available: false };
 let productGeneration = 0;
@@ -51,9 +51,19 @@ function renderTemplates(selectedTemplate) {
 function chosenTemplate() { return product.templates.find(item => item.id === document.querySelector("#template-select").value); }
 function showTemplate() {
   const item = chosenTemplate();
-  document.querySelector("#template-details").textContent = item
-    ? [item.description, `适用范围：${item.applicability || "未填写，使用前请确认"}`, `来源：${item.source || "未填写"}`, `工作流：${item.params.workflow}`].filter(Boolean).join("\n")
-    : "模板保存在本机。相同名称再次保存会创建一个新版本。";
+  document.querySelector("#template-details").hidden = !item;
+  document.querySelector("#template-empty").hidden = Boolean(item);
+  if (item) {
+    const workflow = item.params.workflow;
+    document.querySelector("#template-card-title").textContent = item.name;
+    document.querySelector("#template-workflow").textContent = `工作流：${WORKFLOW_LABELS[workflow] || workflow || "未注明"}`;
+    document.querySelector("#template-revision").textContent = `v${item.revision}`;
+    document.querySelector("#template-scope").textContent = item.applicability || "未填写，应用前请确认适用体系。";
+    document.querySelector("#template-origin").textContent = item.source || "未注明";
+    const note = document.querySelector("#template-note");
+    note.textContent = item.description || "";
+    note.hidden = document.querySelector("#template-note-label").hidden = !item.description;
+  }
   for (const id of ["apply-template", "export-template", "delete-template"]) document.getElementById(id).disabled = !item;
 }
 

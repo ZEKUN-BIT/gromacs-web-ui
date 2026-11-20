@@ -20,7 +20,7 @@ def check_browser(artifact_dir: Path | None = None) -> None:
     with sync_playwright() as playwright:
         browser = playwright.chromium.launch(headless=True)
         try:
-            for width, height in ((1440, 1000), (390, 844)):
+            for width, height in ((1440, 1000), (1280, 800)):
                 _check_viewport(browser, width, height, artifact_dir)
         finally:
             browser.close()
@@ -212,8 +212,6 @@ def _check_viewport(browser, width: int, height: int, artifact_dir: Path | None)
         expect(page.locator("#active-job-title")).to_have_text(MALICIOUS_NAME)
         page.locator('[data-detail-tab="files"]').click()
         expect(page.locator('#output-files a[title="下载 nvt.trr"]')).to_have_count(1)
-        if width <= 1180:
-            page.locator("#toggle-sidebar").click()
         page.locator("#open-storage").click()
         expect(page.locator(".storage-job")).to_have_count(2)
         expect(page.locator('[name="storage-mode"][value="intermediates"]')).to_be_checked()
@@ -305,5 +303,5 @@ def _check_viewport(browser, width: int, height: int, artifact_dir: Path | None)
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--artifact-dir", type=Path, help="Optional directory for desktop and mobile screenshots")
+    parser.add_argument("--artifact-dir", type=Path, help="Optional directory for desktop screenshots")
     check_browser(parser.parse_args().artifact_dir)

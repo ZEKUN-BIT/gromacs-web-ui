@@ -21,6 +21,10 @@ CREATE INDEX IF NOT EXISTS jobs_status_created_idx ON jobs(status, created_at);
 CREATE INDEX IF NOT EXISTS jobs_pending_action_idx ON jobs(created_at) WHERE desired_action IS NOT NULL;
 CREATE INDEX IF NOT EXISTS jobs_pinned_created_id_idx
     ON jobs(coalesce(json_extract(meta_json,'$.pinned'),0) DESC,created_at DESC,id DESC);
+CREATE TABLE IF NOT EXISTS job_plans (
+    job_id TEXT PRIMARY KEY REFERENCES jobs(id) ON DELETE CASCADE,
+    commands TEXT NOT NULL CHECK(json_valid(commands))
+);
 CREATE TABLE IF NOT EXISTS jobs_revision (
     singleton INTEGER PRIMARY KEY CHECK(singleton=1),
     revision INTEGER NOT NULL

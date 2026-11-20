@@ -1,6 +1,6 @@
 # GROMACS Console
 
-在浏览器里准备体系、运行 GROMACS、查看模拟结果。支持 Linux，也可以通过 Windows 安装器在 WSL2 中运行。
+在桌面浏览器里准备体系、运行 GROMACS、查看模拟结果。支持 Linux，也可以通过 Windows 安装器在 WSL2 中运行。
 
 上传文件、设置参数后，可以先看完整命令，再提交任务。模拟在自己的电脑上运行，日志和结果按任务保存。
 
@@ -8,6 +8,7 @@
 
 - 运行蛋白、蛋白–配体及多配体模拟，也支持能量最小化和已有 TPR。
 - 管理任务队列，查看实时日志，取消任务或从 checkpoint 续跑，搜索历史结果。
+- 在任务详情逐帧查看 XTC / TRR 轨迹，或从结构预览导出 PNG。
 - 处理周期边界、居中和拟合，计算 RMSD、RMSF、Rg、氢键、PCA 等指标，导出图表与原始数据。
 - 对已有结果继续分析，查看构象变化、配体接触，比较不同体系或突变体。
 - 通过“空间管理”查看任务占用，预览并清理中间文件，或确认删除旧任务及结果。
@@ -23,13 +24,13 @@
 
 从[最新正式版本](https://github.com/ZEKUN-BIT/gromacs-web-ui/releases/latest)下载名称以 `windows-x64-setup.exe` 结尾的安装器，安装后双击桌面的 **GROMACS Console**。也可在[全部版本](https://github.com/ZEKUN-BIT/gromacs-web-ui/releases)查看历史安装包、修改说明和 SHA-256 校验文件。
 
-首次启动会配置或复用 Ubuntu 24.04 WSL2，并安装 GROMACS、Open Babel、ACPYPE 和 DSSP。兼容的 NVIDIA 显卡可使用 CUDA 加速；其他机器使用 CPU。支持 x64 Windows 10/11，PowerShell 7 可选。
+首次启动会配置或复用 Ubuntu 24.04 WSL2，并安装预编译 GROMACS 2026.3、Open Babel、ACPYPE 和 DSSP。兼容的 NVIDIA 显卡可使用 CUDA 加速；其他机器使用 CPU。支持 x64 Windows 10/11，PowerShell 7 可选。
 
 首次配置需要联网，建议预留至少 8 GB 空间，模拟轨迹还会额外占用磁盘。安装、更新和常见报错见 [Windows 安装指南](docs/WINDOWS.md)。
 
 ### Linux
 
-需要 Python 3.11+ 和可用的 GROMACS；CI 验证 Python 3.11、3.12。安装器会按锁文件校验并安装依赖，普通安装不包含测试、检查或浏览器开发工具。进入项目目录后运行：
+需要 Python 3.11+ 和可用的 GROMACS（可配置为 2026.4）；CI 验证 Python 3.11、3.12。安装器会按锁文件校验并安装依赖，普通安装不包含测试、检查或浏览器开发工具。进入项目目录后运行：
 
 ```bash
 chmod +x setup.sh run.sh

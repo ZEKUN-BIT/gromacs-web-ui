@@ -11,24 +11,24 @@ import {
   toast,
   api,
   replaySwapAnimation,
-} from "./core.js?v=b71b8f0b4a932c44";
+} from "./core.js?v=5b84b3e1eaca6ab9";
 
 import {
   hasFile, fileNameEndsWith, fileParamEndsWith, uploadedNames, selectedUploadFiles,
-} from "./form-files.js?v=b71b8f0b4a932c44";
+} from "./form-files.js?v=5b84b3e1eaca6ab9";
 import {
   ligandCards, addLigandRow, ensureDefaultLigandRow, readLigandPayload, refreshRowMode, setLigandCardField,
   removeLigandRow as removeLigandEditorRow, detectLigandsFromPdb as detectPdbLigands,
-} from "./form-ligands.js?v=b71b8f0b4a932c44";
+} from "./form-ligands.js?v=5b84b3e1eaca6ab9";
 import {
   setMdpPanelExpanded, updateMdpPanelState, refreshProtocolPreview, renderMdpPreview,
-} from "./form-parameters.js?v=b71b8f0b4a932c44";
+} from "./form-parameters.js?v=5b84b3e1eaca6ab9";
 import {
   renderForceFieldSource, renderWaterModelOptions, refreshHealth, updateResourceAdvice,
   applyHardwareRecommendation as applyHardwareDefaults,
   renderReadiness,
-} from "./form-environment.js?v=b71b8f0b4a932c44";
-import { apiSubmissionIssues, clearSubmissionIssues, showSubmissionIssues } from "./submission-validation.js?v=b71b8f0b4a932c44";
+} from "./form-environment.js?v=5b84b3e1eaca6ab9";
+import { apiSubmissionIssues, clearSubmissionIssues, showSubmissionIssues } from "./submission-validation.js?v=5b84b3e1eaca6ab9";
 
 export {
   hasFile, fileNameEndsWith, fileParamEndsWith, uploadedNames, selectedUploadFiles,
@@ -358,6 +358,13 @@ function willUseAcpype(data) {
 
 export function requiredSubmitIssues(data) {
   const issues = staleUploadedFileIssues(data);
+  const names = new Set();
+  for (const name of data.files || []) {
+    // eslint-disable-next-line no-control-regex -- Match control bytes replaced by safe_filename on the server.
+    const key = name.split(/[\\/]/).pop().replace(/[\x00-\x1f<>:"|?*]+/gu, "_").replace(/\s+/gu, " ").replace(/^[ .]+|[ .]+$/gu, "").toLowerCase();
+    if (names.has(key)) { issues.push({ field: "files", message: `输入文件重名：${name}。请改名并重新选择文件。` }); break; }
+    names.add(key);
+  }
   if (!data.dry_run && Number(data.maxwarn || 0) > 0) {
     issues.push({ field: "maxwarn", message: "真实模拟要求 maxwarn = 0。请解决 grompp 警告，不要直接跳过。" });
   }
@@ -521,8 +528,6 @@ export function setSubmitReady(isReady, { pending = false } = {}) {
   if (els.submitJob) els.submitJob.dataset.previewState = pending ? "pending" : isReady ? "ready" : "error";
   if (!els.submitJob || els.submitJob.dataset.busy === "true") return;
   els.submitJob.disabled = !isReady;
-  // Keep the transient label within the normal label's width. A longer label
-  // can wrap the mobile header during blur and move the next click target.
   updateText(els.submitJob.querySelector(".button-label"), pending ? "预览中…" : isReady ? "启动模拟" : "补全输入");
   els.submitJob.title = pending ? "正在校验本次参数与文件，请稍候" : isReady ? "提交这个流程" : "先补齐这个流程需要的文件或参数";
 }

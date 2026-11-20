@@ -25,6 +25,3 @@
 .ligand-card[data-mode] label.submission-field-revealed { display: flex; flex-direction: column; }
 [aria-invalid="true"] { border-color: var(--red); }
 [aria-invalid="true"]:focus { outline-color: var(--red); }
-@media (max-width: 700px) {
-  .sync-notice { align-items: flex-start; flex-direction: column; gap: 8px; }
-}

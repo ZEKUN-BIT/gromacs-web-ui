@@ -8,6 +8,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import shutil
 import socket
 import subprocess
@@ -161,7 +162,7 @@ def check(artifact_dir: Path, gmx: str) -> None:
                 else:
                     raise AssertionError("Isolated API did not become ready")
                 with sync_playwright() as playwright:
-                    browser = playwright.chromium.launch(headless=True)
+                    browser = playwright.chromium.launch(headless=True, args=["--enable-unsafe-swiftshader"])
                     context = browser.new_context(viewport={"width": 1440, "height": 1000}, locale="zh-CN", accept_downloads=True)
                     page = context.new_page()
                     errors, external, requests = [], [], []
@@ -222,6 +223,42 @@ def check(artifact_dir: Path, gmx: str) -> None:
                         coordinates.value.save_as(gro)
                         assert int(gro.read_text().splitlines()[1]) == 64
                         page.screenshot(path=str(artifact_dir / "completed.png"))
+                        assert not any("/trajectory/" in url for url in requests), "Do not index trajectories until requested"
+                        page.locator('[data-detail-tab="trajectory"]').click()
+                        expect(page.locator("#traj-file")).to_have_value("browser.xtc")
+                        # A corresponding GRO is portable across all GROMACS/TPR versions.
+                        expect(page.locator("#traj-ref")).to_have_value("browser.gro")
+                        page.locator("#traj-load").click()
+                        stamp = page.locator("#traj-stamp")
+                        expect(stamp).to_contain_text("第 1 / 101 帧", timeout=30000)
+                        canvas = page.locator("#traj-canvas canvas")
+                        read_scene = "c => { const v=c._3dmol_viewer; v.render(); return [v.getModel().selectedAtoms({})[0].x, v.getView(), v.pngURI()]; }"
+                        first = canvas.evaluate(read_scene)
+                        page.locator("#traj-next").click()
+                        expect(stamp).to_contain_text("第 2 / 101 帧")
+                        page.locator("#traj-prev").click()
+                        expect(stamp).to_contain_text("第 1 / 101 帧")
+                        page.locator("#traj-number").fill("101")
+                        page.locator("#traj-number").press("Enter")
+                        expect(stamp).to_have_text("第 101 / 101 帧 · 1 ps")
+                        last = canvas.evaluate(read_scene)
+                        assert first[0] != last[0] and first[2] != last[2] and first[1] == last[1], (
+                            "Coordinates and pixels must move, not the camera"
+                        )
+                        expect(page.locator("#traj-next")).to_be_disabled()
+                        page.locator("#traj-play").click()  # replay from the end
+                        expect(page.locator("#traj-play")).to_have_text("暂停")
+                        expect(page.locator("#traj-number")).to_have_value(re.compile(r"^(?:[3-9]|[1-9][0-9]|100)$"))
+                        page.locator("#traj-play").click()
+                        paused = stamp.inner_text()
+                        page.wait_for_timeout(400)
+                        assert stamp.inner_text() == paused
+                        page.locator("#traj-seek").focus()
+                        page.locator("#traj-seek").press("Home")
+                        expect(stamp).to_contain_text("第 1 / 101 帧")
+                        page.screenshot(path=str(artifact_dir / "trajectory.png"))
+                        page.locator('[data-detail-tab="overview"]').click()
+                        expect(page.locator("#traj-player")).to_be_hidden()
                         assert not errors, errors
                         assert not external, external
                         report = {
@@ -237,7 +274,7 @@ def check(artifact_dir: Path, gmx: str) -> None:
                         }
                         (artifact_dir / "live-browser.json").write_text(json.dumps(report, indent=2, ensure_ascii=False))
                         print(
-                            f"PASS real upload, preview, confirmation, worker, GROMACS, SSE, log and result ZIP; cold/warm DOM ready {cold['navigationMs']:.0f}/{warm['navigationMs']:.0f} ms"
+                            f"PASS real upload, preview, confirmation, worker, GROMACS, SSE, result ZIP and 101-frame 3D playback; cold/warm DOM ready {cold['navigationMs']:.0f}/{warm['navigationMs']:.0f} ms"
                         )
                     finally:
                         context.close()

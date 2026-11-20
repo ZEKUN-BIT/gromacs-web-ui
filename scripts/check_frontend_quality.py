@@ -141,7 +141,7 @@ def run(artifact_dir: Path, update: bool, visual: bool = True) -> None:
         with sync_playwright() as playwright:
             browser = playwright.chromium.launch(headless=True)
             try:
-                for width, height, scheme in ((1440, 1000, "light"), (390, 844, "light"), (1440, 1000, "dark"), (390, 844, "dark")):
+                for width, height, scheme in ((1440, 1000, "light"), (1440, 1000, "dark")):
                     check_viewport(
                         browser,
                         width,

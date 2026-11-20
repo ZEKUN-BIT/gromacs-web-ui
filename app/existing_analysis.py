@@ -304,7 +304,7 @@ def _create_existing_analysis(
     name = request.name.strip() or f"{source['name']} analysis"
     disk_budget = analysis_disk_budget(selected, request, len(research_index.encode("utf-8")) if research_index else 0)
     require_analysis_disk_space(store.jobs_root, disk_budget)
-    created = store.create(name, params, uploaded, steps)
+    created = store.create(name, params, uploaded, steps, dry_run=request.dry_run)
     target = store.job_dir(created["id"])
     with store.job_files_lock(created["id"]):
         # Cancellation/deletion can win the brief gap after create(). Check

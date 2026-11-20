@@ -55,7 +55,7 @@ def write_experiment_manifest(meta: dict, *, prepared_hashes: dict[str, dict] | 
     manifest = {
         "schema_version": 1,
         "generated_at": utc_now(),
-        "job": {"id": meta.get("id"), "name": meta.get("name"), "workflow": meta.get("workflow")},
+        "job": {"id": meta.get("id"), "name": meta.get("name"), "workflow": meta.get("workflow"), "dry_run": meta.get("dry_run")},
         "gromacs": detect_gromacs(gmx_bin),
         "commands": meta.get("commands") or [],
         "parameters": meta.get("params") or {},

@@ -12,6 +12,7 @@ from playwright.sync_api import expect, sync_playwright
 
 def run():
     control = {"product_failed": True, "file_reads": 0}
+    held = []
 
     def configure(page):
         def product(route):
@@ -28,6 +29,9 @@ def run():
             control["file_reads"] += 1
             limit, offset = int(query["limit"][0]), int(query.get("offset", [0])[0])
             search = query.get("search", [""])[0].casefold()
+            if search == "slow-query":
+                held.append(route)
+                return
             items = [{"path": f"result-{number:04}.xtc", "size": control["file_reads"]} for number in range(2505)]
             items = [item for item in items if search in item["path"].casefold()]
             route.fulfill(
@@ -46,6 +50,9 @@ def run():
 
         page.route("**/api/product", product)
         page.route("**/api/jobs/product-1/files*", files)
+        page.route("**/api/jobs/product-2/files*", lambda route: route.fulfill(json={
+            "files": [{"path": "md.log", "size": 10}, {"path": "run/md.xtc", "size": 20}], "truncated": True,
+        }))
 
     def inspect(page):
         expect(page.locator("#retry-product-initialization")).to_be_visible()
@@ -89,12 +96,38 @@ def run():
         page.locator('[data-detail-tab="files"]').click()
         expect(page.locator("#file-count")).to_have_text("2505 个")
         expect(page.locator("#output-files .file-row")).to_have_count(100)
+        page.locator('.file-group[data-group="trajectory"] > summary').click()
+        page.locator("#output-files").evaluate("el => el.scrollTop = el.scrollHeight")
+        assert page.locator("#output-files").evaluate("el => el.scrollTop > 0")
+        expect(page.locator("#file-filter")).to_be_in_viewport()
+        expect(page.locator("#files-next")).to_be_in_viewport()
         page.locator("#files-next").click()
         expect(page.locator("#files-page-status")).to_have_text("101–200 / 2505")
-        page.locator("#file-filter").fill("RESULT-2504")
+        assert page.locator("#output-files").evaluate("el => el.scrollTop === 0")
+        search = page.get_by_role("searchbox", name="搜索输出文件")
+        search.fill("RESULT-2504")
         expect(page.locator("#output-files .file-row")).to_have_count(1)
-        expect(page.locator("#output-files")).to_contain_text("result-2504.xtc")
-        page.locator("#file-filter").fill("")
+        expect(page.get_by_role("link", name="result-2504.xtc")).to_be_visible()
+        expect(page.locator("#file-count")).to_have_text("1 个匹配")
+        expect(page.locator("#file-pagination")).to_be_hidden()
+        search.fill("missing.xtc")
+        clear_empty = page.get_by_role("button", name="清除筛选", exact=True)
+        expect(page.locator("#output-files")).to_contain_text("没有匹配的输出文件")
+        expect(page.locator("#file-count")).to_have_text("0 个匹配")
+        clear_empty.click()
+        expect(search).to_be_focused()
+        expect(page.locator("#files-page-status")).to_have_text("1–100 / 2505")
+
+        # Both edits happen in one event turn, before the debounce timer fires.
+        page.locator("#files-next").click()
+        expect(page.locator("#files-page-status")).to_have_text("101–200 / 2505")
+        search.evaluate("""el => { el.value = 'discard'; el.dispatchEvent(new Event('input')); document.querySelector('#clear-file-filter').click(); }""")
+        expect(page.locator("#files-page-status")).to_have_text("1–100 / 2505")
+        with page.expect_request(lambda request: "search=slow-query" in request.url):
+            search.fill("slow-query")
+        page.get_by_role("button", name="清除文件搜索").click()
+        expect(page.locator("#file-count")).to_have_text("2505 个")
+        held.pop().fulfill(json={"files": [], "total": 0, "offset": 0, "limit": 100, "has_more": False})
         expect(page.locator("#output-files .file-row")).to_have_count(100)
         group = page.locator('.file-group[data-group="trajectory"]')
         group.evaluate("el => el.open = true")
@@ -108,6 +141,22 @@ def run():
             version,
         )
         expect(group).to_have_attribute("open", "")
+        search.fill("2504")
+        expect(page.locator("#file-count")).to_have_text("1 个匹配")
+        page.locator('[data-job-id="product-2"] .job-select').click()
+        expect(search).to_have_value("")
+        expect(page.locator("#file-count")).to_have_text("2+ 个")
+        expect(page.locator("#file-pagination")).to_be_hidden()
+        search.fill("run/")
+        expect(page.get_by_role("link", name="run/md.xtc")).to_be_visible()
+        search.fill("missing")
+        expect(page.locator("#output-files")).to_contain_text("仅搜索已载入的文件")
+        clear_empty.click()
+        expect(search).to_be_focused()
+        expect(page.locator("#file-count")).to_have_text("2+ 个")
+        page.locator('[data-job-id="product-1"] .job-select').click()
+        expect(search).to_have_value("2504")
+        expect(page.get_by_role("link", name="result-2504.xtc")).to_be_visible()
         expect(page).to_have_url(re.compile(r"[?&]tab=files"))
         page.locator('[data-detail-tab="plots"]').click()
         expect(page).to_have_url(re.compile(r"[?&]tab=plots"))

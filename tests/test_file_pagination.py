@@ -54,3 +54,24 @@ def test_page_api_validates_options_and_refreshes_active_files(tmp_path, monkeyp
     page = client.get(url + "?limit=1&offset=1").json()
     assert page["total"] == 2 and page["files"][0]["path"] == "two.xtc"
     assert client.get(url).json()["truncated"] is False
+
+
+def test_structure_filter_prioritizes_results_before_paginating(tmp_path, monkeypatch):
+    meta = {"workdir": str(tmp_path), "status": "completed"}
+    monkeypatch.setattr(main, "STORE", SimpleNamespace(get=lambda _: meta))
+    for number in range(220):
+        (tmp_path / f"a{number:03d}.pdb").touch()
+        (tmp_path / f"a{number:03d}.pdb.bak").touch()
+    (tmp_path / "z").mkdir()
+    (tmp_path / "z/final.PDB").touch()
+    (tmp_path / "z/CONFOUT.Gro").touch()
+    client = TestClient(main.app)
+    url = "/api/jobs/paged/files"
+    assert client.get(url + "?limit=200").json()["total"] == 442
+    page = client.get(url + "?structures_only=true").json()
+    names = [f["path"] for f in page["files"]]
+    assert page["total"] == 222 and page["has_more"] and len(names) == 200
+    assert names[:2] == ["z/CONFOUT.Gro", "z/final.PDB"]
+    assert not any(name.endswith(".bak") for name in names)
+    assert client.get(url + "?structures_only=true&search=FINAL").json()["total"] == 1
+    assert client.get(url + "?limit=200").json()["total"] == 442

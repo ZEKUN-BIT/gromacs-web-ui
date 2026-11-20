@@ -2,23 +2,22 @@
 <html lang="zh-CN">
   <head>
     <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta name="description" content="本地 GROMACS 分子动力学工作台：配置、提交、查看模拟任务" />
     <link rel="icon" type="image/svg+xml" href="/static/gromacs-console.svg" />
     <title>GROMACS 控制台</title>
-    <link rel="stylesheet" href="/static/design-tokens.css?v=b71b8f0b4a932c44" />
-    <link rel="stylesheet" href="/static/styles.css?v=b71b8f0b4a932c44" />
-    <link rel="stylesheet" href="/static/icons.css?v=b71b8f0b4a932c44" />
-    <link rel="stylesheet" href="/static/desktop.css?v=b71b8f0b4a932c44" />
-    <link rel="stylesheet" href="/static/product.css?v=b71b8f0b4a932c44" />
-    <link rel="stylesheet" href="/static/agent.css?v=b71b8f0b4a932c44" />
-    <link rel="stylesheet" href="/static/workflow-feedback.css?v=b71b8f0b4a932c44" />
-    <link rel="stylesheet" href="/static/structure.css?v=b71b8f0b4a932c44" />
+    <link rel="stylesheet" href="/static/design-tokens.css?v=5b84b3e1eaca6ab9" />
+    <link rel="stylesheet" href="/static/styles.css?v=5b84b3e1eaca6ab9" />
+    <link rel="stylesheet" href="/static/icons.css?v=5b84b3e1eaca6ab9" />
+    <link rel="stylesheet" href="/static/desktop.css?v=5b84b3e1eaca6ab9" />
+    <link rel="stylesheet" href="/static/product.css?v=5b84b3e1eaca6ab9" />
+    <link rel="stylesheet" href="/static/agent.css?v=5b84b3e1eaca6ab9" />
+    <link rel="stylesheet" href="/static/workflow-feedback.css?v=5b84b3e1eaca6ab9" />
+    <link rel="stylesheet" href="/static/structure.css?v=5b84b3e1eaca6ab9" />
   </head>
   <body>
     <header class="workspace-bar">
       <div class="workspace-brand">
-        <button id="toggle-sidebar" class="tool-button icon-only" data-ui-icon="menu" type="button" aria-label="展开任务列表" title="展开任务列表" aria-controls="task-sidebar" aria-expanded="false">任务列表</button>
+        <button id="toggle-sidebar" class="tool-button icon-only" data-ui-icon="menu" type="button" aria-label="收起任务列表" title="收起任务列表" aria-controls="task-sidebar" aria-expanded="true">任务列表</button>
         <div class="project-switch">
           <div class="mark" data-ui-icon="atom" role="img" aria-label="GROMACS 分子动力学工作台" title="GROMACS 分子动力学工作台"></div>
           <select id="project-filter" aria-label="按研究项目筛选"><option value="">全部项目</option></select>
@@ -112,7 +111,6 @@
         </div>
       </aside>
 
-      <button id="sidebar-backdrop" class="sidebar-backdrop" type="button" aria-label="关闭任务列表" tabindex="-1"></button>
       <main class="workspace">
         <div id="task-sync-notice" class="sync-notice" hidden>
           <span id="task-sync-message" role="status" aria-live="polite"></span>
@@ -173,8 +171,8 @@
           <section id="manual-compose" class="run-composer" aria-labelledby="manual-compose-title">
             <div class="section-head">
               <div>
-                <h2 id="manual-compose-title" data-ui-icon="file">新建模拟任务</h2>
-                <p class="section-intro">从一个分子体系，开始下一次探索。</p>
+                <h2 id="manual-compose-title" data-ui-icon="flask">新建模拟任务</h2>
+                <p class="section-intro">GROMACS 分子动力学工作台 · 配置体系与运行协议</p>
                 <div class="draft-bar">
                   <span id="draft-status" role="status"></span>
                   <button id="clear-draft" class="tool-button icon-only" data-ui-icon="trash" type="button" title="删除已保存草稿" aria-label="删除已保存草稿">删除已保存草稿</button>
@@ -192,13 +190,16 @@
                 <div class="structure-head">
                   <span data-ui-icon="atom">输入结构</span>
                   <select data-structure-file aria-label="选择输入结构文件" disabled><option value="">暂无结构文件</option></select>
+                  <button type="button" class="tool-button structure-export" data-structure-export aria-label="导出输入结构 PNG" title="按当前视角导出 PNG（长边 4096 像素）" disabled>导出 PNG</button>
                   <button type="button" class="tool-button icon-only" data-structure-add data-ui-icon="upload" aria-label="选择输入文件" title="选择输入文件">选择文件</button>
                 </div>
                 <div class="structure-stage">
                   <div class="structure-canvas" data-structure-canvas role="img" aria-label="输入结构三维显示区" tabindex="-1"></div>
                   <div class="structure-overlay" data-structure-overlay>
+                    <svg class="structure-illustration" viewBox="0 0 280 196" aria-hidden="true" focusable="false"><use href="/static/illustrations/workbench.svg#simulation-cell"></use></svg>
                     <span class="structure-empty-mark" data-ui-icon="atom" aria-hidden="true"></span>
-                    <p data-structure-message role="status">添加 PDB 或 GRO 文件，预览蛋白结构</p>
+                    <strong class="structure-prompt">预览分子结构</strong>
+                    <p data-structure-message role="status">添加 PDB 或 GRO 文件，查看三维构象。</p>
                     <button type="button" class="primary-action compact" data-structure-add data-structure-empty-add>选择结构文件</button>
                     <button type="button" class="tool-button" data-structure-retry hidden>重试预览</button>
                   </div>
@@ -818,7 +819,7 @@
           <div class="detail-header">
             <div class="detail-title-block"><h2 id="active-job-title" class="detail-title" data-ui-icon="file">未选择任务</h2><p class="sync-summary"><span id="task-sync-state">正在连接实时更新…</span><time id="task-sync-time" hidden></time></p></div>
             <div class="detail-analysis-actions">
-              <button id="clone-job" class="tool-button" data-ui-icon="copy" type="button" title="复制输入和参数并创建新任务">复制任务</button>
+              <button id="clone-job" class="tool-button" data-ui-icon="copy" type="button" title="复用原始输入与执行模式，创建新任务" disabled>复制并运行</button>
               <a id="download-result-bundle" class="tool-button" href="#" download hidden>导出结果摘要包</a>
               <button id="analyze-job" class="tool-button" data-ui-icon="chart" type="button" hidden>继续分析</button>
               <button id="analysis-source-job" class="tool-button" type="button" hidden></button>
@@ -829,12 +830,15 @@
           <section id="detail-structure" class="structure-viewer" data-state="empty" aria-label="任务结构三维预览">
                 <div class="structure-head">
                   <span data-ui-icon="atom">任务结构</span>
+                  <span class="structure-empty-note" role="status">暂无 PDB/GRO 文件，生成后可在这里预览。</span>
                   <select data-structure-file aria-label="选择任务结构文件" disabled><option value="">暂无结构文件</option></select>
+                  <button type="button" class="tool-button structure-export" data-structure-export aria-label="导出任务结构 PNG" title="按当前视角导出 PNG（长边 4096 像素）" disabled>导出 PNG</button>
                   <button type="button" class="tool-button icon-only" data-structure-refresh data-ui-icon="retry" aria-label="刷新任务结构" title="刷新任务结构">刷新结构</button>
                 </div>
                 <div class="structure-stage">
                   <div class="structure-canvas" data-structure-canvas role="img" aria-label="任务结构三维显示区" tabindex="-1"></div>
                   <div class="structure-overlay" data-structure-overlay>
+                    <svg class="structure-illustration" viewBox="0 0 280 196" aria-hidden="true" focusable="false"><use href="/static/illustrations/workbench.svg#simulation-cell"></use></svg>
                     <span class="structure-empty-mark" data-ui-icon="atom" aria-hidden="true"></span>
                     <p data-structure-message role="status">选择任务后查看结构</p>
                     <button type="button" class="tool-button" data-structure-retry hidden>重试预览</button>
@@ -856,10 +860,32 @@
             <button type="button" data-detail-tab="overview" data-ui-icon="activity" aria-pressed="true">运行概览</button>
             <button type="button" data-detail-tab="quality" data-ui-icon="shield" aria-pressed="false">质量检查</button>
             <button type="button" data-detail-tab="plots" data-ui-icon="chart" aria-pressed="false">分析图谱</button>
+            <button type="button" data-detail-tab="trajectory" data-ui-icon="play" aria-pressed="false">轨迹动画</button>
             <button type="button" data-detail-tab="research" data-ui-icon="microscope" aria-pressed="false">研究分析</button>
             <button type="button" data-detail-tab="files" data-ui-icon="folder" aria-pressed="false">输出文件</button>
           </nav>
               <div class="detail-panel-body">
+          <section id="trajectory-panel" data-detail-panel="trajectory" aria-labelledby="trajectory-title" hidden>
+            <div class="panel-head"><h3 id="trajectory-title">轨迹动画</h3><button class="tool-button" type="button" id="traj-refresh">刷新文件</button></div>
+            <p class="field-hint">选择轨迹和原子顺序一致的拓扑，查看每个已保存帧。不插值。丝带视图按周期盒拼合分子；原子球视图保留原始坐标。</p>
+            <div class="trajectory-inputs">
+              <label>轨迹（XTC / TRR）<select id="traj-file" disabled></select></label>
+              <label>拓扑（TPR / GRO / PDB）<select id="traj-ref" disabled></select></label>
+              <label>显示方式<select id="traj-selection"><option value="molecular">蛋白丝带 · PET 球棍（隐藏水）</option><option value="auto">原子球 · 自动（优先去水）</option><option value="dry">原子球 · 隐藏水</option><option value="backbone">原子球 · 仅 Cα / P 原子</option><option value="all">原子球 · 全部原子（含水）</option></select></label>
+              <button id="traj-load" type="button" class="tool-button" disabled>加载动画</button>
+            </div>
+            <p id="traj-status" role="status">选择任务后查看可用轨迹。</p>
+            <div id="traj-player" hidden>
+              <div id="traj-canvas" role="img" aria-label="当前轨迹帧的三维原子位置，拖动旋转、滚轮缩放"></div>
+              <div class="trajectory-transport">
+                <button type="button" id="traj-prev" class="tool-button">上一帧</button><button type="button" id="traj-play" class="tool-button">播放</button><button type="button" id="traj-next" class="tool-button">下一帧</button>
+                <label>播放速度<select id="traj-speed"><option value="2">2 帧/秒</option><option value="5" selected>5 帧/秒</option><option value="10">10 帧/秒</option></select></label>
+              </div>
+              <label class="trajectory-seek">跳到指定帧<input type="range" id="traj-seek" min="1" max="1" value="1" step="1"></label>
+              <label>帧号 <input type="number" id="traj-number" min="1" max="1" value="1" step="1"></label>
+              <output id="traj-stamp" aria-live="off" for="traj-seek traj-number"></output>
+            </div>
+          </section>
           <section id="research-panel" data-detail-panel="research" hidden>
             <div class="panel-head"><h3>研究分析</h3><button id="create-research" data-ui-icon="plus" type="button" class="tool-button">创建研究分析</button></div>
             <nav class="research-tabs" aria-label="研究问题">
@@ -892,7 +918,7 @@
                   <p>从任务产生的 XVG 数据绘制；每张图可下载原始数据</p>
                 </div>
                 <div class="panel-tools">
-                  <a id="download-plots" class="tool-button" href="#" hidden>下载全部 XVG</a>
+                  <a id="download-plots" class="tool-button" href="#" title="最多 100 个文件、共 100 MiB；超限文件可在输出文件中单独下载" hidden>打包下载 XVG</a>
                   <span id="plot-count" class="count-pill">0 张</span>
                 </div>
               </div>
@@ -919,8 +945,12 @@
               <div class="panel-head">
                 <h3>输出文件</h3>
                 <div class="panel-tools file-tools">
-                  <input id="file-filter" class="file-filter" type="search" maxlength="256" placeholder="搜索全部输出文件…" autocomplete="off" spellcheck="false" aria-label="搜索输出文件" />
-                  <span id="file-count" class="count-pill">0 个</span>
+                  <div class="file-search">
+                    <span data-ui-icon="search" aria-hidden="true"></span>
+                    <input id="file-filter" class="file-filter" type="search" maxlength="256" placeholder="搜索文件名或路径" autocomplete="off" spellcheck="false" aria-label="搜索输出文件" aria-controls="output-files" />
+                    <button id="clear-file-filter" class="icon-only" data-ui-icon="close" type="button" aria-label="清除文件搜索" title="清除文件搜索" hidden></button>
+                  </div>
+                  <span id="file-count" class="count-pill" role="status">0 个</span>
                 </div>
               </div>
               <div id="output-files" class="output-files"></div>
@@ -944,11 +974,7 @@
                 <button id="copy-job-directory" class="tool-button" data-ui-icon="folder" type="button" title="复制当前任务结果目录">复制目录</button>
 
                 <button id="benchmark-job" class="tool-button" type="button" title="复制当前 TPR，短跑多个线程组合并比较 ns/day">性能基准</button>
-                <select id="compare-job-select" class="compact-select" aria-label="选择参数比较任务"></select>
-                <button id="compare-job" class="tool-button" type="button">比较参数</button>
-                <button id="copy-log" class="tool-button" type="button" title="复制当前显示的日志">复制日志</button>
-                <a id="download-log" class="tool-button" hidden download>下载已保留日志</a>
-                <button id="log-bottom" class="tool-button" type="button" title="滚动到日志末尾">回到底部</button>
+                <button id="compare-job" class="tool-button" data-ui-icon="diff" type="button" aria-haspopup="dialog" aria-controls="job-diff-dialog" disabled>比较参数</button>
                   </div>
                 </details>
                 <button id="adopt-job" class="tool-button" type="button" hidden>重新接管后台任务</button>
@@ -984,8 +1010,28 @@
           <details class="organization-panel"><summary id="organization-summary">项目、标签与实验备注</summary><form id="organization-form"><label>研究项目<input id="job-project" maxlength="80" list="project-options" /></label><label>标签<input id="job-tags" placeholder="用逗号分隔" /></label><label class="wide-field">实验备注<textarea id="job-notes" maxlength="4000" rows="3"></textarea></label><label class="check-row"><input id="job-pinned" type="checkbox" />置顶任务</label><button type="submit" class="tool-button">保存实验记录</button></form></details>
           <details class="task-log-panel">
             <summary>运行日志 <code id="terminal-title" class="terminal-title">run.log</code></summary>
+            <div class="log-toolbar" role="group" aria-label="日志工具">
+              <div class="log-find">
+                <div class="file-search">
+                  <span data-ui-icon="search" aria-hidden="true"></span>
+                  <input id="log-search" class="file-filter" type="search" maxlength="256" placeholder="在已加载日志中查找" aria-label="在已加载日志中查找" aria-controls="job-log" autocomplete="off" spellcheck="false" />
+                  <button id="log-clear" class="icon-only" data-ui-icon="close" type="button" aria-label="清除日志搜索" title="清除搜索（Esc）" hidden></button>
+                </div>
+                <span id="log-count" role="status"></span>
+                <button id="log-prev" class="tool-button icon-only" data-ui-icon="chevron" type="button" aria-label="上一处匹配" title="上一处（Shift+Enter）" disabled></button>
+                <button id="log-next" class="tool-button icon-only" data-ui-icon="chevron" type="button" aria-label="下一处匹配" title="下一处（Enter）" disabled></button>
+              </div>
+              <div class="log-actions">
+                <label class="log-follow" title="关闭后仍接收日志，不影响任务运行"><input id="log-follow" type="checkbox" checked />自动跟随</label>
+                <button id="log-bottom" class="tool-button" type="button" title="滚动到末尾并恢复自动跟随">回到最新</button>
+              </div>
+              <div class="log-actions log-export">
+                <button id="copy-log" class="tool-button" data-ui-icon="copy" type="button" title="复制当前已加载的原文" disabled>复制日志</button>
+                <a id="download-log" class="tool-button" hidden download="run.log">下载已保留日志</a>
+              </div>
+            </div>
             <div class="log-notice" id="log-notice" hidden></div>
-            <pre id="job-log" class="terminal"></pre>
+            <pre id="job-log" class="terminal" role="region" aria-label="运行日志正文" tabindex="0"></pre>
           </details>
         </section>
       </main>
@@ -1118,11 +1164,70 @@
     <dialog id="library-dialog" class="product-dialog" aria-labelledby="library-title">
       <div class="product-dialog-head"><h2 id="library-title">协议模板</h2><button type="button" data-close-dialog="library-dialog" aria-label="关闭协议模板">关闭</button></div>
       <p>保存可复用的参数。输入文件、执行工具路径与配体电荷确认需在使用时重新选择。</p>
-      <label>已保存版本<select id="template-select"><option value="">暂无模板</option></select></label><div id="template-details" class="template-details"></div>
-      <div class="product-actions"><button id="apply-template" class="primary-action compact" type="button">应用到新任务</button><button id="export-template" class="tool-button" type="button">导出 JSON</button><button id="delete-template" class="tool-button" type="button">删除此版本</button><label class="tool-button import-template">导入模板<input id="import-template" type="file" accept=".json,application/json" /></label></div>
-      <details><summary>把当前表单保存为模板</summary><form id="template-form"><label>模板名称<input id="template-name" required maxlength="80" /></label><label>适用体系与限制<input id="template-applicability" maxlength="500" placeholder="例如 可溶性蛋白；不适用于膜体系" /></label><label>协议来源<input id="template-source" maxlength="500" placeholder="文献、实验室协议或版本说明" /></label><label>说明<textarea id="template-description" rows="3" maxlength="1000"></textarea></label><button class="primary-action compact" type="submit">保存为新版本</button></form></details>
+      <div class="template-picker">
+        <label for="template-select">已保存版本<select id="template-select"><option value="">暂无模板</option></select></label>
+        <label class="tool-button import-template" data-ui-icon="upload">导入模板<input id="import-template" type="file" accept=".json,application/json" /></label>
+      </div>
+      <article id="template-details" class="protocol-card" aria-labelledby="template-card-title" hidden>
+        <header class="protocol-heading">
+          <span class="protocol-mark" data-ui-icon="layers" aria-hidden="true"></span>
+          <div><h3 id="template-card-title"></h3><span id="template-workflow"></span></div>
+          <span id="template-revision" class="protocol-revision"></span>
+        </header>
+        <dl class="protocol-facts">
+          <dt>适用范围</dt><dd id="template-scope"></dd>
+          <dt>协议来源</dt><dd id="template-origin"></dd>
+          <dt id="template-note-label">说明</dt><dd id="template-note"></dd>
+        </dl>
+        <div class="product-actions protocol-actions">
+          <button id="apply-template" class="primary-action compact" data-ui-icon="copy" type="button" disabled>应用到新任务</button>
+          <button id="export-template" class="tool-button" data-ui-icon="file" type="button" disabled>导出 JSON</button>
+          <button id="delete-template" class="danger-action" data-ui-icon="trash" type="button" disabled>删除此版本</button>
+        </div>
+      </article>
+      <div id="template-empty" class="protocol-empty" hidden>
+        <span class="protocol-mark" data-ui-icon="layers" aria-hidden="true"></span>
+        <div><strong>还没有协议模板</strong><p>可以导入已有模板，或在下方把当前表单保存为第一版。</p></div>
+      </div>
+      <details><summary>把当前表单保存为模板</summary><form id="template-form"><label>模板名称<input id="template-name" required maxlength="80" /></label><label>适用体系与限制<input id="template-applicability" maxlength="500" placeholder="例如 可溶性蛋白；不适用于膜体系" /></label><label>协议来源<input id="template-source" maxlength="500" placeholder="文献、实验室协议或版本说明" /></label><label>说明<textarea id="template-description" rows="3" maxlength="1000"></textarea></label><button class="primary-action compact" data-ui-icon="save" type="submit">保存为新版本</button></form></details>
       <p id="template-error" class="product-error" role="status"></p>
     </dialog>
+    <dialog id="job-diff-dialog" class="product-dialog diff-dialog" aria-labelledby="job-diff-title">
+      <div class="product-dialog-head">
+        <div><h2 id="job-diff-title" tabindex="-1" autofocus>参数比较</h2><p>只列出两个任务设置不同的参数。</p></div>
+        <button type="button" data-close-dialog="job-diff-dialog" aria-label="关闭参数比较">关闭</button>
+      </div>
+      <div class="diff-targets" role="group" aria-label="选择历史对照任务">
+        <label for="job-diff-target-search">对照任务</label>
+        <input id="job-diff-target-search" type="search" maxlength="256" placeholder="搜索全部历史任务" aria-label="搜索全部历史对照任务" autocomplete="off" />
+        <select id="compare-job-select" class="compact-select" aria-label="选择参数比较任务"></select>
+        <button id="job-diff-more" class="tool-button" type="button" hidden>更多任务</button>
+      </div>
+      <div class="diff-toolbar">
+        <div class="file-search">
+          <span data-ui-icon="search" aria-hidden="true"></span>
+          <input id="job-diff-search" class="file-filter" type="search" placeholder="搜索参数名或值" aria-label="搜索参数名或值" aria-controls="job-diff-rows" spellcheck="false" autocomplete="off" />
+          <button id="job-diff-clear" class="icon-only" data-ui-icon="close" type="button" aria-label="清除参数搜索" hidden></button>
+        </div>
+        <span id="job-diff-status" role="status"></span>
+      </div>
+      <div class="diff-scroll" role="region" aria-label="参数差异对照" tabindex="0">
+        <table aria-label="任务参数差异">
+          <thead><tr>
+            <th scope="col">参数路径</th>
+            <th scope="col">当前任务<strong id="job-diff-left"></strong></th>
+            <th scope="col">对照任务<strong id="job-diff-right"></strong></th>
+          </tr></thead>
+          <tbody id="job-diff-rows"></tbody>
+        </table>
+        <div id="job-diff-empty" class="diff-empty">
+          <p id="job-diff-message"></p>
+          <button id="job-diff-retry" type="button" class="tool-button" hidden>重新比较</button>
+          <button id="job-diff-reset" type="button" class="tool-button" hidden>清除筛选</button>
+        </div>
+      </div>
+    </dialog>
+
     <dialog id="help-dialog" class="product-dialog help-dialog" aria-labelledby="help-title">
       <div class="product-dialog-head"><h2 id="help-title">帮助与运行诊断</h2><button type="button" data-close-dialog="help-dialog" aria-label="关闭帮助">关闭</button></div>
       <div class="product-actions"><a class="tool-button" href="https://github.com/ZEKUN-BIT/gromacs-web-ui/releases" target="_blank" rel="noopener">下载与版本说明</a><a class="tool-button" href="https://github.com/ZEKUN-BIT/gromacs-web-ui/issues/new/choose" target="_blank" rel="noopener">报告问题</a></div>
@@ -1130,6 +1235,6 @@
       <details><summary>排错与本机使用记录</summary><p>诊断信息仅在本机生成，预览后可自行下载并提供给维护者。</p><div class="product-actions"><button id="preview-diagnostics" class="tool-button" type="button">预览环境诊断</button><button id="download-diagnostics" class="tool-button" type="button" disabled>下载诊断 JSON</button><button id="show-local-usage" class="tool-button" type="button">查看本机使用记录</button></div><pre id="diagnostic-preview" tabindex="0"></pre></details>
     </dialog>
     <dialog id="field-help-dialog" class="product-dialog" aria-labelledby="field-help-title"><div class="product-dialog-head"><h2 id="field-help-title">参数说明</h2><button type="button" data-close-dialog="field-help-dialog">关闭</button></div><p id="field-help-content"></p></dialog>
-    <script src="/static/js/main.js?v=b71b8f0b4a932c44" type="module"></script>
+    <script src="/static/js/main.js?v=5b84b3e1eaca6ab9" type="module"></script>
   </body>
 </html>

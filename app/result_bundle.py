@@ -241,7 +241,7 @@ def render_summary(summary: dict) -> str:
     )
     skipped = "".join(f"<li>{escape(item['path'])}：{escape(item['reason'])}</li>" for item in summary["skipped_files"])
     limitations = "".join(f"<li>{escape(item)}</li>" for item in summary["limitations"])
-    return f"""<!doctype html><html lang="zh-CN"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+    return f"""<!doctype html><html lang="zh-CN"><meta charset="utf-8">
 <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'self'; img-src 'self'; base-uri 'none'">
 <title>{title} · GROMACS 结果摘要</title><link rel="stylesheet" href="report.css">
 <body><small>GROMACS Console · 可离线查看 · {escape(summary["exported_at"])}</small><h1>{title}</h1>

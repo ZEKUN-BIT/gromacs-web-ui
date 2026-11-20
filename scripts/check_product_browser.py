@@ -20,6 +20,129 @@ APP = ROOT / "app"
 ORIGIN = "http://gromacs-product.test"
 
 
+def check_job_comparison(page, screenshot):
+    """Check the read-only comparison with realistic values and a delayed old response."""
+    url = f"{ORIGIN}/api/jobs/product-1/diff/product-2"
+    old = []
+    values = [
+        ("force_field", "amber99sb-ildn", "amber14sb"),
+        ("md.dt", 0.002, 0.001), ("md.nsteps", 5000000, 10000000),
+        ("md.ref_t", [300, 300], [310, 310]), ("md.tcoupl", "v-rescale", "nose-hoover"),
+        ("ntomp", 0, 8), ("replicas", 3, 5), ("run.seed", None, 712),
+        ("verbose", False, True), ("water_model", "tip3p", "opc"),
+        *[(f"protocol.stage_{n:02}.duration_ps", 100, 200) for n in range(24)],
+        ("output.note", "", '<b>not markup</b>'),
+        ("selection.groups", ["Protein_" + "A" * 300], ["Solvent"]),
+    ]
+    differences = [{"path": k, "left": a, "right": b} for k, a, b in values]
+    mode = "data"
+
+    def respond(route):
+        assert route.request.method == "GET"
+        if mode == "hold":
+            old.append(route)
+        elif mode == "fail":
+            route.fulfill(status=404, json={"detail": "Job not found"})
+        else:
+            route.fulfill(json={
+                "left": {"id": "product-1", "name": "蛋白平衡 · 300 K"},
+                "right": {"id": "product-2", "name": "蛋白平衡 · 310 K"},
+                "differences": differences if mode == "data" else [],
+            })
+
+    page.route(url, respond)
+    launcher = page.locator("#compare-job")
+    menu = page.locator(".job-more-actions > summary")
+    sidebar = page.locator("#job-filter")
+    sidebar.fill("产品流程测试 1")
+    expect(page.locator(".job-item")).to_have_count(1)
+    menu.click()
+    launcher.click()
+    dialog = page.get_by_role("dialog", name="参数比较")
+    visible = dialog.locator("tbody tr:visible")
+    query = dialog.get_by_role("searchbox", name="搜索参数名或值")
+    target_search = dialog.get_by_role("searchbox", name="搜索全部历史对照任务")
+    status = dialog.get_by_role("status")
+    expect(visible).to_have_count(len(values))
+    expect(dialog.get_by_role("columnheader", name="当前任务 蛋白平衡 · 300 K")).to_be_visible()
+    expect(dialog.get_by_role("columnheader", name="对照任务 蛋白平衡 · 310 K")).to_be_visible()
+    target_search.fill("没有这个任务")
+    expect(status).to_have_text("无对照任务")
+    expect(visible).to_have_count(0)
+    target_search.fill("产品流程测试 2")
+    expect(visible).to_have_count(len(values))
+    expect(sidebar).to_have_value("产品流程测试 1")
+    screenshot("comparison")
+    for term, expected in [("AMBER14SB", '"amber14sb"'), ("FALSE", "false"), ("ntomp", "0"), ("null", "未设置"), ("output.note", '""'), ("Solvent", '"Protein_')]:
+        query.fill(term)
+        expect(visible).to_have_count(1)
+        expect(visible).to_contain_text(expected)
+        expect(query).to_be_focused()
+    assert dialog.locator(".diff-scroll").evaluate("el => el.scrollWidth <= el.clientWidth"), "Long values should wrap"
+    query.fill("not markup")
+    expect(visible.locator("td").last).to_have_text('"<b>not markup</b>"')
+    expect(visible.locator("b")).to_have_count(0)
+    query.fill("no-such-parameter")
+    expect(status).to_have_text(f"匹配 0 / {len(values)} 项")
+    dialog.get_by_role("button", name="清除筛选").click()
+    expect(query).to_be_focused()
+    expect(visible).to_have_count(len(values))
+    scroll = dialog.locator(".diff-scroll")
+    assert scroll.evaluate("el => { el.scrollTop = el.scrollHeight; return el.scrollTop > 0 && Math.abs(el.querySelector('thead th').getBoundingClientRect().top - el.getBoundingClientRect().top) < 2; }")
+    query.fill("md.")
+    dialog.get_by_role("button", name="清除参数搜索").click()
+    expect(query).to_be_focused()
+    page.keyboard.press("Escape")
+    expect(launcher).to_be_focused()
+
+    mode = "hold"
+    with page.expect_request(url):
+        launcher.click()
+    expect(status).to_have_text("正在比较…")
+    dialog.get_by_role("button", name="关闭参数比较").click()
+    mode = "fail"
+    launcher.click()
+    expect(status).to_have_text("比较失败")
+    expect(dialog).to_contain_text("任务不存在")
+    mode = "same"
+    dialog.get_by_role("button", name="重新比较").click()
+    expect(dialog).to_contain_text("两个任务没有参数差异")
+    assert len(old) == 1
+    old[0].fulfill(json={"left": {"id": "old"}, "right": {"id": "stale"}, "differences": differences})
+    expect(status).to_have_text("共 0 项差异")
+    expect(query).to_be_disabled()
+    expect(visible).to_have_count(0)
+    page.keyboard.press("Escape")
+    expect(launcher).to_be_focused()
+    menu.click()
+    sidebar.fill("")
+    expect(page.locator(".job-item")).to_have_count(2)
+    page.unroute(url, respond)
+
+
+def check_clone_guard(page):
+    button = page.locator("#clone-job")
+    pending = []
+    url = f"{ORIGIN}/api/jobs/product-1/clone"
+    page.route(url, lambda route: pending.append(route))
+    button.click()
+    page.locator("#submit-warning-cancel").click()
+    assert not pending
+    button.click()
+    with page.expect_request(url):
+        page.locator("#submit-warning-confirm").click()
+    expect(button).to_be_disabled()
+    expect(button).to_have_text("正在复制…")
+    # Even a queued event while the first write is pending cannot start another one.
+    button.dispatch_event("click")
+    expect(page.locator("#submit-warning")).to_be_hidden()
+    assert len(pending) == 1 and pending[0].request.method == "POST"
+    pending[0].fulfill(status=503, json={"detail": "测试：未创建任务"})
+    expect(button).to_be_enabled()
+    expect(button).to_have_text("复制并运行")
+    page.unroute(url)
+
+
 def check_viewport(browser, width: int, height: int, scheme: str, artifact_dir: Path | None, *, legacy: bool = False, first_use: bool = False, inspect=None, configure=None, context_options=None) -> None:
     jobs = [{
         "id": f"product-{index}", "name": f"产品流程测试 {index}", "workflow": "run_tpr",
@@ -96,7 +219,8 @@ def check_viewport(browser, width: int, height: int, scheme: str, artifact_dir: 
         elif path in {"/api/jobs", "/api/research/jobs"}:
             assert method == "GET", "Product regression must never submit a simulation"
             project = query.get("project", [""])[0]
-            selected = [job for job in jobs if not project or job["project"] == project]
+            search = query.get("search", [""])[0]
+            selected = [job for job in jobs if (not project or job["project"] == project) and search in job["name"]]
             payload = {"jobs": selected, "total": len(selected), "offset": 0, "limit": 50, "has_more": False}
         elif path.startswith("/api/jobs/"):
             parts = path.split("/")
@@ -180,10 +304,6 @@ def check_viewport(browser, width: int, height: int, scheme: str, artifact_dir: 
         }
     """)
 
-    def open_rail():
-        if width <= 1180 and not page.locator("body").evaluate("element => element.classList.contains('sidebar-open')"):
-            page.locator("#toggle-sidebar").click()
-
     def screenshot(name):
         assert page.evaluate("document.documentElement.scrollWidth <= innerWidth"), f"Horizontal overflow at {width}"
         if artifact_dir:
@@ -201,6 +321,12 @@ def check_viewport(browser, width: int, height: int, scheme: str, artifact_dir: 
         if first_use:
             expect(page.locator(".job-item")).to_have_count(0)
             assert page.evaluate("!new URL(window.testStreams.at(-1).url, location.href).searchParams.has('job_id')")
+            page.locator('[data-workspace-view="detail"]').click()
+            page.locator('[data-detail-tab="files"]').click()
+            expect(page.locator("#output-files")).to_contain_text("未选择任务")
+            expect(page.locator("#file-filter")).to_be_disabled()
+            page.locator('[data-detail-tab="overview"]').click()
+            page.locator('[data-workspace-view="compose"]').click()
             page.locator("#start-guide > summary").click()
             page.locator("#start-example").click()
             page.locator("#submit-warning-confirm").click()
@@ -293,19 +419,33 @@ def check_viewport(browser, width: int, height: int, scheme: str, artifact_dir: 
         expect(charge_help).to_be_focused()
         page.locator('.workflow-switch label:has([value="protein_md"])').click()
 
-        open_rail()
         page.locator("#open-library").click()
         expect(page.locator("#apply-template")).to_be_disabled()
+        expect(page.locator("#template-empty")).to_be_visible()
+        expect(page.locator("#template-details")).to_be_hidden()
+        expect(page.get_by_label("导入模板")).to_be_enabled()
         page.locator("#library-dialog details > summary").click()
         page.locator("#template-name").fill("两副本协议")
         page.locator("#template-applicability").fill("水溶性蛋白；需要重新核对输入")
         page.locator("#template-source").fill("实验室协议 2026")
         page.locator('#template-form button[type="submit"]').click()
         expect(page.locator("#template-select")).to_have_value("template-1")
-        expect(page.locator("#template-details")).to_contain_text("实验室协议 2026")
+        expect(page.get_by_role("article", name="两副本协议")).to_be_visible()
+        expect(page.locator("#template-workflow")).to_contain_text("蛋白 MD")
+        expect(page.locator("#template-origin")).to_have_text("实验室协议 2026")
+        expect(page.locator("#template-note")).to_be_hidden()
+        page.locator("#template-description").fill("每个副本分别记录输出。")
         page.locator('#template-form button[type="submit"]').click()
         expect(page.locator("#template-select")).to_have_value("template-2")
         expect(page.locator("#template-select option:checked")).to_contain_text("v2")
+        page.locator("#library-dialog details > summary").click()
+        page.locator("#template-select").select_option("template-1")
+        expect(page.locator("#template-revision")).to_have_text("v1")
+        expect(page.locator("#template-note-label")).to_be_hidden()
+        page.locator("#template-select").select_option("template-2")
+        expect(page.locator("#template-revision")).to_have_text("v2")
+        expect(page.locator("#template-note")).to_have_text("每个副本分别记录输出。")
+        expect(page.locator("#template-empty")).to_be_hidden()
         screenshot("library")
         with page.expect_download() as download_info:
             page.locator("#export-template").click()
@@ -322,10 +462,14 @@ def check_viewport(browser, width: int, height: int, scheme: str, artifact_dir: 
         page.locator("#open-library").click()
         exported["name"] = '<img src=x onerror="window.productXss=true">'
         exported["params"]["water_model"] = "laboratory-water"
+        exported["applicability"] = exported["source"] = ""
         page.locator("#import-template").set_input_files({"name": "protocol.json", "mimeType": "application/json", "buffer": json.dumps(exported).encode()})
         expect(page.locator("#template-select")).to_have_value("template-3")
         fulfill(*pending.pop("product"))
         expect(page.locator("#template-select")).to_have_value("template-3")
+        expect(page.locator("#template-card-title")).to_have_text(exported["name"])
+        expect(page.locator("#template-scope")).to_contain_text("未填写")
+        expect(page.locator("#template-origin")).to_have_text("未注明")
         assert not page.evaluate("Boolean(window.productXss)")
         page.locator("#apply-template").click()
         expect(page.locator("#submit-warning")).to_be_visible()
@@ -341,7 +485,6 @@ def check_viewport(browser, width: int, height: int, scheme: str, artifact_dir: 
         expect(page.locator('[name="replicas"]')).to_have_value("2")
         assert page.locator("#files").evaluate("input => input.files.length") == 0
         expect(page.locator("#input-mapping")).to_be_empty()
-        open_rail()
         page.locator("#open-library").click()
         page.locator("#delete-template").click()
         page.locator("#submit-warning-cancel").click()
@@ -361,10 +504,8 @@ def check_viewport(browser, width: int, height: int, scheme: str, artifact_dir: 
         page.locator("#job-pinned").check()
         expect(page.locator("#organization-summary")).to_contain_text("未保存")
         expect(page.locator("#organization-draft-status")).to_contain_text("本机草稿已保留")
-        open_rail()
         page.locator('[data-job-id="product-2"] .job-select').click()
         expect(page.locator("#job-notes")).to_have_value("原始备注")
-        open_rail()
         page.locator('[data-job-id="product-1"] .job-select').click()
         expect(page.locator("#job-project")).to_have_value("新研究项目")
         expect(page.locator("#job-tags")).to_have_value("WT，300K")
@@ -398,6 +539,8 @@ def check_viewport(browser, width: int, height: int, scheme: str, artifact_dir: 
         expect(page.locator("#download-result-bundle")).to_have_attribute("href", "/api/jobs/product-1/result-bundle")
         expect(page.locator("#download-result-bundle")).to_be_visible()
         screenshot("result")
+        check_job_comparison(page, screenshot)
+        check_clone_guard(page)
 
         # A transient file failure is actionable and retrying the same task works.
         control["fail_files"] = True
@@ -408,18 +551,18 @@ def check_viewport(browser, width: int, height: int, scheme: str, artifact_dir: 
         page.locator("#output-files").get_by_role("button", name="重试加载文件").click()
         expect(page.locator("#output-files")).to_contain_text("暂无输出文件")
         expect(page.locator("#file-count")).to_have_text("0 个")
+        expect(page.locator("#file-pagination")).to_be_hidden()
+        expect(page.locator("#output-files button")).to_have_count(0)
         page.locator('[data-detail-tab="overview"]').click()
 
         # Late metadata and summary responses from another job cannot replace the
         # selected job's form, quality summary or export target.
         control["hold_summary"] = True
-        open_rail()
         page.locator('[data-job-id="product-2"] .job-select').click()
         expect(page.locator("#active-job-title")).to_have_text("产品流程测试 2")
         page.locator("#job-notes").fill("另一个任务的记录")
         control["hold_patch"] = True
         page.locator('#organization-form button[type="submit"]').click()
-        open_rail()
         page.locator('[data-job-id="product-1"] .job-select').click()
         expect(page.locator("#active-job-title")).to_have_text("产品流程测试 1")
         fulfill(*pending.pop("summary"))
@@ -430,7 +573,6 @@ def check_viewport(browser, width: int, height: int, scheme: str, artifact_dir: 
         expect(page.locator("#result-summary-content")).not_to_contain_text("99 个输入文件")
         expect(page.locator("#download-result-bundle")).to_have_attribute("href", "/api/jobs/product-1/result-bundle")
 
-        open_rail()
         page.locator("#project-filter").select_option("新研究项目")
         expect(page.locator(".job-item")).to_have_count(1)
         page.locator("#open-help").click()
@@ -461,11 +603,9 @@ def check_viewport(browser, width: int, height: int, scheme: str, artifact_dir: 
         expect(page.locator("#job-percent")).to_have_text("暂无法估算")
         expect(page.locator("#job-progress")).to_have_attribute("data-unknown", "true")
         expect(page.locator("#job-performance")).to_have_text("-")
-        open_rail()
         page.locator('[data-job-id="product-1"] .job-select').click()
         expect(page.locator("#active-job-title")).to_have_text("产品流程测试 1")
         jobs[1].update(progress_percent=51.83, simulation_progress={"time_ps": 51830, "ns_per_day": 20, "eta_seconds": 3600}, progress_observation={"state": "stale", "message": "原生日志一段时间没有更新，请查看运行状态", "updated_at": "2026-10-19T01:00:00Z"})
-        open_rail()
         page.locator('[data-job-id="product-2"] .job-select').click()
         expect(page.locator("#job-percent")).to_have_text("51.8% · 51.830 ns")
         expect(page.locator("#progress-observation")).to_have_attribute("data-state", "stale")
@@ -494,7 +634,7 @@ def main() -> None:
     with sync_playwright() as playwright:
         browser = playwright.chromium.launch(headless=True)
         try:
-            for width, height, scheme in ((1440, 1000, "light"), (768, 1024, "light"), (390, 844, "light"), (390, 844, "dark")):
+            for width, height, scheme in ((1440, 1000, "light"), (1280, 800, "dark")):
                 check_viewport(browser, width, height, scheme, args.artifact_dir)
             check_viewport(browser, 1440, 1000, "light", args.artifact_dir, legacy=True)
             check_viewport(browser, 1440, 1000, "light", args.artifact_dir, first_use=True)

@@ -4,7 +4,6 @@ import {
   STATUS_LABELS,
   WORKFLOW_LABELS,
   ACTIVE_STATES,
-  MAX_LOG_CHARS,
   els,
   state,
   escapeHtml,
@@ -15,9 +14,10 @@ import {
   replaySwapAnimation,
   showWorkspaceView,
   showDetailTab,
-} from "./core.js?v=b71b8f0b4a932c44";
-import { renderPlots, resetPlotFilters, updatePlotOptions } from "./plots.js?v=b71b8f0b4a932c44";
-import { renderResearch } from "./research.js?v=b71b8f0b4a932c44";
+} from "./core.js?v=5b84b3e1eaca6ab9";
+import { resetLogState } from "./log-viewer.js?v=5b84b3e1eaca6ab9";
+import { renderPlots, resetPlotFilters, updatePlotOptions } from "./plots.js?v=5b84b3e1eaca6ab9";
+import { renderResearch } from "./research.js?v=5b84b3e1eaca6ab9";
 import {
   captureSubmissionSnapshot,
   isSubmissionSnapshotReady,
@@ -25,16 +25,16 @@ import {
   submitWarnings,
   friendlyPreviewError,
   refreshPreview,
-} from "./form.js?v=b71b8f0b4a932c44";
-import { apiSubmissionIssues, clearSubmissionIssues, showSubmissionIssues } from "./submission-validation.js?v=b71b8f0b4a932c44";
-import { uploadJob, bindUploadRecovery } from "./submission-upload.js?v=b71b8f0b4a932c44";
+} from "./form.js?v=5b84b3e1eaca6ab9";
+import { apiSubmissionIssues, clearSubmissionIssues, showSubmissionIssues } from "./submission-validation.js?v=5b84b3e1eaca6ab9";
+import { uploadJob, bindUploadRecovery } from "./submission-upload.js?v=5b84b3e1eaca6ab9";
 
 /* ---------- 任务列表（签名对比，按需渲染 + 事件委托） ---------- */
 
 function computeJobsSignature() {
   return (
     state.jobs.map((job) => `${job.id}:${job.status}:${job.step_index}:${job.name}:${job.project}:${job.pinned}:${JSON.stringify(job.tags)}`).join("|") +
-    `#${state.activeJobId}:${state.jobFilter}:${state.jobsOffset}:${state.jobsTotal}:${state.jobsHasMore}:${state.jobsBusy}`
+    `#${state.activeJobId}:${state.jobFilter}:${state.jobProject}:${state.jobsOffset}:${state.jobsTotal}:${state.jobsHasMore}:${state.jobsBusy}`
   );
 }
 
@@ -62,8 +62,19 @@ export function renderJobs() {
 
   if (!state.jobs.length) {
     if (els.jobsList.contains(document.activeElement)) els.jobFilter?.focus({ preventScroll: true });
-    const title = state.jobsBusy ? "正在读取任务…" : state.jobFilter.trim() ? "没有匹配任务" : "暂无任务";
-    els.jobsList.innerHTML = `<div class="empty-jobs"><strong>${title}</strong><small>${state.jobFilter.trim() ? "换个名称、状态或工作流试试" : "提交后会出现在这里"}</small></div>`;
+    let title = "暂无任务", hint = "提交模拟后，在这里查看进度与结果。", icon = "", action = "";
+    if (state.jobsBusy) {
+      title = "正在读取任务…"; hint = ""; icon = "clock";
+    } else if (state.jobFilter.trim()) {
+      title = "没有匹配任务"; hint = "试试其他任务名、状态或工作流。"; icon = "search";
+      action = `<button type="button" class="tool-button" data-clear-job-search>清除搜索词</button>`;
+    } else if (state.jobProject) {
+      title = "当前项目暂无任务"; hint = "切换项目，或查看全部项目。"; icon = "folder";
+    }
+    const mark = icon
+      ? `<span class="empty-job-icon" data-ui-icon="${icon}" aria-hidden="true"></span>`
+      : `<svg class="empty-job-art" viewBox="0 0 82 54" aria-hidden="true" focusable="false"><use href="/static/illustrations/workbench.svg#run-log"></use></svg>`;
+    els.jobsList.innerHTML = `<div class="empty-jobs">${mark}<strong>${title}</strong>${hint ? `<small>${hint}</small>` : ""}${action}</div>`;
     return;
   }
   const focused = els.jobsList.contains(document.activeElement) ? {
@@ -128,11 +139,7 @@ export function applyJobsPayload(payload) {
   if (!state.activeJobId) {
     state.activeJobId = state.jobs[0]?.id || null;
     state.activeJob = null;
-    state.logKey = "";
-    state.logText = "";
-    state.logOffset = 0;
-    state.logTailOmittedBytes = 0;
-    state.logTrimmedChars = 0;
+    resetLogState();
     state.artifactKey = "";
     state.filesSignature = "";
     state.plotsSignature = "";
@@ -224,6 +231,7 @@ export async function changeJobsPage(direction) {
 /* ---------- 活动任务详情（日志/文件智能拉取） ---------- */
 
 function resetActiveJobPanel() {
+  els.cloneJob.disabled = els.compareJob.disabled = true;
   window.dispatchEvent(new CustomEvent("job-rendered", { detail: null }));
   updateText(els.activeJobTitle, "未选择任务");
   updateText(els.terminalTitle, "run.log");
@@ -254,18 +262,15 @@ function resetActiveJobPanel() {
   els.jobError.hidden = true;
   els.skippedStepsNotice.hidden = true;
   els.qualityReports.textContent = "暂无质量报告";
-  state.logKey = "";
-  state.logSignature = "";
-  state.logText = "";
-  state.logOffset = 0;
-  state.logTailOmittedBytes = 0;
-  state.logTrimmedChars = 0;
-  window.clearTimeout(logHighlightTimer);
-  els.jobLog.textContent = "";
-  els.logNotice.hidden = true;
-  if (state.filesSignature !== "") {
-    state.filesSignature = "";
-    els.outputFiles.innerHTML = "";
+  resetLogState();
+  if (state.filesSignature !== "unselected") {
+    state.filesSignature = "unselected";
+    filePage = null;
+    syncFileSearch(null);
+    els.outputFiles.hidden = false;
+    els.outputFiles.dataset.jobId = "";
+    els.outputFiles.innerHTML = fileEmpty("未选择任务", "选择任务后，可在这里查看它的输出文件。");
+    renderFilePager();
     updateText(els.fileCount, "0 个");
   }
   if (state.plotsSignature !== "") {
@@ -350,15 +355,8 @@ export async function renderActiveJob() {
         : `${(etaSeconds / 86400).toFixed(1)} 天`
     : "-";
   updateText(els.jobEta, etaText);
-  if (els.compareJobSelect) {
-    const options = state.jobs.filter((item) => item.id !== job.id);
-    const selected = els.compareJobSelect.value;
-    els.compareJobSelect.innerHTML = options.length
-      ? options.map((item) => `<option value="${escapeHtml(item.id)}">${escapeHtml(item.name)}</option>`).join("")
-      : `<option value="">暂无其他任务</option>`;
-    if (options.some((item) => item.id === selected)) els.compareJobSelect.value = selected;
-    els.compareJob.disabled = !options.length;
-  }
+  els.cloneJob.disabled = els.cloneJob.hasAttribute("aria-busy");
+  els.compareJob.disabled = false;
   els.cancelJob.disabled = !ACTIVE_STATES.has(job.status);
   els.benchmarkJob.disabled = job.status === "preparing" || job.workflow === "benchmark";
   els.adoptJob.hidden = job.status !== "interrupted";
@@ -399,6 +397,10 @@ async function refreshJobArtifacts(job) {
   if (!["files", "plots", "quality", "research"].includes(tab)) return;
   const filters = state.plotFilters;
   const fileView = fileViews.get(job.id) || { search: "", offset: 0 };
+  if (tab === "files") {
+    syncFileSearch(job.id);
+    if (els.outputFiles.dataset.jobId !== job.id) showFileLoading();
+  }
   const key = `${job.id}:${job.status}:${job.step_index}:${job.exit_code ?? ""}:${job.storage_revision || 0}:${tab}:${JSON.stringify(filters)}:${tab === "files" ? JSON.stringify([fileView.search, fileView.offset]) : ""}`;
   if (key === state.artifactKey && (artifactPendingKey === key || !ACTIVE_STATES.has(job.status) || Date.now() - artifactRequestedAt < ARTIFACT_REFRESH_MS)) return;
   state.artifactKey = key;
@@ -422,20 +424,25 @@ async function refreshJobArtifacts(job) {
     if (value !== "") query.set(key, value);
   }
   const [filesResult, plotsResult] = await Promise.allSettled([
-    api(`/api/jobs/${encoded}/files${tab === "files" ? `?${new URLSearchParams({limit: "100", offset: String(fileView.offset), search: fileView.search})}` : ""}`, { signal }),
+    api(`/api/jobs/${encoded}/files${tab === "files" ? `?${new URLSearchParams({limit: "100", offset: String(fileView.offset), search: fileView.search.trim()})}` : ""}`, { signal }),
     tab === "plots" ? api(`/api/jobs/${encoded}/plots?${query}`, { signal }) : Promise.resolve(null),
   ]);
   if (!isCurrent()) return;
-  if (filesResult.status === "fulfilled") {
-    filePage = tab === "files" && Number.isFinite(filesResult.value.total) ? { ...filesResult.value, jobId: job.id, search: fileView.search } : null;
-    renderFiles(job.id, filesResult.value.files || [], filesResult.value.truncated);
+  if (filesResult.status === "fulfilled" && tab === "files") {
+    const result = filesResult.value;
+    if (fileView.offset > 0 && fileView.offset >= result.total) {
+      fileViews.set(job.id, { ...fileView, offset: Math.max(0, Math.floor((result.total - 1) / result.limit) * result.limit) });
+      return refreshJobArtifacts(job);
+    }
+    filePage = { ...result, jobId: job.id };
+    renderFiles(job.id, result.files || [], result.truncated);
     renderFilePager();
   }
-  else {
+  else if (filesResult.status === "rejected") {
     filePage = null;
     renderFilePager();
     state.filesSignature = "";
-    els.outputFiles.dataset.truncated = "false";
+    els.outputFiles.hidden = false;
     updateText(els.fileCount, "读取失败");
     const targets = tab === "quality" ? [els.outputFiles, els.qualityReports] : [els.outputFiles];
     for (const target of targets) {
@@ -492,62 +499,6 @@ async function renderQualityReports(jobId, files, isCurrent) {
     : "<p>尚未生成质量报告。</p>";
 }
 
-let logHighlightTimer = null;
-
-export function appendLogChunk(chunk) {
-  if (!chunk) return;
-  if (chunk.reset) {
-    state.logText = "";
-    state.logOffset = 0;
-    state.logTailOmittedBytes = 0;
-    state.logTrimmedChars = 0;
-  }
-  if (Number(chunk.start) < state.logOffset && !chunk.reset) return;
-  if (!state.logOffset && !state.logText) state.logTailOmittedBytes = Math.max(0, Number(chunk.start) || 0);
-  state.logText += chunk.text || "";
-  if (Number.isFinite(Number(chunk.offset))) state.logOffset = Number(chunk.offset);
-  if (state.logText.length > MAX_LOG_CHARS) {
-    state.logTrimmedChars += state.logText.length - MAX_LOG_CHARS;
-    state.logText = state.logText.slice(-MAX_LOG_CHARS);
-    state.logSignature = "";
-  }
-  // Fast path: plain textContent update, no HTML parse per chunk.
-  renderLog(state.logText, false);
-  // Debounced highlight pass: rebuild with colored spans only when the log
-  // has been quiet, so streaming updates never re-parse 300 KB every tick.
-  window.clearTimeout(logHighlightTimer);
-  logHighlightTimer = window.setTimeout(() => renderLog(state.logText, true), 1500);
-}
-
-function renderLog(log, highlight = true) {
-  const text = log;
-  const truncated = state.logTailOmittedBytes > 0 || state.logTrimmedChars > 0;
-  const signature = `${state.activeJobId}:${highlight ? "hl" : "plain"}:${state.logOffset}:${state.logTailOmittedBytes}:${state.logTrimmedChars}:${text.length}:${text.slice(-512)}`;
-  if (signature === state.logSignature) return;
-  state.logSignature = signature;
-
-  const terminal = els.jobLog;
-  const stickToBottom = terminal.scrollTop + terminal.clientHeight >= terminal.scrollHeight - 30;
-  if (highlight) {
-    const pattern = /\b(error|fatal|failed|failure|exception|warning|warn|step(?:\s+\d+)?|stage(?:\s+\d+)?)\b/gi;
-    terminal.innerHTML = escapeHtml(text).replace(pattern, (match) => {
-      const token = match.toLowerCase();
-      const tone = /error|fatal|failed|failure|exception/.test(token) ? "error" : /warn/.test(token) ? "warning" : "step";
-      return `<span class="log-${tone}">${match}</span>`;
-    });
-  } else {
-    terminal.textContent = text;
-  }
-  if (truncated) {
-    els.logNotice.hidden = false;
-    const omitted = [state.logTailOmittedBytes ? `打开时省略 ${(state.logTailOmittedBytes / 1024).toFixed(1)} KB` : "", state.logTrimmedChars ? `后续裁剪 ${state.logTrimmedChars.toLocaleString()} 个字符` : ""].filter(Boolean).join("；");
-    updateText(els.logNotice, `仅显示末尾日志（${omitted}）。复制仅包含当前显示内容，可下载已保留日志；服务端轮转可能省略更早内容。`);
-  } else {
-    els.logNotice.hidden = true;
-  }
-  if (stickToBottom) terminal.scrollTop = terminal.scrollHeight;
-}
-
 function formatSize(size) {
   if (size < 1024) return `${size} B`;
   if (size < 1024 * 1024) return `${(size / 1024).toFixed(1)} KB`;
@@ -563,26 +514,40 @@ function fileExt(path) {
 
 const fileViews = new Map();
 let filePage = null, fileSearchTimer = null;
-for (const type of ["workspace-view-change", "detail-tab-change", "active-job-change"]) window.addEventListener(type, () => {
+function invalidateArtifactRequest() {
+  clearTimeout(fileSearchTimer);
   artifactController?.abort();
   artifactRequestGeneration += 1;
   artifactPendingKey = "";
   state.artifactKey = "";
-});
+}
+for (const type of ["workspace-view-change", "detail-tab-change", "active-job-change"]) window.addEventListener(type, invalidateArtifactRequest);
+
+function syncFileSearch(jobId) {
+  const search = fileViews.get(jobId)?.search || "";
+  if (els.fileFilter.value !== search) els.fileFilter.value = search;
+  els.fileFilter.disabled = !jobId;
+  els.clearFileFilter.hidden = !search;
+  els.fileFilter.placeholder = filePage?.jobId === jobId && filePage.truncated ? "搜索已载入的文件" : "搜索文件名或路径";
+}
+
+function showFileLoading() {
+  els.outputFiles.hidden = true;
+  document.querySelector("#file-pagination").hidden = true;
+  updateText(els.fileCount, "读取中…");
+}
 
 function renderFilePager() {
   const nav = document.querySelector("#file-pagination");
-  if (!nav) return;
-  nav.hidden = !filePage || state.detailTab !== "files";
-  if (!filePage) return;
-  updateText(els.fileCount, `${filePage.total} 个`);
-  updateText(document.querySelector("#files-page-status"), `${filePage.total ? filePage.offset + 1 : 0}–${Math.min(filePage.offset + filePage.files.length, filePage.total)} / ${filePage.total}`);
+  nav.hidden = !filePage || !(filePage.offset > 0 || filePage.has_more);
+  if (nav.hidden) return;
+  updateText(document.querySelector("#files-page-status"), `${filePage.offset + 1}–${filePage.offset + filePage.files.length} / ${filePage.total}`);
   document.querySelector("#files-previous").disabled = filePage.offset === 0;
   document.querySelector("#files-next").disabled = !filePage.has_more;
   for (const [id, direction] of [["files-previous", -1], ["files-next", 1]]) {
     document.getElementById(id).onclick = () => {
       if (filePage?.jobId !== state.activeJobId) return;
-      fileViews.set(state.activeJobId, { search: state.fileFilter, offset: Math.max(0, filePage.offset + direction * filePage.limit) });
+      fileViews.set(state.activeJobId, { search: els.fileFilter.value, offset: Math.max(0, filePage.offset + direction * filePage.limit) });
       state.artifactKey = "";
       renderActiveJob();
     };
@@ -590,45 +555,46 @@ function renderFilePager() {
 }
 
 export function applyFileFilter() {
-  if (filePage?.jobId === state.activeJobId && filePage.search !== state.fileFilter) {
-    clearTimeout(fileSearchTimer);
-    fileViews.set(state.activeJobId, { search: state.fileFilter, offset: 0 });
-    const jobId = state.activeJobId;
-    fileSearchTimer = setTimeout(() => {
-      if (state.activeJobId !== jobId || state.detailTab !== "files") return;
-      state.artifactKey = ""; renderActiveJob();
-    }, 250);
+  const jobId = state.activeJobId;
+  if (!jobId) return;
+  fileViews.set(jobId, { search: els.fileFilter.value, offset: 0 });
+  syncFileSearch(jobId);
+  if (filePage?.jobId === jobId && !Number.isFinite(filePage.total)) {
+    // Older servers return the loaded list, not a page of server-side matches.
+    renderFiles(jobId, filePage.files || [], filePage.truncated);
     return;
   }
-  const query = state.fileFilter.trim().toLowerCase();
-  const rows = els.outputFiles.querySelectorAll(".file-row:not(.empty)");
-  if (!rows.length) return;
-  let visible = 0;
-  rows.forEach((row) => {
-    const name = row.querySelector("a")?.textContent || "";
-    const match = !query || name.toLowerCase().includes(query);
-    row.hidden = !match;
-    if (match) visible += 1;
-  });
-  els.outputFiles.querySelectorAll(".file-group").forEach((group) => {
-    const matches = group.querySelectorAll(".file-row:not([hidden])").length;
-    group.hidden = Boolean(query) && matches === 0;
-    if (query && matches) group.open = true;
-  });
-  const truncated = els.outputFiles.dataset.truncated === "true";
-  updateText(els.fileCount, query ? `${visible}/${rows.length} 个` : `${rows.length}${truncated ? "+" : ""} 个`);
-  if (filePage?.jobId === state.activeJobId) renderFilePager();
+  invalidateArtifactRequest();
+  showFileLoading();
+  fileSearchTimer = setTimeout(() => renderActiveJob(), 250);
+}
+
+function fileEmpty(title, hint, canClear = false) {
+  return `<div class="file-empty"><span class="empty-job-icon" data-ui-icon="${canClear ? "search" : "folder"}" aria-hidden="true"></span>
+    <strong>${title}</strong><small>${hint}</small>${canClear ? '<button type="button" class="tool-button" data-clear-file-filter>清除筛选</button>' : ""}</div>`;
 }
 
 function renderFiles(jobId, files, truncated = false) {
-  const signature = `${jobId}:${truncated}:${files.map((file) => `${file.path}:${file.size}`).join(",")}`;
+  const query = fileViews.get(jobId)?.search.trim().toLowerCase() || "";
+  const paged = Number.isFinite(filePage?.total);
+  const matches = query && !paged ? files.filter(file => file.path.toLowerCase().includes(query)) : files;
+  const total = paged ? filePage.total : matches.length;
+  const filtered = Boolean(query) && (paged || files.length > 0);
+  syncFileSearch(jobId);
+  els.outputFiles.hidden = false;
+  updateText(els.fileCount, filtered ? `${total} 个匹配` : `${total}${truncated ? "+" : ""} 个`);
+  const view = JSON.stringify([jobId, query, filePage.offset || 0]);
+  if (view !== els.outputFiles.dataset.view) els.outputFiles.scrollTop = 0;
+  els.outputFiles.dataset.view = view;
+  const signature = JSON.stringify([jobId, filtered, truncated, matches.map(file => [file.path, file.size])]);
   if (signature === state.filesSignature) return;
   state.filesSignature = signature;
-  els.outputFiles.dataset.truncated = truncated ? "true" : "false";
-
-  if (!files.length) {
-    updateText(els.fileCount, "0 个");
-    els.outputFiles.innerHTML = `<div class="file-row empty"><span>暂无输出文件</span></div>`;
+  const sameJob = els.outputFiles.dataset.jobId === jobId;
+  els.outputFiles.dataset.jobId = jobId;
+  if (!matches.length) {
+    els.outputFiles.innerHTML = filtered
+      ? fileEmpty("没有匹配的输出文件", truncated ? "仅搜索已载入的文件。试试其他文件名或路径。" : "试试其他文件名或路径，或清除筛选查看全部文件。", true)
+      : fileEmpty("暂无输出文件", "这个任务还没有可下载的文件。");
     return;
   }
   const groups = [
@@ -638,7 +604,7 @@ function renderFiles(jobId, files, truncated = false) {
     { key: "log", label: "日志", extensions: null },
   ];
   const grouped = new Map(groups.map((group) => [group.key, []]));
-  files.forEach((file) => {
+  matches.forEach((file) => {
     const ext = fileExt(file.path);
     const group = groups.find((candidate) => candidate.extensions?.has(ext)) || groups[3];
     grouped.get(group.key).push(file);
@@ -649,17 +615,14 @@ function renderFiles(jobId, files, truncated = false) {
       return `<div class="file-row"><i class="file-ext" data-ext="${escapeHtml(ext)}">${escapeHtml(ext)}</i><a href="${href}" title="下载 ${escapeHtml(file.path)}">${escapeHtml(file.path)}</a><span>${formatSize(file.size)}</span></div>`;
   };
   const opened = new Map([...els.outputFiles.querySelectorAll(".file-group")].map(group => [group.dataset.group, group.open]));
-  const sameJob = els.outputFiles.dataset.jobId === jobId;
   const scrollTop = els.outputFiles.scrollTop;
-  els.outputFiles.dataset.jobId = jobId;
   els.outputFiles.innerHTML = groups
     .filter((group) => grouped.get(group.key).length)
-    .map((group) => `<details class="file-group" data-group="${group.key}" ${(sameJob && opened.has(group.key) ? opened.get(group.key) : group.key === "structure") ? "open" : ""}>
+    .map((group) => `<details class="file-group" data-group="${group.key}" ${query || (sameJob && opened.has(group.key) ? opened.get(group.key) : group.key === "structure") ? "open" : ""}>
       <summary><span>${group.label}</span><small>${grouped.get(group.key).length} 个</small></summary>
       <div class="file-group-list">${grouped.get(group.key).map(renderFile).join("")}</div>
     </details>`)
     .join("");
-  applyFileFilter();
   els.outputFiles.scrollTop = scrollTop;
 }
 
@@ -712,14 +675,12 @@ export async function submitJob() {
     const job = await uploadJob(data, button);
     state.activeJobId = job.id;
     state.activeJob = job;
-    state.logKey = "";
-    state.logText = "";
-    state.logOffset = 0;
-    state.logTailOmittedBytes = 0;
-    state.logTrimmedChars = 0;
+    resetLogState();
     state.artifactKey = "";
     state.filesSignature = "";
-    toast(`任务已提交：${job.name}`, "success");
+    if (job.status === "failed") toast(`任务失败：${job.error || job.name}`, "error");
+    else if (job.status === "cancelled") toast(`任务已取消：${job.name}`, "warning");
+    else toast(`任务已提交：${job.name}`, "success");
     showDetailTab("overview");
     showWorkspaceView("detail");
     await refreshJobs();
@@ -744,27 +705,19 @@ export function selectJob(jobId) {
   }
   state.activeJobId = jobId;
   if (fileViews.size >= 64 && !fileViews.has(jobId)) fileViews.delete(fileViews.keys().next().value);
-  const fileView = fileViews.get(jobId) || { search: "", offset: 0 };
-  state.fileFilter = fileView.search;
-  if (els.fileFilter) els.fileFilter.value = fileView.search;
   filePage = null;
-  renderFilePager();
+  syncFileSearch(jobId);
+  showFileLoading();
   resetPlotFilters();
   state.activeJob = null;
-  state.logKey = "";
-  state.logText = "";
-  state.logOffset = 0;
-  state.logTailOmittedBytes = 0;
-  state.logTrimmedChars = 0;
+  resetLogState();
   state.artifactKey = "";
   state.filesSignature = "";
   state.plotsSignature = "";
   els.analysisPlots.textContent = "正在加载图谱…";
   els.qualityReports.textContent = "正在加载报告…";
-  els.outputFiles.textContent = "正在加载文件…";
+  els.outputFiles.replaceChildren();
   renderJobs();
-  els.jobLog.textContent = "";
-  els.logNotice.hidden = true;
   api(`/api/jobs/${encodeURIComponent(jobId)}`).then(applyJobDetail).catch((error) => toast(error.message, "error"));
   window.dispatchEvent(new CustomEvent("active-job-change"));
   replaySwapAnimation(".job-panel, .command-panel, .files-panel, .plots-panel");

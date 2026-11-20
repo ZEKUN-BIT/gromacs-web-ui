@@ -1,7 +1,7 @@
 """Native-font Chromium/Firefox checks, also runnable on Windows CI.
 
-Half-width layout and reduced viewport height are stress simulations; this does
-not claim physical mobile keyboard, operating-system zoom or hardware coverage.
+The half-width viewport exercises the desktop canvas under zoom-like constraints,
+not native operating-system or browser zoom.
 """
 
 from __future__ import annotations
@@ -22,7 +22,7 @@ def check(artifact_dir: Path) -> None:
         for engine in ("chromium", "firefox"):
             browser = getattr(playwright, engine).launch(headless=True)
             try:
-                for width, height, forced in ((1440, 1000, False), (768, 1000, True), (390, 844, False)):
+                for width, height, forced in ((1440, 1000, False), (1280, 800, True)):
 
                     def inspect(page):
                         def fits():
@@ -37,21 +37,17 @@ def check(artifact_dir: Path) -> None:
                         page.locator("#job-name").focus()
                         page.locator("#job-name").fill("中文输入可读性 · Molecular dynamics 123")
                         expect(page.locator("#job-name")).to_be_focused()
-                        if width == 390:
-                            page.set_viewport_size({"width": width, "height": 440})
-                            page.locator("#job-name").scroll_into_view_if_needed()
-                            expect(page.locator("#job-name")).to_be_visible()
-                            expect(page.locator("#job-name")).to_be_focused()
-                            fits()
-                            page.screenshot(path=str(artifact_dir / f"{engine}-keyboard-height.png"))
-                            page.set_viewport_size({"width": width, "height": height})
                         if width == 1440:
                             # Desktop 200% browser zoom halves the CSS viewport.
                             # Exercise that layout without claiming native zoom.
                             page.set_viewport_size({"width": width // 2, "height": height // 2})
                             page.locator("#job-name").scroll_into_view_if_needed()
-                            fits()
-                            expect(page.locator("#job-name")).to_be_visible()
+                            expect(page.locator("#task-sidebar")).to_be_visible()
+                            expect(page.locator("#job-name")).to_be_focused()
+                            assert page.evaluate("document.documentElement.scrollWidth > innerWidth"), (
+                                "Desktop canvas should scroll horizontally"
+                            )
+                            expect(page.locator("#job-name")).to_be_in_viewport()
                             page.screenshot(path=str(artifact_dir / f"{engine}-half-viewport.png"))
                             page.set_viewport_size({"width": width, "height": height})
                         page.locator('[data-workspace-view="detail"]').click()
@@ -82,7 +78,6 @@ def check(artifact_dir: Path) -> None:
                         context_options={
                             "reduced_motion": "reduce",
                             "forced_colors": "active" if forced else "none",
-                            "has_touch": width == 390,
                         },
                     )
                     print(f"PASS {platform.system()} {engine} native fonts, {width}px, reduced motion, forced-colors={forced}")

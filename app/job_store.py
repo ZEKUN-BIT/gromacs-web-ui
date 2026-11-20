@@ -18,7 +18,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 from uuid import uuid4
 
-from .files import ensure_under_root
+from .files import LOG_ROTATION_PREFIX, ensure_under_root
 from .gromacs import Step, directory_slug, read_json, utc_now
 from .job_store_schema import JOBS_SCHEMA_SQL, PROCESS_REGISTRY_SQL
 
@@ -61,7 +61,6 @@ class JobStore:
         self.jobs_root = runtime_root / "jobs"
         self.jobs_root.mkdir(parents=True, exist_ok=True)
         self.db_path = runtime_root / "jobs.sqlite3"
-        self._log_lock = threading.Lock()
         self._snapshot_lock = threading.Lock()
         self._page_snapshots: OrderedDict[tuple, tuple[int, str, str]] = OrderedDict()
         self._max_parallel = max(1, int(max_parallel))
@@ -502,7 +501,14 @@ class JobStore:
                 raise
 
     def create(
-        self, name: str, params: dict, uploaded_files: builtins.list[str], steps: builtins.list[Step], *, submission_id: str | None = None
+        self,
+        name: str,
+        params: dict,
+        uploaded_files: builtins.list[str],
+        steps: builtins.list[Step],
+        *,
+        dry_run: bool = False,
+        submission_id: str | None = None,
     ) -> dict:
         job_id = f"{datetime.now().strftime('%Y%m%d-%H%M%S')}-{directory_slug(name)}-{uuid4().hex[:8]}"
         workdir = self.job_dir(job_id)
@@ -526,7 +532,7 @@ class JobStore:
             "step_index": 0,
             "step_count": len(steps),
             "commands": self.serialize_steps(steps),
-            "dry_run": False,
+            "dry_run": bool(dry_run),
             "exit_code": None,
             "error": None,
         }
@@ -537,6 +543,9 @@ class JobStore:
                 connection.execute(
                     "INSERT INTO jobs(id,status,created_at,updated_at,meta_json) VALUES(?,?,?,?,?)",
                     (job_id, "preparing", now, now, json.dumps(meta, ensure_ascii=False)),
+                )
+                connection.execute(
+                    "INSERT INTO job_plans(job_id,commands) VALUES(?,?)", (job_id, json.dumps(meta["commands"], ensure_ascii=False))
                 )
                 if submission_id is not None:
                     bound = connection.execute(
@@ -568,26 +577,26 @@ class JobStore:
             for step in steps
         ]
 
-    def start(self, job_id: str, steps: builtins.list[Step], dry_run: bool = False) -> None:
-        self.update(job_id, status="queued", commands=self.serialize_steps(steps), dry_run=bool(dry_run), desired_action="run")
+    def start(self, job_id: str, steps: builtins.list[Step], dry_run: bool | None = None) -> None:
+        mode = {} if dry_run is None else {"dry_run": bool(dry_run)}
+        self.update(job_id, status="queued", commands=self.serialize_steps(steps), desired_action="run", **mode)
 
     def append_log(self, job_id: str, text: str) -> None:
         path = self.log_path(job_id)
-        with self._log_lock:
-            with path.open("a", encoding="utf-8", errors="replace") as handle:
-                handle.write(text)
-            if path.stat().st_size > MAX_LOG_FILE_BYTES:
-                self._rotate_log(path)
-
-    @staticmethod
-    def _rotate_log(path: Path) -> None:
-        """Keep run.log bounded by dropping the oldest half once it grows too large."""
-        keep = MAX_LOG_FILE_BYTES // 2
-        with path.open("rb") as handle:
-            handle.seek(max(0, handle.seek(0, 2) - keep))
-            tail = handle.read(keep).decode("utf-8", errors="replace")
-        marker = f"\n[web] log rotated by worker (older output dropped) at {utc_now()}\n"
-        path.write_text(marker + tail, encoding="utf-8", errors="replace")
+        with path.open("a+b") as handle:
+            # Web and worker processes can both append. A rotation and its generation
+            # marker must be visible to readers as one change, including on reconnect.
+            fcntl.flock(handle, fcntl.LOCK_EX)
+            handle.write(text.encode("utf-8", errors="replace"))
+            size = handle.seek(0, os.SEEK_END)
+            if size > MAX_LOG_FILE_BYTES:
+                keep = MAX_LOG_FILE_BYTES // 2
+                handle.seek(size - keep)
+                tail = handle.read(keep).decode("utf-8", errors="replace").encode("utf-8")
+                marker = LOG_ROTATION_PREFIX + f"{utc_now()} {uuid4().hex}\n".encode("ascii")
+                handle.truncate(0)
+                handle.write(marker + tail)
+            handle.flush()
 
     def cancel(self, job_id: str) -> dict:
         from .execution import live_process_identities
@@ -972,7 +981,18 @@ class JobStore:
                 if not source_file.is_file() or source_file.is_symlink():
                     raise RuntimeError(f"Clone source input is missing or is not a regular file: {filename}")
                 input_files.append(source_file)
-            commands = list(source.get("commands") or [])
+            # Recovery may shorten or amend the execution queue. Never use that queue as a fresh protocol.
+            with self._connect() as connection:
+                plan = connection.execute("SELECT commands FROM job_plans WHERE job_id=?", (job_id,)).fetchone()
+            if plan is not None:
+                commands = json.loads(plan[0])
+            else:
+                commands = list(source.get("commands") or [])
+                ambiguous_mode = not isinstance(source.get("dry_run"), bool) or (
+                    source["status"] in {"failed", "cancelled"} and not source.get("step_index") and not source["dry_run"]
+                )
+                if ambiguous_mode or len(commands) != source.get("step_count") or source.get("resumed_from_checkpoint"):
+                    raise RuntimeError("旧任务缺少可确认的完整流程或执行模式，请核对参数并重新提交。")
             steps = [
                 Step(
                     str(command.get("title") or "Cloned step"),
@@ -991,6 +1011,7 @@ class JobStore:
                 params=dict(source.get("params") or {}),
                 uploaded_files=list(source.get("uploaded_files") or []),
                 steps=steps,
+                dry_run=bool(source.get("dry_run")),
             )
             target_dir = self.job_dir(cloned["id"])
             try:

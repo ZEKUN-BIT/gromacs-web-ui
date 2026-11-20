@@ -1,11 +1,12 @@
 // Shareable task locations and browser history; form contents never enter URLs.
-import { state, els, showWorkspaceView, showDetailTab, toast } from "./core.js?v=b71b8f0b4a932c44";
-import { refreshJobs, selectJob } from "./jobs.js?v=b71b8f0b4a932c44";
-import { connectEventStream } from "./event-stream.js?v=b71b8f0b4a932c44";
+import { state, els, showWorkspaceView, showDetailTab, toast } from "./core.js?v=5b84b3e1eaca6ab9";
+import { refreshJobs, selectJob } from "./jobs.js?v=5b84b3e1eaca6ab9";
+import { resetLogState } from "./log-viewer.js?v=5b84b3e1eaca6ab9";
+import { connectEventStream } from "./event-stream.js?v=5b84b3e1eaca6ab9";
 
 export function bindNavigation() {
   let ready = false, restoring = false, queued = false;
-  const tabs = new Set(["overview", "quality", "plots", "research", "files"]);
+  const tabs = new Set(["overview", "quality", "plots", "trajectory", "research", "files"]);
   function readLocation() {
     const query = new URL(location.href).searchParams;
     const job = query.get("job") || "";
@@ -27,7 +28,7 @@ export function bindNavigation() {
     projects.value = target.project;
     if (initial) state.activeJobId = target.job;
     else if (target.job) selectJob(target.job);
-    else { state.activeJobId = null; state.activeJob = null; }
+    else { state.activeJobId = null; state.activeJob = null; resetLogState(); }
     showDetailTab(target.tab);
     showWorkspaceView(target.view, Boolean(location.search));
     restoring = false;

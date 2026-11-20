@@ -13,7 +13,7 @@ import tempfile
 from collections.abc import Sequence
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import Annotated, Any
+from typing import Annotated, Any, Literal
 from urllib.parse import urlsplit
 
 from fastapi import FastAPI, File, Form, HTTPException, Query, Request, UploadFile
@@ -25,6 +25,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, ValidationError
 from starlette.concurrency import run_in_threadpool
 
+from . import trajectory_preview
 from .agent_api import agent_router
 from .analysis.comparison import compare_research_jobs, load_research_report
 from .analysis_stream import analysis_preparation_events
@@ -68,6 +69,7 @@ from .job_file_listing import (  # noqa: F401 - caches and limits are re-exporte
     FILE_LIST_CACHE,
     FILE_PAGE_CACHE,
     MAX_FILE_LIST_ITEMS,
+    XvgArchiveLimitError,
     forget_file_lists,
     list_job_files,
     xvg_archive,
@@ -92,7 +94,7 @@ STORE = JobStore(
 WEB_PROCESS_LOCK = None
 SSE_LOG_CHUNK_BYTES = 64 * 1024
 
-app = FastAPI(title="GROMACS Web UI", version="0.2.11")
+app = FastAPI(title="GROMACS Web UI", version="0.2.12")
 # Capture the running process identity once; files may be replaced by an update.
 # These public identifiers distinguish desktop instances, not authentication.
 RUNTIME_IDENTITY = {
@@ -551,6 +553,7 @@ def _prepare_uploaded_job(
             params=job_params,
             uploaded_files=uploaded_names,
             steps=steps,
+            dry_run=dry_run,
             **({"submission_id": submission_id} if submission_id else {}),
         )
     except RuntimeError as exc:
@@ -858,11 +861,12 @@ def job_log(
     tail: Annotated[int, Query(ge=0, le=MAX_LOG_TAIL_BYTES)] = DEFAULT_LOG_TAIL_BYTES,
     offset: Annotated[int | None, Query(ge=0)] = None,
     limit: Annotated[int, Query(ge=1, le=MAX_LOG_TAIL_BYTES)] = SSE_LOG_CHUNK_BYTES,
+    log_generation: Annotated[str | None, Query(max_length=128)] = None,
 ):
     _job_or_404(job_id)
     path = STORE.log_path(job_id)
     if offset is not None:
-        return read_log_chunk(path, offset, limit)
+        return read_log_chunk(path, offset, limit, log_generation)
     return PlainTextResponse(_read_log_tail(path, tail))
 
 
@@ -879,6 +883,7 @@ async def job_events(
     jobs_offset: Annotated[int, Query(ge=0)] = 0,
     jobs_search: Annotated[str, Query(max_length=256)] = "",
     jobs_project: Annotated[str, Query(max_length=80)] = "",
+    log_generation: Annotated[str | None, Query(max_length=128)] = None,
 ) -> StreamingResponse:
     if job_id:
         try:
@@ -890,6 +895,7 @@ async def job_events(
         jobs_signature = ""
         job_signature = ""
         current_offset = log_offset
+        current_generation = log_generation
         first_log_read = True
         heartbeat_at = 0.0
         page_options = _job_page_options(50, jobs_offset, jobs_search, jobs_project)
@@ -918,18 +924,17 @@ async def job_events(
                     job_signature = signature
                     yield _sse_event("job", detail)
                 log_path = STORE.log_path(job_id)
-                if first_log_read:
-                    first_log_read = False
-                    if log_tail > 0:
-                        # Fresh panel open: jump to the tail instead of streaming
-                        # a multi-MB log from byte 0 (which used to take minutes).
-                        size = await run_in_threadpool(lambda: log_path.stat().st_size if log_path.exists() else 0)
-                        current_offset = max(0, size - int(log_tail))
-                        chunk = await run_in_threadpool(read_log_chunk, log_path, current_offset, int(log_tail))
-                    else:
-                        chunk = await run_in_threadpool(read_log_chunk, log_path, current_offset, SSE_LOG_CHUNK_BYTES)
-                else:
-                    chunk = await run_in_threadpool(read_log_chunk, log_path, current_offset, SSE_LOG_CHUNK_BYTES)
+                from_tail = first_log_read and log_tail > 0 and current_generation is None and not current_offset
+                chunk = await run_in_threadpool(
+                    read_log_chunk,
+                    log_path,
+                    current_offset,
+                    log_tail if from_tail else SSE_LOG_CHUNK_BYTES,
+                    current_generation,
+                    from_tail=from_tail,
+                )
+                first_log_read = False
+                current_generation = chunk["generation"]
                 if chunk["reset"] or chunk["text"]:
                     current_offset = int(chunk["offset"])
                     yield _sse_event("log", chunk)
@@ -947,15 +952,36 @@ async def job_events(
     )
 
 
+@app.get("/api/jobs/{job_id}/trajectory/files")
+def trajectory_files(job_id: str) -> dict:
+    return trajectory_preview.choices(Path(_job_or_404(job_id)["workdir"]))
+
+
+@app.get("/api/jobs/{job_id}/trajectory/preview")
+def trajectory_frames(
+    job_id: str,
+    trajectory: Annotated[str, Query(min_length=1, max_length=1024)],
+    topology: Annotated[str, Query(min_length=1, max_length=1024)],
+    selection: Literal["molecular", "auto", "dry", "backbone", "all"] = "molecular",
+    start: Annotated[int | None, Query(ge=0)] = None,
+    revision: Annotated[str | None, Query(pattern=r"^[a-f0-9]{64}$")] = None,
+) -> JSONResponse:
+    if start is not None and revision is None:
+        raise HTTPException(422, "请先读取轨迹的帧数和版本。")
+    data = trajectory_preview.preview(Path(_job_or_404(job_id)["workdir"]), trajectory, topology, selection, start=start, revision=revision)
+    return JSONResponse(data, headers={"Cache-Control": "no-store"})
+
+
 @app.get("/api/jobs/{job_id}/files")
 def job_files(
     job_id: str,
     limit: Annotated[int | None, Query(ge=1, le=500)] = None,
     offset: Annotated[int, Query(ge=0, le=1_000_000)] = 0,
     search: Annotated[str, Query(max_length=256)] = "",
+    structures_only: bool = False,
 ) -> dict:
     meta = _job_or_404(job_id)
-    return list_job_files(STORE, job_id, meta, limit=limit, offset=offset, search=search)
+    return list_job_files(STORE, job_id, meta, limit=limit, offset=offset, search=search, structures_only=structures_only)
 
 
 @app.get("/api/jobs/{job_id}/plots")
@@ -980,7 +1006,10 @@ def job_plots(
 @app.get("/api/jobs/{job_id}/plots/download")
 def download_plot_data(job_id: str) -> Response:
     meta = _job_or_404(job_id)
-    content = xvg_archive(Path(meta["workdir"]))
+    try:
+        content = xvg_archive(Path(meta["workdir"]))
+    except XvgArchiveLimitError as exc:
+        raise HTTPException(status_code=413, detail="XVG 文件均超过打包限制，请到输出文件列表单独下载。") from exc
     if content is None:
         raise HTTPException(status_code=404, detail="No XVG plot data found for this job")
     filename = f"{meta.get('directory_name') or job_id}-xvg.zip"

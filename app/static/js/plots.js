@@ -1,6 +1,6 @@
 // 图谱绘制模块：canvas 折线图与渲染。
 
-import { els, state, escapeHtml, updateText } from "./core.js?v=b71b8f0b4a932c44";
+import { els, state, escapeHtml, updateText } from "./core.js?v=5b84b3e1eaca6ab9";
 
 export const PLOT_COLORS = ["#087f8c", "#e07a1f", "#7259b5", "#2f855a", "#d14d72", "#3578c4", "#b18b16", "#9b4dca"];
 let plotObserver = null;
@@ -281,7 +281,7 @@ export function renderPlots(jobId, plots, truncated = false, total = null) {
   }
   const skippedNotice = skippedPlotFiles.length
     ? `<details class="plot-truncation-notice"><summary>${skippedPlotFiles.length} 个文件未完整展示，查看原因</summary><ul>${skippedPlotFiles.map((file) => `<li><strong>${escapeHtml(file.path)}</strong>：${escapeHtml(file.reason)}</li>`).join("")}</ul></details>`
-    : truncated ? `<div class="plot-truncation-notice">已达到曲线展示数量上限。请选择具体指标或副本，或下载完整 XVG。</div>` : "";
+    : truncated ? `<div class="plot-truncation-notice">已达到曲线展示数量上限。请选择具体指标或副本，或从输出文件下载原始 XVG。</div>` : "";
   if (!plots.length) {
     els.analysisPlots.innerHTML = skippedNotice + `<div class="plot-empty"><strong>当前筛选范围内暂无曲线</strong><p>区间内需至少两个有效数据点。</p></div>`;
     return;

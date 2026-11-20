@@ -149,6 +149,15 @@ def test_real_tpr_job_and_rmsd_plot_api(argon_tpr, real_gmx, job_api) -> None:
     manifest = json.loads((workdir / "experiment-manifest.json").read_text(encoding="utf-8"))
     assert any(item["path"] == "argon.tpr" and len(item["sha256"]) == 64 for item in manifest["input_files"])
 
+    preview = f"/api/jobs/{job['id']}/trajectory/preview"
+    pair = {"trajectory": "argon.xtc", "topology": "argon.tpr"}
+    response = client.get(preview, params=pair)
+    assert response.status_code == 200, response.text
+    meta = response.json()
+    assert (meta["frames"], meta["elements"]) == (9, ["Ar"] * 64)
+    frame = client.get(preview, params={**pair, "revision": meta["revision"], "start": 8}).json()["frames"][0]
+    assert frame["index"] == 8 and frame["time_ps"] == pytest.approx(0.04)
+
     analysis = submit(
         client,
         {

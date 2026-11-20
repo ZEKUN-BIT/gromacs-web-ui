@@ -34,6 +34,7 @@ def test_real_tutorial_generates_a_portable_offline_report(request, tmp_path, mo
     assert all(len(item["sha256"]) == 64 for item in manifest["input_files"])
     assert (output / "files/example-energy.png").read_bytes().startswith(b"\x89PNG")
     assert (output / "report.css").is_file()
+    assert not (output / "files/execution-manifest.json").exists()
     for path in output.rglob("*"):
         if path.is_file() and path.suffix != ".png":
             contents = path.read_text()

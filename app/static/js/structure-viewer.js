@@ -1,14 +1,34 @@
-import { api, els, state, ACTIVE_STATES } from "./core.js?v=b71b8f0b4a932c44";
-import { selectedUploadFiles } from "./form-files.js?v=b71b8f0b4a932c44";
-import { checkStructureSize, prepareStructure, readStructureResponse, structureFiles, structureFormat } from "./structure-data.js?v=b71b8f0b4a932c44";
+import { api, els, state, toast, ACTIVE_STATES } from "./core.js?v=5b84b3e1eaca6ab9";
+import { selectedUploadFiles } from "./form-files.js?v=5b84b3e1eaca6ab9";
+import { checkStructureSize, structureFiles, structureFormat } from "./structure-data.js?v=5b84b3e1eaca6ab9";
 
 const CHAIN_COLORS = ["#43a6a3", "#8b87cd", "#d1a453", "#de8595", "#659ac9", "#85ad64"];
 const POLYMER = new Set("ALA ARG ASN ASP CYS GLN GLU GLY HIS ILE LEU LYS MET PHE PRO SER THR TRP TYR VAL HID HIE HIP HSD HSE HSP CYX CYM ASH GLH LYN MSE ACE NME DA DC DG DT DU A C G U T".split(" "));
+const PNG_LONG_EDGE = 4096;
 let rendererModule;
 
 function loadRenderer() {
-  rendererModule ||= import("../vendor/3dmol/3Dmol.es6-min.js?v=b71b8f0b4a932c44").catch(error => { rendererModule = null; throw error; });
+  rendererModule ||= import("../vendor/3dmol/3Dmol.es6-min.js?v=5b84b3e1eaca6ab9").catch(error => { rendererModule = null; throw error; });
   return rendererModule;
+}
+
+async function preparePreview({ file, url, format, size }, signal) {
+  checkStructureSize(size);
+  signal.throwIfAborted();
+  const worker = new Worker(new URL("./structure-worker.js?v=5b84b3e1eaca6ab9", import.meta.url), { type: "module" });
+  let abort;
+  try {
+    return await new Promise((resolve, reject) => {
+      abort = () => reject(signal.reason);
+      signal.addEventListener("abort", abort, { once: true });
+      worker.onmessage = ({ data }) => data.error ? reject(new Error(data.error)) : resolve(data.prepared);
+      worker.onerror = () => reject(new Error("无法启动结构预处理，请刷新后重试。"));
+      worker.postMessage({ file, url, format });
+    });
+  } finally {
+    signal.removeEventListener("abort", abort);
+    worker.terminate();
+  }
 }
 
 class StructurePanel {
@@ -21,11 +41,13 @@ class StructurePanel {
     this.overlay = root.querySelector("[data-structure-overlay]");
     this.summary = root.querySelector("[data-structure-summary]");
     this.legend = root.querySelector("[data-structure-chains]");
+    this.exportButton = root.querySelector("[data-structure-export]");
     this.sources = new Map();
     this.token = 0;
     this.loadedKey = this.loadingKey = "";
     this.select.addEventListener("change", () => this.load());
     this.style.addEventListener("change", () => this.renderStyle());
+    this.exportButton.addEventListener("click", () => this.exportPNG());
     root.querySelector("[data-structure-retry]").addEventListener("click", () => this.load(true));
     root.querySelectorAll("[data-structure-action]").forEach(button => button.addEventListener("click", () => this.move(button.dataset.structureAction)));
     this.canvas.addEventListener("keydown", event => {
@@ -67,6 +89,7 @@ class StructurePanel {
     this.overlay.hidden = status === "ready";
     this.root.querySelector("[data-structure-retry]").hidden = status !== "error";
     this.root.querySelectorAll("[data-structure-action], [data-structure-style]").forEach(control => { control.disabled = status !== "ready"; });
+    this.exportButton.disabled = status !== "ready" || this.exporting;
     this.canvas.tabIndex = status === "ready" ? 0 : -1;
   }
 
@@ -93,7 +116,7 @@ class StructurePanel {
       return;
     }
     this.select.value = this.sources.has(previous) ? previous : sources[0].key;
-    this.select.title = truncated ? "结构较多，显示每种格式的前 100 个文件" : "选择要显示的结构文件";
+    this.select.title = truncated ? "结构较多，优先显示结果结构，最多显示 200 个文件" : "选择要显示的结构文件";
     void this.load();
   }
 
@@ -110,10 +133,8 @@ class StructurePanel {
     const controller = this.controller;
     const timeout = setTimeout(() => controller.abort(), 25_000);
     try {
-      checkStructureSize(source.size);
-      const text = source.file ? await source.file.text() : await readStructureResponse(await fetch(source.url, { signal: controller.signal, credentials: "same-origin" }));
+      const prepared = await preparePreview(source, controller.signal);
       if (token !== this.token) return;
-      const prepared = prepareStructure(text, source.format);
       const renderer = await loadRenderer();
       if (token !== this.token) return;
       if (controller.signal.aborted) throw new Error("结构加载超时，请重试。");
@@ -186,6 +207,54 @@ class StructurePanel {
     else this.viewer.rotate(["left", "up"].includes(action) ? -15 : 15, ["up", "down"].includes(action) ? "x" : "y");
     this.viewer.render();
   }
+
+  async exportPNG() {
+    if (!this.viewer || this.root.dataset.state !== "ready" || this.exporting) return;
+    const viewer = this.viewer, source = this.sources.get(this.select.value);
+    const view = viewer.getView(), renderer = viewer.getRenderer(), canvas = viewer.getCanvas();
+    const scale = PNG_LONG_EDGE / Math.max(viewer.getWidth(), viewer.getHeight());
+    const width = Math.max(1, Math.round(viewer.getWidth() * scale));
+    const height = Math.max(1, Math.round(viewer.getHeight() * scale));
+    this.exporting = true;
+    this.exportButton.disabled = true;
+    this.exportButton.textContent = "导出中…";
+    try {
+      const gl = renderer.getContext();
+      const limit = Math.min(gl.getParameter(gl.MAX_RENDERBUFFER_SIZE), gl.getParameter(gl.MAX_TEXTURE_SIZE), ...gl.getParameter(gl.MAX_VIEWPORT_DIMS));
+      if (gl.isContextLost() || PNG_LONG_EDGE > limit) throw new Error("当前设备无法渲染 4096 像素图片，请换用支持更高分辨率的浏览器或设备。");
+      let encoding;
+      try {
+        // 3Dmol also applies device pixel ratio and antialias supersampling.
+        viewer.setWidth(width / renderer.devicePixelRatio);
+        viewer.setHeight(height / renderer.devicePixelRatio);
+        viewer.render();
+        if (gl.isContextLost() || gl.drawingBufferWidth !== width || gl.drawingBufferHeight !== height) throw new Error("高分辨率渲染失败，请重试。");
+        // toBlob snapshots the rendered buffer before the interactive size is restored.
+        encoding = new Promise(resolve => canvas.toBlob(resolve, "image/png"));
+      } finally {
+        viewer.resize();
+        viewer.setView(view);
+        viewer.render();
+      }
+      const blob = await encoding;
+      if (!blob) throw new Error("无法生成 PNG 图片，请重试。");
+      const url = URL.createObjectURL(blob), link = document.createElement("a");
+      const name = source.name.split(/[\\/]/).pop().replace(/\.(pdb|gro)$/i, "");
+      link.href = url;
+      link.download = `${name}-${width}x${height}.png`;
+      document.body.append(link);
+      link.click();
+      link.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 60_000);
+      toast(`已导出 ${width} × ${height} PNG`, "success");
+    } catch (error) {
+      toast(`PNG 导出失败：${error.message || "请重试。"}`, "error");
+    } finally {
+      this.exporting = false;
+      this.exportButton.disabled = this.root.dataset.state !== "ready";
+      this.exportButton.textContent = "导出 PNG";
+    }
+  }
 }
 
 export function bindStructureViewers() {
@@ -198,13 +267,14 @@ export function bindStructureViewers() {
     if (next.length === uploads.length && next.every((file, index) => file === uploads[index])) return;
     uploads = next;
     uploadRevision += 1;
-    compose.setSources(next.map((file, index) => ({ key: `${index}:${file.name}`, name: file.name, size: file.size, revision: uploadRevision, format: structureFormat(file.name), file })), "添加 PDB 或 GRO 文件，预览蛋白结构");
+    compose.setSources(next.map((file, index) => ({ key: `${index}:${file.name}`, name: file.name, size: file.size, revision: uploadRevision, format: structureFormat(file.name), file })), "添加 PDB 或 GRO 文件，查看三维构象。");
   }
 
   function resetJob() {
     generation += 1;
     listingController?.abort();
     listedKey = pendingKey = "";
+    detail.root.removeAttribute("data-no-structures");
     detail.setSources([], state.activeJobId ? "正在查找结构文件…" : "选择任务后查看结构");
   }
 
@@ -218,13 +288,15 @@ export function bindStructureViewers() {
     pendingKey = key;
     requestedAt = Date.now();
     try {
-      const pages = await Promise.all([".pdb", ".gro"].map(extension => api(`/api/jobs/${encodeURIComponent(id)}/files?${new URLSearchParams({ search: extension, limit: "100" })}`, { signal: listingController.signal })));
+      const page = await api(`/api/jobs/${encodeURIComponent(id)}/files?structures_only=true&limit=200`, { signal: listingController.signal });
       if (requestGeneration !== generation || state.activeJobId !== id) return;
-      const files = structureFiles(pages.flatMap(page => page.files || []));
-      detail.setSources(files.map(file => ({ key: `${id}:${file.path}`, name: file.path, size: file.size, revision: `${file.size}:${file.modified}`, format: structureFormat(file.path), url: `/api/jobs/${encodeURIComponent(id)}/download?path=${encodeURIComponent(file.path)}` })), "此任务尚无 PDB/GRO 结构。结构文件生成后会在这里显示。", pages.some(page => page.has_more || page.truncated));
+      const files = structureFiles(page.files || []);
+      detail.root.toggleAttribute("data-no-structures", files.length === 0 && !page.has_more && !page.truncated);
+      detail.setSources(files.map(file => ({ key: `${id}:${file.path}`, name: file.path, size: file.size, revision: `${file.size}:${file.modified}`, format: structureFormat(file.path), url: `/api/jobs/${encodeURIComponent(id)}/download?path=${encodeURIComponent(file.path)}` })), "此任务尚无 PDB/GRO 结构。结构文件生成后会在这里显示。", page.has_more || page.truncated);
       listedKey = key;
     } catch (error) {
       if (requestGeneration !== generation) return;
+      detail.root.removeAttribute("data-no-structures");
       detail.clear("结构列表读取失败，请点击右上角刷新。");
       detail.summary.textContent = error.message || "连接失败";
       // A failing endpoint must not be retried on every progress update.

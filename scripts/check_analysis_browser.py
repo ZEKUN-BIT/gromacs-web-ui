@@ -18,7 +18,7 @@ def check(artifact_dir: Path | None = None):
     with sync_playwright() as playwright:
         browser = playwright.chromium.launch(headless=True)
         try:
-            for width, height in ((1440, 1000), (390, 844)):
+            for width, height in ((1440, 1000), (1280, 800)):
                 page = browser.new_page(viewport={"width": width, "height": height})
                 errors = []
                 calls = []
@@ -112,8 +112,6 @@ def check(artifact_dir: Path | None = None):
                 page.on("pageerror", lambda error: errors.append(str(error)))
                 page.add_init_script("window.EventSource = class extends EventTarget { close() {} };")
                 page.goto(ORIGIN, wait_until="networkidle")
-                if width <= 1180:
-                    page.locator("#toggle-sidebar").click()
                 page.locator('[data-job-id="source"] [data-action="select"]').first.click()
                 page.locator("#analyze-job").click()
                 dialog = page.locator("#existing-analysis-dialog")
@@ -138,8 +136,6 @@ def check(artifact_dir: Path | None = None):
                     raise
                 expect(page.locator("#active-job-title")).to_have_text("新分析")
                 assert ("POST", "/api/jobs/source/analysis-stream") in calls
-                if width <= 1180:
-                    page.locator("#toggle-sidebar").click()
                 page.locator('[data-job-id="source"] [data-action="select"]').first.click()
                 page.locator("#analyze-job").click()
                 page.evaluate("""() => {
@@ -168,7 +164,7 @@ def check(artifact_dir: Path | None = None):
                 page.close()
         finally:
             browser.close()
-    print("Research preflight advice, explicit stride selection, streamed progress and cancellation passed on desktop/mobile.")
+    print("Research preflight advice, explicit stride selection, streamed progress and cancellation passed at both desktop widths.")
 
 
 if __name__ == "__main__":

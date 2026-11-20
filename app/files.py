@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import fcntl
 import hashlib
 import heapq
 import os
@@ -100,17 +101,6 @@ def _bool_value(value: object, default: bool = False) -> bool:
     return str(value).strip().lower() in {"1", "true", "yes", "on"}
 
 
-def _unique_safe_filename(filename: str, used: set[str]) -> str:
-    candidate = filename
-    suffix = Path(filename).suffix
-    stem = filename[: -len(suffix)] if suffix else filename
-    index = 2
-    while candidate in used:
-        candidate = f"{stem}-{index}{suffix}"
-        index += 1
-    return candidate
-
-
 def _raw_upload_filename(filename: str) -> str:
     return str(filename or "").replace("\\", "/").rsplit("/", 1)[-1]
 
@@ -144,15 +134,21 @@ async def stage_uploads(
 
     uploaded_names: list[str] = []
     name_map: dict[str, str] = {}
-    used_names: set[str] = set()
-    total_bytes = 0
+    seen: set[str] = set()
     for upload in uploads:
         raw_filename = _raw_upload_filename(upload.filename or "")
-        if safe_filename(raw_filename).casefold() in RESERVED_UPLOAD_NAMES:
+        filename = safe_filename(raw_filename)
+        key = filename.casefold()
+        if key in RESERVED_UPLOAD_NAMES:
             raise HTTPException(status_code=400, detail=f"File '{raw_filename}' uses a reserved task filename.")
-        filename = _unique_safe_filename(safe_filename(raw_filename), used_names)
-        used_names.add(filename)
+        if key in seen or raw_filename in name_map:
+            raise HTTPException(status_code=422, detail=f"输入文件名重复或规范化后重名：{raw_filename}。请改名并重新选择文件。")
+        seen.add(key)
         name_map[raw_filename] = filename
+
+    total_bytes = 0
+    for upload in uploads:
+        filename = name_map[_raw_upload_filename(upload.filename or "")]
         target = ensure_under_root(temp_dir / filename, temp_dir)
         file_bytes = 0
         digest = hashlib.sha256()
@@ -187,18 +183,19 @@ async def stage_uploads(
 
 
 def _read_log_tail(path: Path, tail: int) -> str:
-    if not path.exists():
-        return ""
     byte_count = max(0, min(int(tail), MAX_LOG_TAIL_BYTES))
-    if byte_count == 0:
+    if not byte_count:
         return ""
-    size = path.stat().st_size
-    with path.open("rb") as handle:
-        if size > byte_count:
-            handle.seek(size - byte_count)
-            text = handle.read().decode("utf-8", errors="replace")
-            return f"[web] log truncated by server to last {byte_count // 1024} KB\n{text}"
-        return handle.read().decode("utf-8", errors="replace")
+    try:
+        handle = path.open("rb")
+    except FileNotFoundError:
+        return ""
+    with handle:
+        fcntl.flock(handle, fcntl.LOCK_SH)
+        size = os.fstat(handle.fileno()).st_size
+        handle.seek(max(0, size - byte_count))
+        text = handle.read(byte_count).decode("utf-8", errors="replace")
+    return f"[web] log truncated by server to last {byte_count // 1024} KB\n{text}" if size > byte_count else text
 
 
 def validate_uploaded_file_references(params: dict, uploaded_names: list[str]) -> None:
@@ -254,15 +251,27 @@ def validate_uploaded_file_references(params: dict, uploaded_names: list[str]) -
         check("edr_file", "EDR file")
 
 
-def read_log_chunk(path: Path, offset: int, limit: int) -> dict:
-    offset = max(0, int(offset))
-    limit = max(1, int(limit))
-    if not path.exists():
-        return {"text": "", "start": 0, "offset": 0, "size": 0, "reset": offset > 0}
-    size = path.stat().st_size
-    reset = offset > size
-    start = 0 if reset else offset
-    with path.open("rb") as handle:
+LOG_ROTATION_PREFIX = b"\n[web] log rotated by worker (older output dropped) at "
+
+
+def read_log_chunk(path: Path, offset: int, limit: int, generation: str | None = None, *, from_tail: bool = False) -> dict:
+    """Read the cursor identity, size and bytes from a single locked snapshot."""
+    offset, limit = max(0, int(offset)), max(1, int(limit))
+    try:
+        handle = path.open("rb")
+    except FileNotFoundError:
+        return {"text": "", "start": 0, "offset": 0, "size": 0, "generation": None, "reset": offset > 0 or generation is not None}
+    with handle:
+        fcntl.flock(handle, fcntl.LOCK_SH)
+        info = os.fstat(handle.fileno())
+        size = info.st_size
+        current = f"{info.st_dev:x}-{info.st_ino:x}"
+        if handle.read(len(LOG_ROTATION_PREFIX)) == LOG_ROTATION_PREFIX:
+            marker = handle.readline(128)
+            if marker.endswith(b"\n"):
+                current += "-" + hashlib.sha256(marker).hexdigest()[:32]
+        reset = offset > size or (generation is not None and generation != current)
+        start = 0 if reset else max(0, size - limit) if from_tail else offset
         handle.seek(start)
         data = handle.read(limit + 4)
     while data:
@@ -282,6 +291,7 @@ def read_log_chunk(path: Path, offset: int, limit: int) -> dict:
         "start": start,
         "offset": start + len(data),
         "size": size,
+        "generation": current,
         "reset": reset,
     }
 
@@ -305,7 +315,10 @@ def relative_files(workdir: Path, max_files: int = 1000) -> list[dict]:
     return sorted(items, key=lambda item: item["path"])
 
 
-def relative_file_page(workdir: Path, *, search: str, offset: int, limit: int) -> dict:
+_PREFERRED_STRUCTURE = re.compile(r"(?:^|/)(?:confout|final|md(?:_[^/]*)?)\.(?:gro|pdb)$", re.I)
+
+
+def relative_file_page(workdir: Path, *, search: str, offset: int, limit: int, structures_only: bool = False) -> dict:
     """Search every regular output without following directory or file links."""
     total = 0
     needle = search.casefold()
@@ -315,6 +328,8 @@ def relative_file_page(workdir: Path, *, search: str, offset: int, limit: int) -
         for directory, folders, filenames in os.walk(workdir, followlinks=False):
             folders[:] = [name for name in folders if not (Path(directory) / name).is_symlink()]
             for name in filenames:
+                if structures_only and not name.lower().endswith((".pdb", ".gro")):
+                    continue
                 path = Path(directory) / name
                 rel = path.relative_to(workdir).as_posix()
                 if rel == "metadata.json" or needle not in rel.casefold():
@@ -328,7 +343,11 @@ def relative_file_page(workdir: Path, *, search: str, offset: int, limit: int) -
                 total += 1
                 yield {"path": rel, "size": info.st_size, "modified": datetime.fromtimestamp(info.st_mtime).isoformat()}
 
-    items = heapq.nsmallest(offset + limit, matches(), key=lambda item: item["path"])
+    def rank(item):
+        path = item["path"]
+        return (structures_only and not _PREFERRED_STRUCTURE.search(path), path)
+
+    items = heapq.nsmallest(offset + limit, matches(), key=rank)
     return {
         "files": items[offset : offset + limit],
         "total": total,
